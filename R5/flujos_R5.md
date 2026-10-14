@@ -1,6 +1,6 @@
 # Flujos R5: seguridad perimetral
 
-Fuente: [`Flujos_R5.pdf`](Flujos_R5.pdf). Código: [`codigo/integrador.py`](codigo/integrador.py).
+Fuente: [`Flujos_R5.pdf`](Flujos_R5.pdf). Código: [`codigo/integrador.py`](codigo/integrador.py), [`lab/`](lab/), [`suricata/`](suricata/). Resultados: [`resultados_R5.md`](resultados_R5.md).
 
 **Idea:** el Core espeja selectivamente el tráfico Norte-Sur hacia Suricata (IDS fuera de banda). Cuando Suricata alerta, el integrador M09 lee `eve.json` y pide a ONOS un DROP en el plano de datos. `HOME_NET = 10.0.0.0/24`.
 
@@ -56,7 +56,8 @@ Deduplicación: si ya hay un DROP activo para esa IP, no se reenvía.
 |---|---|
 | Lectura de `eve-alerts.json`, filtro de severidad, whitelist, POST de DROP, reintentos con backoff, estado en disco | Implementado en `integrador.py` (probado con ONOS real) |
 | Escalado por reincidencia (Bloque 3) | Diseño; el código usa timeout fijo de 300 s |
-| Registro de `t_deteccion` / `t_mitigacion` | Diseño; no está en el código |
+| Registro de `t_deteccion` / `t_mitigacion` | Diseño; los tiempos se midieron comparando `eve.json`, el log del integrador y `dump-flows` |
 | Feed de reputación (Bloque 5) | Diseño |
 | Reconciliación y retiro manual (Bloque 6) | Diseño |
-| Script del espejo (Bloque 1) | Pendiente de adjuntar |
+| Script del espejo (Bloque 1) | Implementado: [`lab/espejo.py`](lab/espejo.py), reglas entrante y saliente, verificado con contadores |
+| Mediciones de tiempos, fracción que pasa y TCAM | Medido: ver [`resultados_R5.md`](resultados_R5.md) |

@@ -1,0 +1,1 @@
+alert tcp any any -> $HOME_NET any (msg:"LOCAL Port scan SYN"; flags:S; detection_filter:track by_src, count 20, seconds 5; classtype:attempted-recon; sid:9000002; rev:1; priority:2;)

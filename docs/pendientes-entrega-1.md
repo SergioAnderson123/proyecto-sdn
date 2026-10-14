@@ -33,11 +33,11 @@ Cierre en Paideia: miércoles 14-oct-2026, 14:59. Un solo PDF autocontenido por 
 5. **R2: faltan tablas** para Administrativo, Híbrido y superusuario; y revocación por cambio de rol o expiración (CoA).
 6. **R1: "ubicación válida = Port + DPID"** choca con la movilidad de alumnos; definir el alcance.
 7. **Session Manager en memoria:** persistir o reconciliar contra ONOS al arrancar.
-8. **R5: el espejado solo cubre tráfico entrante** (`ipv4_dst=10.0.0.0/24`, `in_port=uplink`), así que la rama "host interno -> externo (borde)" de `decidir()` no se dispara. Añadir espejo saliente o activar `stream.async-oneside` y quitar esa rama.
+8. **R5: el espejado solo cubría tráfico entrante.** Resuelto en el laboratorio: `R5/lab/espejo.py` instala también la regla saliente (`ipv4_src=10.0.0.0/24`, `ipv4_dst=10.0.1.0/24`). Falta reflejarlo en el diagrama del Bloque 1.
 9. **R5: HOME_NET `10.0.0.0/24`** vs. subredes `192.168.10/20/30.0/24` de R1/R2: unificar.
 10. **Autenticación a ONOS:** el diagrama dice JWT; el código usa Basic sobre HTTP 8181.
-11. **Timeout de ONOS REST** es duro, no de inactividad; en R1 se menciona `idle_timeout = 300`. Aclarar.
-12. **Nombre del log:** el diagrama dice `eve.json`; el código lee `eve-alerts.json`.
+11. **Timeout de ONOS REST.** Medido en R5: es de inactividad (un DROP de 300 s siguió vivo a los 371 s mientras recibía tráfico). Falta confirmar si R1 asume lo mismo con `idle_timeout = 300`.
+12. **Nombre del log:** el diagrama dice `eve.json`; el código lee la ruta de `EVE_PATH`. En el laboratorio se usó `eve.json`; ajustar el diagrama o el README.
 13. **`policy_mapper.py` vs. diagramas.** El código actual valida device binding y devuelve la VLAN a FreeRADIUS (atributos `Tunnel-*`), pero no tiene Session Manager (sin HTTP 409 por sesión duplicada), no instala flujos en ONOS ni expone `/api/mab-request` ni `/webhook/stop`. Marcarlo como implementado parcialmente, o completarlo. Además, las credenciales de ONOS están fijas en el código: pasarlas a variables de entorno.
 
 ## Rúbrica: qué falta medir
