@@ -59,7 +59,7 @@ Lectura: un ataque sostenido queda cortado tras la primera ráfaga (unas decenas
 
 Crecimiento lineal: una entrada de TCAM por IP o prefijo bloqueado. La instalación por lote vía REST (`lab/tcam.py`) tardó 0.06 s para 50 reglas y 0.04 s para 200 (tiempo de respuesta de ONOS, no incluye la propagación al switch).
 
-Suricata: `capture.kernel_drops` acumulado = 8074 en toda la sesión de pruebas. Pendiente calcular el porcentaje frente a `capture.kernel_packets`. No se ejecutaron pruebas con `tcpreplay`; queda como trabajo futuro.
+Suricata: en toda la sesión de pruebas (desde el arranque, 03:56 UTC) `capture.kernel_packets` = 80 719 y `capture.kernel_drops` = 8074, es decir **10.0 % de pérdida en la captura**. El contador es acumulado y mezcla escaneos, pings y el LLDP de ONOS, y el entorno (OVS en modo usuario sobre WSL2) es más lento que uno real. Aun con esa pérdida las detecciones se produjeron, porque el umbral solo necesita 20 SYN, pero el IDS no es fiable para reglas que dependan de ver cada paquete. Mejora posible: aumentar el buffer de captura de AF_PACKET (`ring-size`, `buffer-size`) y los hilos de Suricata. No se ejecutaron pruebas con `tcpreplay`; queda como trabajo futuro.
 
 ## 7. Límites declarados
 
