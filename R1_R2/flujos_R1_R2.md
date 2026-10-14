@@ -116,4 +116,4 @@ Blacklist en hardware: prio 45000, DROP. Cuando falla la validación, Policy Map
 
 ## Código principal
 
-Ver [Codigo_principal.png](diagramas/Codigo_principal.png). Pendiente: subir el código fuente de Policy Mapper, Session Manager y MabInterceptor (ver `docs/pendientes-entrega-1.md`).
+Ver [Codigo_principal.png](diagramas/Codigo_principal.png) y [`codigo/policy_mapper.py`](codigo/policy_mapper.py). Pendiente de subir: Session Manager y MabInterceptor (ver `docs/pendientes-entrega-1.md`).

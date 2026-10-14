@@ -38,6 +38,7 @@ Cierre en Paideia: miércoles 14-oct-2026, 14:59. Un solo PDF autocontenido por 
 10. **Autenticación a ONOS:** el diagrama dice JWT; el código usa Basic sobre HTTP 8181.
 11. **Timeout de ONOS REST** es duro, no de inactividad; en R1 se menciona `idle_timeout = 300`. Aclarar.
 12. **Nombre del log:** el diagrama dice `eve.json`; el código lee `eve-alerts.json`.
+13. **`policy_mapper.py` vs. diagramas.** El código actual valida device binding y devuelve la VLAN a FreeRADIUS (atributos `Tunnel-*`), pero no tiene Session Manager (sin HTTP 409 por sesión duplicada), no instala flujos en ONOS ni expone `/api/mab-request` ni `/webhook/stop`. Marcarlo como implementado parcialmente, o completarlo. Además, las credenciales de ONOS están fijas en el código: pasarlas a variables de entorno.
 
 ## Rúbrica: qué falta medir
 
