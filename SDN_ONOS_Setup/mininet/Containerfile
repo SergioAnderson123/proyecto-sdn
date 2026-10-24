@@ -21,7 +21,15 @@ RUN dnf copr enable -y varlad/zellij && \
 WORKDIR /opt
 
 COPY start-ovs.sh /root/start-ovs.sh
+COPY init-onos.sh /root/init-onos.sh
+
+RUN sed -i 's/\r$//' /root/start-ovs.sh /root/init_onos.sh
+
 RUN chmod +x /root/start-ovs.sh
+RUN chmod +x /root/init-onos.sh
+
+RUN /root/start-ovs.sh
+RUN /root/init-onos.sh
 
 WORKDIR /root
 

@@ -23,6 +23,18 @@ curl -s -u onos:rocks -X POST -H "Content-Type: application/octet-stream" \
 curl -s -u onos:rocks -X POST -H "Content-Type: application/octet-stream" \
   --data-binary @aaa-app-2.7.0.oar "http://onos:8181/onos/v1/applications?activate=true"
 
+curl -s -u onos:rocks -X POST \
+      "http://onos:8181/onos/v1/applications/org.onosproject.flowanalyzer/active"
+
+curl -s -u onos:rocks -X POST \
+      "http://onos:8181/onos/v1/applications/org.onosproject.dhcp/active"
+
+curl -s -u onos:rocks -X POST \
+      "http://onos:8181/onos/v1/applications/org.onosproject.acl/active"
+
+curl -s -u onos:rocks -X POST \
+      "http://onos:8181/onos/v1/applications/org.onosproject.vpls/active"
+
 # 4. Inyectar configuración de SADIS dinámico hacia policy_mapper (policy_mapper)
 echo "[*] Inyectando configuración SADIS dinámica hacia policy_mapper (policy_mapper:5000)..."
 curl -s -u onos:rocks -X POST -H "Content-Type: application/json" \
