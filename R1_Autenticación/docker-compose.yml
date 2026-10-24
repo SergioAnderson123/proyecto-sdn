@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. CONTROLADOR ONOS
+  # ---------------------------------------------------------------------------
+  onos_controller:
+    image: onosproject/onos:2.7.0
+    container_name: onos_controller
+    ports:
+      - "6653:6653"
+      - "8181:8181"
+      - "8101:8101"
+    networks:
+      sdn_net:
+        ipv4_address: 172.20.0.2
+
+  # ---------------------------------------------------------------------------
+  # 2. SERVIDOR OPENLDAP
+  # ---------------------------------------------------------------------------
+  openldap_server:
+    image: osixia/openldap:1.5.0
+    container_name: openldap_server
+    command: ["--copy-service"]
+    environment:
+      - LDAP_ORGANISATION=Mi Red SDN
+      - LDAP_DOMAIN=example.org
+      - LDAP_ADMIN_PASSWORD=admin
+    volumes:
+      - ./ldap:/container/service/slapd/assets/config/bootstrap/ldif/custom
+    ports:
+      - "389:389"
+      - "636:636"
+    networks:
+      sdn_net:
+        ipv4_address: 172.20.0.3
+
+  # ---------------------------------------------------------------------------
+  # 3. FASTAPI POLICY MAPPER
+  # ---------------------------------------------------------------------------
+  policy_mapper:
+    build:
+      context: ./policy_mapper
+      dockerfile: Dockerfile
+    container_name: policy_mapper
+    depends_on:
+      - onos_controller
+    environment:
+      - ONOS_HOST=172.20.0.2
+      - ONOS_PORT=8181
+    ports:
+      - "5000:5000"
+    networks:
+      sdn_net:
+        ipv4_address: 172.20.0.4
+
+  # ---------------------------------------------------------------------------
+  # 4. SERVIDOR FREERADIUS
+  # ---------------------------------------------------------------------------
+  freeradius_server:
+    build:
+      context: ./freeradius
+      dockerfile: Dockerfile
+    container_name: freeradius_server
+    depends_on:
+      - openldap_server
+      - policy_mapper
+    ports:
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+    networks:
+      sdn_net:
+        ipv4_address: 172.20.0.5
+
+networks:
+  sdn_net:
+    name: sdn_net
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1

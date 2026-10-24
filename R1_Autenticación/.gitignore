@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+venv-sdn/
+*.env
+
+# ONOS / Java / Paquetes descargados
+*.oar
+*.jar
+*.tar
+*.tar.gz
+
+# Logs y bases de datos locales
+*.log
+slapd.d/
+openldap-data/
+
+# Archivos del sistema y editores
+.DS_Store
+.vscode/
+*.swp
+*~
+
+# Archivos de notas locales descartables
+Docker.txt
+comandos R1.txt
+Parte2_LDAP.txt

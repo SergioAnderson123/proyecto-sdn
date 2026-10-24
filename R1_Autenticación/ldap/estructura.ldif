@@ -1,0 +1,52 @@
+# 1. Crear Unidad Organizacional para Usuarios
+dn: ou=users,dc=example,dc=org
+objectClass: organizationalUnit
+ou: users
+
+# 2. Crear Unidad Organizacional para Grupos
+dn: ou=groups,dc=example,dc=org
+objectClass: organizationalUnit
+ou: groups
+
+# 3. Crear Unidad Organizacional para Dispositivos IoT (Preparado para MAB)
+dn: ou=devices,dc=example,dc=org
+objectClass: organizationalUnit
+ou: devices
+
+# 4. Usuario 1: Docente (Usa tu certificado actual user@example.org)
+dn: uid=user,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: user
+sn: Docente
+cn: user@example.org
+mail: user@example.org
+userPassword: password123
+description: 00:00:00:00:00:11
+physicalDeliveryOfficeName: of:0000000000000001
+roomNumber: 1
+departmentNumber: 3
+
+# 5. Usuario 2: Alumno (Para probar bloqueo a Sistema de Notas en R2)
+dn: uid=alumno01,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: alumno01
+sn: Alumno
+cn: alumno01@example.org
+mail: alumno01@example.org
+userPassword: password123
+description: 00:00:00:00:00:22
+physicalDeliveryOfficeName: of:0000000000000001
+roomNumber: 2
+departmentNumber: 2
+
+# 6. Grupo de Docentes
+dn: cn=docente,ou=groups,dc=example,dc=org
+objectClass: groupOfNames
+cn: docente
+member: uid=user,ou=users,dc=example,dc=org
+
+# 7. Grupo de Alumnos
+dn: cn=alumno,ou=groups,dc=example,dc=org
+objectClass: groupOfNames
+cn: alumno
+member: uid=alumno01,ou=users,dc=example,dc=org
