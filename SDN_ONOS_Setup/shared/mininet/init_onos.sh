@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "[*] Esperando a que la API REST de ONOS esté lista en el puerto 8181..."
-until curl -s -u onos:rocks http://localhost:8181/onos/v1/applications > /dev/null; do
+until curl -s -u onos:rocks http://onos:8181/onos/v1/applications > /dev/null; do
     sleep 3
 done
 echo "[+] ONOS API REST disponible."
@@ -13,20 +13,20 @@ wget -q -N https://repo1.maven.org/maven2/org/opencord/aaa-app/2.7.0/aaa-app-2.7
 
 # 2. Activar OpenFlow Provider Suite en ONOS
 echo "[*] Activando OpenFlow Provider Suite..."
-curl -s -u onos:rocks -X POST http://localhost:8181/onos/v1/applications/org.onosproject.openflow/active
+curl -s -u onos:rocks -X POST http://onos:8181/onos/v1/applications/org.onosproject.openflow/active
 
 # 3. Instalar y activar SADIS y AAA
 echo "[*] Instalando y activando SADIS y AAA..."
 curl -s -u onos:rocks -X POST -H "Content-Type: application/octet-stream" \
-  --data-binary @sadis-app-5.6.0.oar "http://localhost:8181/onos/v1/applications?activate=true"
+  --data-binary @sadis-app-5.6.0.oar "http://onos:8181/onos/v1/applications?activate=true"
 
 curl -s -u onos:rocks -X POST -H "Content-Type: application/octet-stream" \
-  --data-binary @aaa-app-2.7.0.oar "http://localhost:8181/onos/v1/applications?activate=true"
+  --data-binary @aaa-app-2.7.0.oar "http://onos:8181/onos/v1/applications?activate=true"
 
 # 4. Inyectar configuración de SADIS dinámico hacia policy_mapper (policy_mapper)
 echo "[*] Inyectando configuración SADIS dinámica hacia policy_mapper (policy_mapper:5000)..."
 curl -s -u onos:rocks -X POST -H "Content-Type: application/json" \
-  http://localhost:8181/onos/v1/network/configuration \
+  http://onos:8181/onos/v1/network/configuration \
   -d '{
     "apps": {
       "org.opencord.sadis": {
@@ -48,7 +48,7 @@ curl -s -u onos:rocks -X POST -H "Content-Type: application/json" \
 # Se define explícitamente bajo org.opencord.aaa y en modo socket
 echo "[*] Inyectando configuración AAA hacia freeradius_server (radius:1812)..."
 curl -s -u onos:rocks -X POST -H "Content-Type: application/json" \
-  http://localhost:8181/onos/v1/network/configuration \
+  http://onos:8181/onos/v1/network/configuration \
   -d '{
     "apps": {
       "org.opencord.aaa": {
