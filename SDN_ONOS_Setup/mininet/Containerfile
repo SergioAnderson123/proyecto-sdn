@@ -1,0 +1,28 @@
+FROM fedora:latest
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+RUN dnf copr enable -y varlad/zellij && \
+    dnf -y install \
+        git \
+        wget \
+        python3 \
+        openvswitch \
+        mininet \
+        net-tools \
+        iproute \
+        iputils \
+        neovim \
+        zellij \
+        findutils && \
+    dnf clean all
+
+WORKDIR /opt
+
+COPY start-ovs.sh /root/start-ovs.sh
+RUN chmod +x /root/start-ovs.sh
+
+WORKDIR /root
+
+CMD ["bash"]

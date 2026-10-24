@@ -1,0 +1,88 @@
+services:
+  # controlador
+  onos:
+    image: onosproject/onos
+    container_name: onos
+    hostname: onos
+    volumes:
+      - ./shared/onos:/root/shared-host
+    ports:
+      - "6653:6653"
+      - "8181:8181"
+      - "8101:8101"
+    networks:
+      - sdn
+    stdin_open: true
+    tty: true
+
+  #mininet
+  mininet:
+    build:
+      context: ./mininet
+      dockerfile: Containerfile
+    container_name: mininet
+    hostname: mininet
+    privileged: true
+    volumes:
+      - ./shared/mininet:/root/shared-host
+    networks:
+      - sdn
+    stdin_open: true
+    tty: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+
+  #ldap
+  ldap:
+    image: osixia/openldap:1.5.0
+    container_name: ldap
+    command: ["--copy-service"]
+    environment:
+      - LDAP_ORGANISATION=RedSDN
+      - LDAP_DOMAIN=example.org
+      - LDAP_ADMIN_PASSWORD=admin
+    volumes:
+      - ./shared/ldap/ldif/custom:/container/service/slapd/assets/config/bootstrap/ldif/custom
+      - ./shared/ldap/openldap-conf:/etc/openldap/slapd.d
+      - ./shared/ldap/openldap-data:/var/lib/openldap/openldap-data
+      - ./shared/ldap/openldap-backups:/var/lib/openldap/openldap-backups
+    ports:
+      - "1389:389"
+      # - "1636:636" For TLS
+    networks:
+      - sdn
+
+  # policy_mapper
+  policy_mapper:
+    build:
+      context: ./policy_mapper
+      dockerfile: Dockerfile
+    container_name: policy_mapper
+    depends_on:
+      - onos
+    environment:
+      - ONOS_HOST=onos
+      - ONOS_PORT=8181
+    ports:
+      - "5000:5000"
+    networks:
+      - sdn
+      
+  # radius
+  radius:
+    image: freeradius/freeradius-server
+    container_name: radius
+    depends_on:
+      - ldap
+      - policy_mapper
+    ports:
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+    networks:
+      - sdn
+
+networks:
+  sdn:
+    name: sdn
+
