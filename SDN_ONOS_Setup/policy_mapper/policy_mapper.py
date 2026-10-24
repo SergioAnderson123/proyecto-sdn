@@ -403,5 +403,87 @@ async def logout_webhook(payload: RadiusPayload):
     return {"status": "user_not_found"}
 
 
+import ldap3
+
+class MabRequest(BaseModel):
+    mac: str
+    deviceId: str
+    port: str
+
+@app.post("/api/mab-request")
+async def mab_request(datos: MabRequest):
+    mac = datos.mac.lower().strip()
+    dpid = datos.deviceId
+    port = str(datos.port)
+
+    try:
+        servidor = ldap3.Server("ldap", port=389, connect_timeout=5)
+        conexion = ldap3.Connection(
+            servidor,
+            user="cn=admin,dc=example,dc=org",
+            password="admin",
+            auto_bind=True,
+            receive_timeout=5,
+        )
+        try:
+            encontrado = conexion.search(
+                "ou=devices,dc=example,dc=org",
+                "(objectClass=inetOrgPerson)",
+                attributes=["uid", "description"],
+            )
+            if not encontrado and conexion.result.get("result") != 0:
+                raise RuntimeError(f"Consulta LDAP falló: {conexion.result}")
+            identidad = next(
+                (
+                    str(registro.uid)
+                    for registro in conexion.entries
+                    if str(registro.description).lower().strip() == mac
+                ),
+                None,
+            )
+        finally:
+            conexion.unbind()
+    except Exception as exc:
+        print(f"[MAB] LDAP no disponible: {exc}")
+        raise HTTPException(status_code=503, detail="Consulta LDAP fallida")
+
+    if identidad is None:
+        print(f"[MAB] MAC no registrada: {mac}")
+        return {"status": "NOT_FOUND", "mac": mac}
+
+    if session_store.is_spoofing(mac, dpid, port):
+        print(f"[MAB] Conflicto de ubicación para {mac} en {dpid}:{port}")
+        raise HTTPException(status_code=409, detail="MAC activa en otro puerto")
+
+    sesion = session_store.get_by_mac(mac)
+    if sesion is not None:
+        if sesion.rol != "IoT" or sesion.vlan != 30:
+            raise HTTPException(status_code=409, detail="MAC ya tiene una sesión de otro rol")
+        return {
+            "status": "FOUND", "mac": mac, "deviceId": dpid,
+            "port": port, "identity": identidad, "vlan": 30,
+            "session": "EXISTING", "flow_id": sesion.flow_id,
+        }
+
+    # Solo dispositivos IoT registrados en LDAP pueden obtener VLAN 30.
+    flow_id = await inyectar_flujo_tabla_0(dpid, port, mac, 30)
+    if flow_id is None:
+        raise HTTPException(status_code=502, detail="ONOS no confirmó el flujo VLAN 30")
+
+    session_store.register_session(
+        ActiveSession(
+            username=identidad, mac=mac, dpid=dpid, port=port,
+            vlan=30, rol="IoT", flow_id=flow_id,
+        )
+    )
+    print(f"[MAB] Autorizado IoT {mac} en VLAN 30; flujo={flow_id}")
+    return {
+        "status": "FOUND", "mac": mac, "deviceId": dpid,
+        "port": port, "identity": identidad, "vlan": 30,
+        "flow_id": flow_id,
+    }
+
+
+
 if __name__ == "__main__":
     uvicorn.run("policy_mapper:app", host="0.0.0.0", port=5000, reload=True)
