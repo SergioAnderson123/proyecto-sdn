@@ -16,7 +16,7 @@ ldap {
 	#  - ldaps:// (LDAP over SSL)
 	#  - ldapi:// (LDAP over Unix socket)
 	#  - ldapc:// (Connectionless LDAP)
-	server = 'openldap_server'
+	server = 'ldap'
 	identity = "cn=admin,dc=example,dc=org"
 	password = "admin"
 	base_dn = "dc=example,dc=org"

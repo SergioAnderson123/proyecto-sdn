@@ -198,9 +198,9 @@ eap {
 	#
 	tls-config tls-common {
 		private_key_password = whatever
-		private_key_file = /etc/freeradius/3.0/certs/server.key
-                certificate_file = /etc/freeradius/3.0/certs/server.pem
-                ca_file = /etc/freeradius/3.0/certs/ca.pem
+		private_key_file = /etc/freeradius/certs/server.key
+                certificate_file = /etc/freeradius/certs/server.pem
+                ca_file = /etc/freeradius/certs/ca.pem
 
 		#  If Private key & Certificate are located in
 		#  the same file, then private_key_file &
@@ -236,7 +236,7 @@ eap {
 		#  give advice which will work everywhere.  Instead,
 		#  we give general guidelines.
 		#
-		certificate_file = /etc/ssl/certs/ssl-cert-snakeoil.pem
+		# certificate_file = /etc/ssl/certs/ssl-cert-snakeoil.pem
 
 		#  Trusted Root CA list
 		#
@@ -249,7 +249,7 @@ eap {
 		#  In that case, this CA file should contain
 		#  *one* CA certificate.
 		#
-		ca_file = /etc/ssl/certs/ca-certificates.crt
+		# ca_file = /etc/ssl/certs/ca-certificates.crt
 
 		#
 		#  Directory where multiple CAs are stored.  Both
