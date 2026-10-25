@@ -10,7 +10,13 @@ def topologia_sdn():
     print("*** Agregando el Controlador ***")
     # Para la primera prueba, Mininet levantará un controlador local por defecto
     # Más adelante, aquí pondremos la IP de ONOS
-    c0 = net.addController('c0', port=6653)
+    c0 = net.addController(
+        "onos",
+        controller=RemoteController,
+        ip="onos",
+        port=6653
+    )
+
 
     print("*** Agregando el Switch de Borde (M01) ***")
     s1 = net.addSwitch('s1', protocols='OpenFlow13')
