@@ -15,22 +15,16 @@ RUN dnf copr enable -y varlad/zellij && \
         iputils \
         neovim \
         zellij \
+        wpa_supplicant \
         findutils && \
     dnf clean all
 
-WORKDIR /opt
+WORKDIR /root
 
 COPY start-ovs.sh /root/start-ovs.sh
 COPY init-onos.sh /root/init-onos.sh
 
-RUN sed -i 's/\r$//' /root/start-ovs.sh /root/init_onos.sh
-
-RUN chmod +x /root/start-ovs.sh
-RUN chmod +x /root/init-onos.sh
-
-RUN /root/start-ovs.sh
-RUN /root/init-onos.sh
-
-WORKDIR /root
+RUN sed -i 's/\r$//' /root/start-ovs.sh /root/init-onos.sh \
+    && chmod +x /root/start-ovs.sh /root/init-onos.sh
 
 CMD ["bash"]
