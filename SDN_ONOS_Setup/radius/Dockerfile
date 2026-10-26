@@ -1,2 +1,4 @@
-FROM freeradius/freeradius-server:latest
-COPY raddb/ /etc/raddb/
+FROM freeradius/freeradius-server:3.2.10
+COPY raddb/ /etc/raddb
+
+CMD ["-X"]

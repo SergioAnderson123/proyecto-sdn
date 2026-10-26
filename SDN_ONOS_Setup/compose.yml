@@ -1,7 +1,7 @@
 services:
   # controlador
   onos:
-    image: onosproject/onos
+    image: onosproject/onos:2.7-latest
     container_name: onos
     hostname: onos
     volumes:
@@ -21,6 +21,8 @@ services:
       context: ./mininet
       dockerfile: Containerfile
     container_name: mininet
+    depends_on:
+      - onos
     hostname: mininet
     privileged: true
     volumes:
@@ -37,6 +39,7 @@ services:
   ldap:
     image: osixia/openldap:1.5.0
     container_name: ldap
+    hostname: ldap
     command: ["--copy-service"]
     environment:
       - LDAP_ORGANISATION=RedSDN
@@ -61,6 +64,7 @@ services:
     container_name: policy_mapper
     depends_on:
       - onos
+    hostname: policy_mapper
     environment:
       - ONOS_HOST=onos
       - ONOS_PORT=8181
@@ -71,11 +75,16 @@ services:
       
   # radius
   radius:
-    image: freeradius/freeradius-server
+    # image: freeradius/freeradius-server:latest
+    build:
+      context: ./radius
+      dockerfile: Dockerfile
     container_name: radius
     depends_on:
       - ldap
       - policy_mapper
+    hostname: radius
+    command: ["-X"]
     ports:
       - "1812:1812/udp"
       - "1813:1813/udp"
@@ -85,4 +94,9 @@ services:
 networks:
   sdn:
     name: sdn
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.50.0.0/24
+          gateway: 10.50.0.1
 
