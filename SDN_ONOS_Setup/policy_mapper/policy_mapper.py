@@ -10,7 +10,7 @@ from fastapi import FastAPI, Header, HTTPException
 import httpx
 from pydantic import BaseModel, Field
 import uvicorn
-
+from fastapi.responses import JSONResponse
 from session_manager import ActiveSession, session_store
 
 app = FastAPI(title="SDN Zero Trust Policy Mapper")
@@ -21,7 +21,7 @@ ONOS_PORT = os.getenv("ONOS_PORT", "8181")
 ONOS_BASE_URL = f"http://{ONOS_HOST}:{ONOS_PORT}/onos/v1"
 ONOS_AAA_URL = f"http://{ONOS_HOST}:{ONOS_PORT}/onos/aaa/app/users"
 ONOS_AUTH = ("onos", "rocks")
-
+R2_MAB_URL = os.getenv("R2_MAB_URL", "http://r2-mab-vm:5001").rstrip("/")
 
 class RadiusAttribute(BaseModel):
     type: str
@@ -448,8 +448,29 @@ async def mab_request(datos: MabRequest):
         raise HTTPException(status_code=503, detail="Consulta LDAP fallida")
 
     if identidad is None:
-        print(f"[MAB] MAC no registrada: {mac}")
-        return {"status": "NOT_FOUND", "mac": mac}
+        print(f"[MAB] MAC no registrada; delegando a R2 MAB VM: {mac}")
+        try:
+            async with httpx.AsyncClient(timeout=8) as cliente:
+                respuesta = await cliente.post(
+                    f"{R2_MAB_URL}/api/mab-request",
+                    json={
+                        "mac": mac,
+                        "deviceId": dpid,
+                        "port": port,
+                    },
+                )
+
+            return JSONResponse(
+                status_code=respuesta.status_code,
+                content=respuesta.json(),
+            )
+
+        except httpx.RequestError as exc:
+            print(f"[MAB] R2 MAB VM no disponible: {exc}")
+            raise HTTPException(
+                status_code=503,
+                detail="R2 MAB VM no disponible",
+            )
 
     if session_store.is_spoofing(mac, dpid, port):
         print(f"[MAB] Conflicto de ubicación para {mac} en {dpid}:{port}")

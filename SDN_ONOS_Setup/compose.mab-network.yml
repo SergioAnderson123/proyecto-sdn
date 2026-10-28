@@ -8,3 +8,4 @@ services:
   onos:
     environment:
       MAB_MAPPER_URL: "http://policy-mapper:5000/api/mab-request"
+      R2_MAB_URL: "http://r2-mab-vm:5001"
