@@ -25,7 +25,29 @@ class Tests(unittest.TestCase):
         child = self.service.admit(MAC, DPID, "2")
         self.assertEqual(child.vlan, 20)
         self.assertEqual(child.parent_id, self.parent.session_id)
+    def test_mac_autogenerada_con_padre_valido(self):
+        mac_autogenerada = "02:aa:bb:cc:dd:ee"
+        child = self.service.admit(mac_autogenerada, DPID, "2")
+        self.assertEqual(child.mac, mac_autogenerada)
+        self.assertEqual(child.vlan, self.parent.vlan)
+        self.assertEqual(child.parent_id, self.parent.session_id)
+        self.install.assert_called_once_with(
+            DPID, "2", mac_autogenerada, self.parent.vlan
+        )
 
+    def test_mac_autogenerada_sin_padre(self):
+        self.source.return_value = None
+        with self.assertRaisesRegex(Denied, "NO_AUTHENTICATED_PARENT"):
+            self.service.admit("02:aa:bb:cc:dd:ee", DPID, "2")
+        self.install.assert_not_called()
+
+    def test_usuario_iot_no_puede_ser_padre(self):
+        self.source.return_value = replace(
+            self.parent, role="IoT"
+        )
+        with self.assertRaisesRegex(Denied, "PARENT_ROLE_NOT_ALLOWED"):
+            self.service.admit("02:aa:bb:cc:dd:ee", DPID, "2")
+        self.install.assert_not_called()
     def test_sin_padre(self):
         self.source.return_value = None
         with self.assertRaises(Denied):
