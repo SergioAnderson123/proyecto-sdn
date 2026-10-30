@@ -37,4 +37,6 @@ export EVE_PATH=<ruta>/eve-alerts.json STATE_PATH=./state.json
 DRY_RUN=1 python3 R5/codigo/integrador.py   # simulación sin tocar ONOS
 ```
 
+El resto de parámetros (`HOME_NET`, `LISTA_BLANCA`, `CORE_DEVICE`, `P_R5`, `POLL_SEC`...) también se leen del entorno; ver [`R5/r5.env.example`](R5/r5.env.example).
+
 No subir credenciales al repo: usar variables de entorno.

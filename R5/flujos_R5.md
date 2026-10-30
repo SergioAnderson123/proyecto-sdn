@@ -33,7 +33,7 @@ Deduplicación: si ya hay un DROP activo para esa IP, no se reenvía.
 ## Bloque 4: enforcement del DROP
 
 1. `GET /onos/v1/hosts` (Basic Auth) para ubicar el switch de borde y el puerto del host interno.
-2. `POST /onos/v1/flows/{deviceId}?appId=APP_ID_R5`, `priority = P_R5` (TBD, mayor que las del Policy Mapper), `timeout = T s`, `isPermanent = false`, `match(eth_type=0x0800, ipv4_src=IP_maliciosa)`, treatment vacío (DROP).
+2. `POST /onos/v1/flows?appId=org.campus.r5`, `priority = P_R5 = 42000` (banda R5 41000-44999: sobre la sesión de R2, 40001, y bajo el DROP temporal de R1, 45000), `timeout = T s`, `isPermanent = false`, `match(eth_type=0x0800, ipv4_src=IP_maliciosa)`, treatment vacío (DROP).
 3. ONOS -> OVS: `OFPT_FLOW_MOD`; 201 Created con `flow_id`.
 4. Bloqueo en el Core (IP externa) y en el borde (host interno afectado).
 5. `registrar(ip, sid, flow_id, timeout, reincidencias+1, estado=bloqueada)`. Se guardan `t_deteccion` y `t_mitigacion` para las métricas.
@@ -55,8 +55,11 @@ Deduplicación: si ya hay un DROP activo para esa IP, no se reenvía.
 | Elemento | Estado |
 |---|---|
 | Lectura de `eve-alerts.json`, filtro de severidad, whitelist, POST de DROP, reintentos con backoff, estado en disco | Implementado en `integrador.py` (probado con ONOS real) |
+| Prioridad 42000, `appId` `org.campus.r5`, configuración por variables de entorno ([`r5.env.example`](r5.env.example)) | Implementado (LLSD SEM-09, cambios C1-C2) |
+| Revisión de `eve-alerts.json` cada 0.05 s (antes 0.5 s) | Implementado (C3); banco local alerta->POST: 313 ms -> 36 ms de media |
+| Campo `direction`: si la firma dispara sobre la respuesta (`to_client`) se bloquea el destino | Implementado (C5) |
 | Escalado por reincidencia (Bloque 3) | Diseño; el código usa timeout fijo de 300 s |
-| Registro de `t_deteccion` / `t_mitigacion` | Diseño; los tiempos se midieron comparando `eve.json`, el log del integrador y `dump-flows` |
+| Registro de tiempos y `flowId` | Implementado (C4): por IP se guardan `flow_id`, `t_alerta` (EVE), `t_lectura`, `t_post` y `t_201` en `state.json`; el log muestra lectura->201 |
 | Feed de reputación (Bloque 5) | Diseño |
 | Reconciliación y retiro manual (Bloque 6) | Diseño |
 | Script del espejo (Bloque 1) | Implementado: [`lab/espejo.py`](lab/espejo.py), reglas entrante y saliente, verificado con contadores |
