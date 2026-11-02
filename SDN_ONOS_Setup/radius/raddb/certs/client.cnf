@@ -41,13 +41,13 @@ emailAddress		= optional
 prompt			= no
 distinguished_name	= client
 default_bits		= 2048
-input_password		= whatever
-output_password		= whatever
+input_password = support_password
+output_password = support_password
 
 [client]
 countryName		= FR
 stateOrProvinceName	= Radius
 localityName		= Somewhere
 organizationName	= Example Inc.
-emailAddress		= user@example.org
-commonName		= user@example.org
+emailAddress = support01@example.org
+commonName = support01@example.org
