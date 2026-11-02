@@ -70,6 +70,9 @@ services:
       - ONOS_PORT=8181
     ports:
       - "5000:5000"
+    volumes:
+      - ./shared/policy_mapper:/app
+    command: uvicorn policy_mapper:app --host 0.0.0.0 --port 5000 --reload
     networks:
       - sdn
       
