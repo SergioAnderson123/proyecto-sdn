@@ -176,3 +176,18 @@ def test_con_sesion_todos_los_roles_alcanzan_el_portal_para_cerrar_sesion(pol):
     for rol, tabla in (("docente", 10), ("alumno", 20), ("soporte", 40), ("invitado", 50)):
         cs = [{x["type"]: x for x in f["selector"]["criteria"]} for f in pt.flujos_tabla_rol(pol, S1, rol, tabla)]
         assert any(c.get("IPV4_DST", {}).get("ip") == "10.0.0.60/32" and c["TCP_DST"]["tcpPort"] == 8080 for c in cs if "TCP_DST" in c)
+
+
+def test_duracion_de_la_sesion_del_portal_por_rol(pol):
+    assert pt.duracion_sesion_portal(pol, "invitado") == 1800
+    assert pt.duracion_sesion_portal(pol, "docente") == 28800          # cae en `default`
+    assert pt.duracion_sesion_portal({}, "invitado") == 28800          # sin configuración
+
+
+def test_solo_vencen_las_sesiones_con_plazo_cumplido():
+    from session_manager import ActiveSession, SessionManager
+    m = SessionManager()
+    m.register_session(ActiveSession("a", "00:00:00:00:00:01", "d", "1", 50, "Invitado", expira=100.0, metodo="Portal"))
+    m.register_session(ActiveSession("b", "00:00:00:00:00:02", "d", "2", 20, "Alumno"))                 # 802.1X: no vence
+    m.register_session(ActiveSession("c", "00:00:00:00:00:03", "d", "3", 50, "Invitado", expira=900.0, metodo="Portal"))
+    assert [s.username for s in m.vencidas(500.0)] == ["a"]

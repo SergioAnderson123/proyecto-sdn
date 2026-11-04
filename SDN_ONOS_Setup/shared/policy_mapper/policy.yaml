@@ -21,6 +21,9 @@ portal:
   desvios:                            # destino original (ip, mac y puerto) -> puerto del portal que lo representa
     - {ip: 10.0.0.40, mac: "00:00:00:00:00:44", tcp: 8003, puerto_portal: 8083}
   grupos: {profesor: docente, alumno: alumno, soporteTI: soporte, invitado: invitado}   # grupo LDAP -> rol
+  # Duración máxima de una sesión del portal (s), por rol; al vencer se borra el flujo y hay que volver a entrar.
+  # Las de 802.1X no vencen: terminan con el Accounting-Stop del switch.
+  duracion_s: {invitado: 1800, default: 28800}
 
 # Catálogo de recursos: IP y puerto TCP de cada servicio (topología topo_baseR2.py: h4 = servicios de alumnos, h5 = de profesores).
 # Los servicios sin entrada aquí no se instalan (p. ej. `internet` todavía no tiene host).

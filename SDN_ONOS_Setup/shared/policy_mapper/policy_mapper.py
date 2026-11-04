@@ -6,6 +6,7 @@ Implementa validaciones criptográficas, anti-spoofing y programación de flujos
 
 import asyncio
 import os
+import time
 from typing import List, Optional
 from fastapi import FastAPI, Header, HTTPException
 import httpx
@@ -53,6 +54,20 @@ async def _sincronizar_periodico() -> None:
         await asyncio.sleep(15)
 
 
+async def _expirar_sesiones_portal() -> None:
+    """Cierra las sesiones del portal cuyo plazo venció: borra su flujo 40001 y deja constancia en la bitácora."""
+    while True:
+        await asyncio.sleep(10)
+        try:
+            for s in session_store.vencidas(time.time()):
+                session_store.remove_session(s.mac)
+                await eliminar_flujo_onos(s.dpid, s.flow_id)
+                print(f"\n[PORTAL] Sesión de {s.username} ({s.mac}) vencida; flujo eliminado")
+                eventos.registrar("logout", s.username, s.mac, s.dpid, s.port, "Portal: sesión vencida por tiempo", s.rol)
+        except Exception as e:  # el lazo no debe morir por un error puntual
+            print(f"  [PORTAL EXPIRACION ERROR] {e}")
+
+
 @app.on_event("startup")
 async def _iniciar_sincronizacion() -> None:
     # las sesiones están en memoria: los flujos de sesión que quedaron en ONOS ya no tienen dueño
@@ -60,6 +75,7 @@ async def _iniciar_sincronizacion() -> None:
     if n:
         print(f"  [R2 SESIONES] {n} flujo(s) de sesión huérfanos eliminados al arrancar; los usuarios deben autenticar de nuevo")
     asyncio.create_task(_sincronizar_periodico())
+    asyncio.create_task(_expirar_sesiones_portal())
 
 
 class Revocacion(BaseModel):
@@ -132,7 +148,8 @@ async def portal_login(p: PortalLogin, x_portal_token: str = Header(default=""))
         raise HTTPException(status_code=502, detail="No se pudo instalar la sesión en el switch")
     nombre = rol.capitalize()
     session_store.register_session(ActiveSession(username=p.usuario, mac=mac, dpid=dpid, port=port, vlan=vlan,
-                                                 rol=nombre, flow_id=flow_id, metodo="Portal"))
+                                                 rol=nombre, flow_id=flow_id, metodo="Portal",
+                                                 expira=time.time() + policy_tables.duracion_sesion_portal(POLITICA, rol)))
     print(f"  [V] PORTAL: {p.usuario} ({rol}) en {dpid}:{port} -> tabla {vlan}")
     eventos.registrar("admitido", p.usuario, mac, dpid, port, f"Portal cautivo: tabla {vlan}", nombre, vlan)
     return {"status": "ok", "usuario": p.usuario, "rol": nombre, "tabla": vlan}
@@ -209,6 +226,7 @@ async def ver_sesiones():
                 "rol": ses.rol,
                 "flow_id": ses.flow_id,
                 "metodo": ses.metodo,
+                "expira": ses.expira,
             }
             for mac, ses in session_store._sessions_by_mac.items()
         },

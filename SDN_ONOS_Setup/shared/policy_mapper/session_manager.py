@@ -18,6 +18,7 @@ class ActiveSession:
     rol: str
     flow_id: Optional[str] = None
     metodo: str = "802.1X"       # "802.1X" (RADIUS) o "Portal" (usuario y contraseña)
+    expira: Optional[float] = None   # instante (time.time()) en que vence; None = no vence
 
 
 class SessionManager:
@@ -28,6 +29,10 @@ class SessionManager:
         # Índice por ubicación física del conmutador: "dpid:port" -> ActiveSession
         self._sessions_by_port: Dict[str, ActiveSession] = {}
         self._sessions_by_user: Dict[str, ActiveSession] = {}
+
+    def vencidas(self, ahora: float) -> list:
+        """Sesiones cuyo plazo ya pasó."""
+        return [s for s in list(self._sessions_by_mac.values()) if s.expira is not None and s.expira <= ahora]
 
     def get_by_mac(self, mac: str) -> Optional[ActiveSession]:
         return self._sessions_by_mac.get(mac.lower())

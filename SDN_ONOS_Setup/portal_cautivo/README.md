@@ -29,6 +29,9 @@ curl -i http://10.0.0.40:8003/                      # 302 -> http://10.0.0.60:80
 ```
 Usuarios de prueba: `guest01` / `guest123` (invitado), y cualquiera de LDAP (`profesor01` / `password123`…). El rol sale del grupo LDAP (`portal.grupos`).
 
+## Duración de la sesión
+Las sesiones del portal vencen: `portal.duracion_s` en `policy.yaml` fija los segundos por rol (invitado 30 min; el resto 8 h). Un lazo del Policy Mapper revisa cada 10 s, borra el flujo 40001 y registra «sesión vencida por tiempo»; el equipo vuelve a quedar solo con acceso al portal. Las sesiones de 802.1X no vencen: terminan con el Accounting-Stop. El panel muestra «vence en N min».
+
 ## Seguridad
 - La **MAC** la lee el portal de su tabla ARP (mismo segmento), nunca del cliente; el Policy Mapper exige `X-Portal-Token` si `PORTAL_TOKEN` está definido (definirlo fuera del laboratorio).
 - LDAP caído ⇒ se rechaza. Un bind sin contraseña (anónimo) se rechaza explícitamente.

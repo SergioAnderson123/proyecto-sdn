@@ -47,6 +47,12 @@ def es_flujo_de_sesion(flujo: dict) -> bool:
             and any(c.get("type") == "ETH_SRC" for c in flujo.get("selector", {}).get("criteria", [])))
 
 
+def duracion_sesion_portal(politica: dict, rol: str) -> int:
+    """Segundos que dura una sesión del portal para un rol (`portal.duracion_s`; 8 h si no se configura)."""
+    d = politica.get("portal", {}).get("duracion_s", {})
+    return int(d.get(rol, d.get("default", 28800)))
+
+
 def servicios_permitidos(politica: dict, rol_matriz: str) -> Dict[str, bool]:
     """{servicio: permitido} para un rol de la matriz; lo que no figura queda denegado."""
     res: Dict[str, bool] = {}
