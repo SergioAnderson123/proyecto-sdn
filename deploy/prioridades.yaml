@@ -11,4 +11,7 @@ r2:
   sesion: 40001         # in_port + eth_src -> push_vlan + goto_table (solo switches de acceso)
   confianza: 40001      # puertos de servidores y troncales -> NORMAL
   tabla_rol: 30000      # reglas permitidas dentro de las tablas de rol (10, 20, 40): otra tabla, no compite con la tabla 0
-  tablas: {docente: 10, alumno: 20, soporte: 40}   # la 30 queda reservada a IoT/MAB
+  tablas: {docente: 10, alumno: 20, soporte: 40, invitado: 50}   # la 30 queda reservada a IoT/MAB
+  portal_arp: 40002     # portal cautivo: ARP de quien no tiene sesión (R1 solo lo manda al controlador)
+  portal_retorno: 40002 # portal cautivo: reescribe la respuesta del portal al destino original (sobre la confianza de la troncal)
+  portal: 35000         # portal cautivo: tráfico al portal y desvío del HTTP; bajo la sesión, así que con sesión nunca se desvía

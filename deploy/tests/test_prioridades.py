@@ -43,6 +43,14 @@ def test_r2_sesion_confianza_y_tablas_coinciden_con_el_mapa(mapa):
     assert {r: d["tabla"] for r, d in roles.items()} == mapa["r2"]["tablas"]
 
 
+def test_portal_cautivo_coincide_con_el_mapa_y_cede_ante_la_sesion(mapa):
+    assert pt.PRIO_PORTAL_ARP == mapa["r2"]["portal_arp"] and pt.PRIO_PORTAL_RETORNO == mapa["r2"]["portal_retorno"]
+    assert pt.PRIO_PORTAL == mapa["r2"]["portal"]
+    assert mapa["r2"]["portal"] < mapa["r2"]["sesion"]            # con sesión, el flujo de R2 gana y el HTTP no se desvía
+    assert mapa["r2"]["portal_retorno"] > mapa["r2"]["confianza"]  # la reescritura debe ganar al NORMAL de la troncal
+    assert mapa["r2"]["portal_arp"] > mapa["r2"]["sesion"] > mapa["r1"]["base"]
+
+
 def test_r1_drop_temporal_y_sesion_en_el_policy_mapper_coinciden_con_el_mapa(mapa):
     prios = set(int(x) for x in re.findall(r'"priority":\s*(\d+)', leer("SDN_ONOS_Setup/shared/policy_mapper/policy_mapper.py")))
     assert mapa["r1"]["drop_temporal"] in prios and mapa["r2"]["sesion"] in prios

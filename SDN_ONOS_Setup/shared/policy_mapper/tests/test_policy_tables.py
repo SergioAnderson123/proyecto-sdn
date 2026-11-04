@@ -16,11 +16,11 @@ def pol():
 
 
 def destinos(flujos):
-    """{(ip, puerto)} de los flujos que permiten un servicio."""
+    """{(ip, puerto)} de los flujos que permiten un servicio (sin contar el portal, que todos los roles alcanzan)."""
     res = set()
     for f in flujos:
         c = {x["type"]: x for x in f["selector"]["criteria"]}
-        if "IPV4_DST" in c:
+        if "IPV4_DST" in c and c["IPV4_DST"]["ip"] != "10.0.0.60/32":
             res.add((c["IPV4_DST"]["ip"].split("/")[0], c["TCP_DST"]["tcpPort"]))
     return res
 
@@ -59,7 +59,7 @@ def test_servicio_sin_catalogo_no_genera_flujo(pol):
     assert "internet" not in pol["services"]
     n = len(pt.flujos_tabla_rol(pol, S1, "docente", 10))
     permitidos = [s for s, ok in pt.servicios_permitidos(pol, "professor").items() if ok and s in pol["services"]]
-    assert n == len(permitidos) + 2          # + ARP + DROP
+    assert n == len(permitidos) + 3          # + ARP + portal + DROP
 
 
 def test_switch_de_confianza_total_no_lleva_tablas_de_rol(pol):
@@ -70,9 +70,9 @@ def test_switch_de_confianza_total_no_lleva_tablas_de_rol(pol):
 
 def test_switch_de_acceso_lleva_puerto_de_confianza_y_las_tablas_de_rol(pol):
     f = pt.flujos_dispositivo(pol, S1)
-    confianza = [x for x in f if x["priority"] == pt.PRIO_CONFIANZA]
+    confianza = pt.flujos_confianza(pol, S1)
     assert len(confianza) == 1 and confianza[0]["selector"]["criteria"] == [{"type": "IN_PORT", "port": 4}]
-    assert {x["tableId"] for x in f} == {0, 10, 20, 40}
+    assert {x["tableId"] for x in f} == {0, 10, 20, 40, 50}
 
 
 def test_switch_desconocido_no_recibe_nada(pol):
@@ -86,7 +86,7 @@ def test_la_prioridad_de_rol_no_pisa_la_banda_de_r1_r5():
 
 def test_los_flujos_con_pop_vlan_exigen_el_vlan_vid_de_su_rol(pol):
     # sin VLAN_VID, OVS responde MATCH_INCONSISTENT al pop_vlan (visto en el laboratorio)
-    for rol, tabla in (("docente", 10), ("alumno", 20), ("soporte", 40)):
+    for rol, tabla in (("docente", 10), ("alumno", 20), ("soporte", 40), ("invitado", 50)):
         for x in pt.flujos_tabla_rol(pol, S1, rol, tabla):
             if x["priority"] == pt.PRIO_ROL:
                 assert {"type": "VLAN_VID", "vlanId": tabla} in x["selector"]["criteria"]
@@ -94,7 +94,7 @@ def test_los_flujos_con_pop_vlan_exigen_el_vlan_vid_de_su_rol(pol):
 def test_administrador_alcanza_todos_los_servicios_del_catalogo(pol):
     d = destinos(pt.flujos_tabla_rol(pol, S1, "soporte", 40))
     assert d == {(s["ip"], int(s["tcp"])) for s in pol["services"].values()}
-    assert len(pt.flujos_tabla_rol(pol, S1, "soporte", 40)) == len(pol["services"]) + 2   # + ARP + DROP
+    assert len(pt.flujos_tabla_rol(pol, S1, "soporte", 40)) == len(pol["services"]) + 3   # + ARP + portal + DROP
 
 
 def test_solo_los_flujos_de_sesion_se_consideran_huerfanos():
@@ -127,3 +127,52 @@ def test_los_flujos_pendientes_no_cuentan_como_instalados(pol):
 
 def test_un_switch_nuevo_sin_flujos_se_detecta(pol):
     assert pt.dispositivos_incompletos(pol, [S1, S2], []) == [S1, S2]
+
+# ---------- portal cautivo ----------
+def test_el_invitado_solo_alcanza_el_portal_universitario(pol):
+    d = destinos(pt.flujos_tabla_rol(pol, S1, "invitado", 50))
+    assert d == {("10.0.0.40", 8003)}
+
+
+def test_el_portal_solo_se_instala_en_los_switches_de_acceso(pol):
+    assert pt.flujos_portal(pol, S1) and pt.flujos_portal(pol, S2) == []
+
+
+def test_un_usuario_sin_sesion_puede_resolver_y_llegar_al_portal(pol):
+    f = pt.flujos_portal(pol, S1)
+    arp = [x for x in f if x["priority"] == pt.PRIO_PORTAL_ARP and not any(c["type"] == "IP_PROTO" for c in x["selector"]["criteria"])]
+    assert len(arp) == 1 and arp[0]["selector"]["criteria"] == [{"type": "ETH_TYPE", "ethType": "0x0806"}]
+    assert {"type": "OUTPUT", "port": "CONTROLLER"} in arp[0]["treatment"]["instructions"]
+    tcp = {c["tcpPort"] for x in f if x["priority"] == pt.PRIO_PORTAL for c in x["selector"]["criteria"]
+           if c["type"] == "TCP_DST" and {"type": "IPV4_DST", "ip": "10.0.0.60/32"} in x["selector"]["criteria"]}
+    assert tcp == {8080, 8083}
+
+
+def test_el_desvio_reescribe_hacia_el_portal(pol):
+    desvio = [x for x in pt.flujos_portal(pol, S1)
+              if {"type": "IPV4_DST", "ip": "10.0.0.40/32"} in x["selector"]["criteria"] and x["priority"] == pt.PRIO_PORTAL][0]
+    assert {"type": "TCP_DST", "tcpPort": 8003} in desvio["selector"]["criteria"]
+    ins = desvio["treatment"]["instructions"]
+    assert {"type": "L2MODIFICATION", "subtype": "ETH_DST", "mac": "02:00:00:00:00:60"} in ins
+    assert {"type": "L3MODIFICATION", "subtype": "IPV4_DST", "ip": "10.0.0.60"} in ins
+    assert {"type": "L4MODIFICATION", "subtype": "TCP_DST", "tcpPort": 8083} in ins and ins[-1] == {"type": "OUTPUT", "port": "NORMAL"}
+
+
+def test_la_respuesta_se_reescribe_de_vuelta_por_la_troncal_y_gana_a_la_confianza(pol):
+    retorno = [x for x in pt.flujos_portal(pol, S1) if x["priority"] == pt.PRIO_PORTAL_RETORNO and x["tableId"] == 0
+               and any(c["type"] == "IP_PROTO" for c in x["selector"]["criteria"])]
+    assert len(retorno) == 1 and {"type": "IN_PORT", "port": 4} in retorno[0]["selector"]["criteria"]
+    ins = retorno[0]["treatment"]["instructions"]
+    assert {"type": "L3MODIFICATION", "subtype": "IPV4_SRC", "ip": "10.0.0.40"} in ins
+    assert {"type": "L4MODIFICATION", "subtype": "TCP_SRC", "tcpPort": 8003} in ins
+    assert pt.PRIO_PORTAL_RETORNO > pt.PRIO_CONFIANZA
+
+
+def test_el_desvio_queda_bajo_la_sesion_de_r2(pol):
+    assert pt.PRIO_PORTAL < pt.PRIO_SESION          # con sesión, nunca se desvía
+
+
+def test_con_sesion_todos_los_roles_alcanzan_el_portal_para_cerrar_sesion(pol):
+    for rol, tabla in (("docente", 10), ("alumno", 20), ("soporte", 40), ("invitado", 50)):
+        cs = [{x["type"]: x for x in f["selector"]["criteria"]} for f in pt.flujos_tabla_rol(pol, S1, rol, tabla)]
+        assert any(c.get("IPV4_DST", {}).get("ip") == "10.0.0.60/32" and c["TCP_DST"]["tcpPort"] == 8080 for c in cs if "TCP_DST" in c)

@@ -7,6 +7,20 @@ roles:
   docente: {matriz: professor, tabla: 10}
   alumno:  {matriz: student,   tabla: 20}
   soporte: {matriz: administrator, tabla: 40}   # soporte TI (grupo LDAP soporteTI); la tabla 30 queda reservada a IoT/MAB
+  invitado: {matriz: guest, tabla: 50}          # invitados y equipos sin 802.1X: entran por el portal cautivo con usuario y contraseña
+
+# Portal cautivo (usuario y contraseña validados contra LDAP): para invitados y dispositivos que no hablan 802.1X.
+# El portal es un servidor web con IP en el plano de datos. Un usuario SIN sesión solo puede alcanzar al portal; su tráfico HTTP hacia
+# los destinos de `desvios` se reescribe hacia el portal (que responde con una redirección al formulario) y la respuesta se reescribe
+# de vuelta para que el cliente crea que habló con el destino original. Con sesión, el flujo de sesión (40001) tiene prioridad.
+portal:
+  ip: 10.0.0.60
+  mac: "02:00:00:00:00:60"
+  puerto: 8080
+  switches: ["of:0000000000000001"]   # switches de acceso donde se instalan los flujos del portal
+  desvios:                            # destino original (ip, mac y puerto) -> puerto del portal que lo representa
+    - {ip: 10.0.0.40, mac: "00:00:00:00:00:44", tcp: 8003, puerto_portal: 8083}
+  grupos: {profesor: docente, alumno: alumno, soporteTI: soporte, invitado: invitado}   # grupo LDAP -> rol
 
 # Catálogo de recursos: IP y puerto TCP de cada servicio (topología topo_baseR2.py: h4 = servicios de alumnos, h5 = de profesores).
 # Los servicios sin entrada aquí no se instalan (p. ej. `internet` todavía no tiene host).

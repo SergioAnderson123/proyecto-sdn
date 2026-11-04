@@ -25,6 +25,9 @@ POLICY_PATH = os.getenv(
 APP_ID = "org.campus.r2"
 PRIO_ROL = 30000        # reglas permitidas dentro de una tabla de rol
 PRIO_CONFIANZA = 40001  # sobre el ARP/EAPOL->controlador de R1 (40000)
+PRIO_PORTAL_ARP = 40002      # ARP de quien no tiene sesión: R1 lo manda solo al controlador (40000) y sin resolver no hay TCP hacia el portal
+PRIO_PORTAL_RETORNO = 40002  # reescritura de la respuesta del portal: sobre el flujo de confianza de la troncal (40001)
+PRIO_PORTAL = 35000          # tráfico al portal y desvío del HTTP; bajo la sesión (40001): con sesión nunca se desvía
 
 
 def cargar_politica(ruta: Optional[str] = None) -> dict:
@@ -90,6 +93,11 @@ def flujos_tabla_rol(politica: dict, dpid: str, rol: str, tabla: int) -> List[di
             {"type": "IPV4_DST", "ip": f"{srv['ip']}/32"},
             {"type": "TCP_DST", "tcpPort": int(srv["tcp"])},
         ], _SALIDA))
+    portal = politica.get("portal")
+    if portal:   # con sesión también debe alcanzarse el portal (para ver el estado y cerrar sesión)
+        flujos.append(_base(dpid, tabla, PRIO_ROL, [
+            vlan, {"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "IP_PROTO", "protocol": 6},
+            {"type": "IPV4_DST", "ip": f"{portal['ip']}/32"}, {"type": "TCP_DST", "tcpPort": int(portal["puerto"])}], _SALIDA))
     flujos.append(_base(dpid, tabla, 0, [], []))   # sin instrucciones = DROP explícito
     return flujos
 
@@ -104,9 +112,46 @@ def flujos_confianza(politica: dict, dpid: str) -> List[dict]:
     return [_base(dpid, 0, PRIO_CONFIANZA, [{"type": "IN_PORT", "port": int(p)}], salida) for p in t]
 
 
+def flujos_portal(politica: dict, dpid: str) -> List[dict]:
+    """Flujos del portal cautivo en un switch de acceso (vacío si no figura en `portal.switches`).
+
+    Un usuario sin sesión: (1) resuelve por ARP (al portal y a los destinos desviados); (2) puede abrir TCP hacia el portal; (3) si abre
+    el destino original de un desvío, el paquete se reescribe hacia el portal (MAC, IP y puerto) y (4) la respuesta que llega por la
+    troncal se reescribe de vuelta al destino original, de modo que el cliente cree haber hablado con él."""
+    p = politica.get("portal")
+    if not p or dpid not in p.get("switches", []):
+        return []
+    ip, mac, puerto = p["ip"], p["mac"], int(p["puerto"])
+    tcp = [{"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "IP_PROTO", "protocol": 6}]
+    normal = [{"type": "OUTPUT", "port": "NORMAL"}]
+    flujos = []
+    # El REST de ONOS 2.7 no sabe emparejar ARP_TPA: se permite el ARP en general (solo resuelve direcciones; no lleva datos).
+    # NORMAL lo resuelve; CONTROLLER deja que ONOS aprenda al host (el portal necesita su ubicación).
+    flujos.append(_base(dpid, 0, PRIO_PORTAL_ARP, [{"type": "ETH_TYPE", "ethType": "0x0806"}],
+                        normal + [{"type": "OUTPUT", "port": "CONTROLLER"}]))
+    for pt_ in [puerto] + [int(d["puerto_portal"]) for d in p.get("desvios", [])]:
+        flujos.append(_base(dpid, 0, PRIO_PORTAL, tcp + [{"type": "IPV4_DST", "ip": f"{ip}/32"},
+                                                         {"type": "TCP_DST", "tcpPort": pt_}], normal))
+    troncales = politica.get("trusted", {}).get(dpid)
+    for d in p.get("desvios", []):
+        flujos.append(_base(dpid, 0, PRIO_PORTAL, tcp + [{"type": "IPV4_DST", "ip": f"{d['ip']}/32"},
+                                                         {"type": "TCP_DST", "tcpPort": int(d["tcp"])}], [
+            {"type": "L2MODIFICATION", "subtype": "ETH_DST", "mac": mac},
+            {"type": "L3MODIFICATION", "subtype": "IPV4_DST", "ip": ip},
+            {"type": "L4MODIFICATION", "subtype": "TCP_DST", "tcpPort": int(d["puerto_portal"])}] + normal))
+        if isinstance(troncales, list):
+            for t in troncales:                      # la respuesta vuelve por la troncal hacia los servidores
+                flujos.append(_base(dpid, 0, PRIO_PORTAL_RETORNO, [{"type": "IN_PORT", "port": int(t)}] + tcp + [
+                    {"type": "IPV4_SRC", "ip": f"{ip}/32"}, {"type": "TCP_SRC", "tcpPort": int(d["puerto_portal"])}], [
+                    {"type": "L2MODIFICATION", "subtype": "ETH_SRC", "mac": d["mac"]},
+                    {"type": "L3MODIFICATION", "subtype": "IPV4_SRC", "ip": d["ip"]},
+                    {"type": "L4MODIFICATION", "subtype": "TCP_SRC", "tcpPort": int(d["tcp"])}] + normal))
+    return flujos
+
+
 def flujos_dispositivo(politica: dict, dpid: str) -> List[dict]:
     """Todo lo que R2 instala en un switch. Los de confianza total no llevan tablas de rol (no tienen usuarios)."""
-    flujos = flujos_confianza(politica, dpid)
+    flujos = flujos_confianza(politica, dpid) + flujos_portal(politica, dpid)
     if politica["trusted"].get(dpid) != "all":
         for rol, datos in politica["roles"].items():
             flujos += flujos_tabla_rol(politica, dpid, rol, int(datos["tabla"]))
