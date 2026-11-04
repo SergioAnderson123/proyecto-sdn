@@ -816,7 +816,7 @@ session {
 #  additional steps we can take.
 post-auth {
 	#  R1: rol institucional segun el grupo LDAP
-	if (LDAP-Group == "docente") {
+	if (LDAP-Group == "profesor") {
 		update reply {
 			Tunnel-Type = VLAN,
 			Tunnel-Medium-Type = IEEE-802,
