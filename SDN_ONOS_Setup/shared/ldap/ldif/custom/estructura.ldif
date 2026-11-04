@@ -1,49 +1,121 @@
 # Unidad Organizacional para Usuarios
+
 dn: ou=users,dc=example,dc=org
 objectClass: organizationalUnit
 ou: users
 
 # Unidad Organizacional para Grupos
+
 dn: ou=groups,dc=example,dc=org
 objectClass: organizationalUnit
 ou: groups
 
 # Organizacional para Dispositivos
+
 dn: ou=devices,dc=example,dc=org
 objectClass: organizationalUnit
 ou: devices
 
 # --------------------------------- Usuarios --------------------------------- #
 # Profesores
-dn: uid=profesor01,ou=users,dc=example,dc=org objectClass: inetOrgPerson uid: profesor01 sn: Profesor cn: profesor01@example.org mail: profesor01@example.org userPassword: password123 description: 00:00:00:00:00:11 physicalDeliveryOfficeName: of:0000000000000001 roomNumber: 1 departmentNumber: 3
-dn: uid=profesor02,ou=users,dc=example,dc=org objectClass: inetOrgPerson uid: profesor02 sn: Profesor cn: profesor02@example.org mail: profesor02@example.org userPassword: password123 description: 00:00:00:00:00:12 physicalDeliveryOfficeName: of:0000000000000001 roomNumber: 1 departmentNumber: 3
+
+dn: uid=profesor01,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: profesor01
+sn: Profesor
+cn: profesor01@example.org
+mail: profesor01@example.org
+userPassword: password123
+description: 00:00:00:00:00:11
+physicalDeliveryOfficeName: of:0000000000000001
+roomNumber: 1
+departmentNumber: 3
+
+dn: uid=profesor02,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: profesor02
+sn: Profesor
+cn: profesor02@example.org
+mail: profesor02@example.org
+userPassword: password123
+description: 00:00:00:00:00:12
+physicalDeliveryOfficeName: of:0000000000000001
+roomNumber: 1
+departmentNumber: 3
 
 # Alumnos
-dn: uid=alumno01,ou=users,dc=example,dc=org objectClass: inetOrgPerson uid: alumno01 sn: Alumno cn: alumno01@example.org mail: alumno01@example.org userPassword: password123 description: 00:00:00:00:00:21 physicalDeliveryOfficeName: of:0000000000000001 roomNumber: 2 departmentNumber: 2
-dn: uid=alumno02,ou=users,dc=example,dc=org objectClass: inetOrgPerson uid: alumno02 sn: Alumno cn: alumno02@example.org mail: alumno02@example.org userPassword: password123 description: 00:00:00:00:00:22 physicalDeliveryOfficeName: of:0000000000000001 roomNumber: 2 departmentNumber: 2
-dn: uid=alumno03,ou=users,dc=example,dc=org objectClass: inetOrgPerson uid: alumno03 sn: Alumno cn: alumno03@example.org mail: alumno03@example.org userPassword: password123 description: 00:00:00:00:00:23 physicalDeliveryOfficeName: of:0000000000000001 roomNumber: 2 departmentNumber: 2
+
+dn: uid=alumno01,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: alumno01
+sn: Alumno
+cn: alumno01@example.org
+mail: alumno01@example.org
+userPassword: password123
+description: 00:00:00:00:00:21
+physicalDeliveryOfficeName: of:0000000000000001
+roomNumber: 2
+departmentNumber: 2
+
+dn: uid=alumno02,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: alumno02
+sn: Alumno
+cn: alumno02@example.org
+mail: alumno02@example.org
+userPassword: password123
+description: 00:00:00:00:00:22
+physicalDeliveryOfficeName: of:0000000000000001
+roomNumber: 2
+departmentNumber: 2
+
+dn: uid=alumno03,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: alumno03
+sn: Alumno
+cn: alumno03@example.org
+mail: alumno03@example.org
+userPassword: password123
+description: 00:00:00:00:00:23
+physicalDeliveryOfficeName: of:0000000000000001
+roomNumber: 2
+departmentNumber: 2
 
 # Soporte Tecnico
-dn: uid=support01,ou=users,dc=example,dc=org objectClass: inetOrgPerson uid: support01 sn: Support cn: support01@example.org mail: support01@example.org userPassword: password123 description: 00:00:00:00:00:31 physicalDeliveryOfficeName: of:0000000000000001 roomNumber: 3 departmentNumber: 1
+
+dn: uid=support01,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: support01
+sn: Support
+cn: support01@example.org
+mail: support01@example.org
+userPassword: password123
+description: 00:00:00:00:00:31
+physicalDeliveryOfficeName: of:0000000000000001
+roomNumber: 3
+departmentNumber: 1
 
 # ---------------------------------- Grupos ---------------------------------- #
 # Grupo de Profesores
+
 dn: cn=profesor,ou=groups,dc=example,dc=org
 objectClass: groupOfNames
 cn: profesor
-member: uid=profesor01,ou=users,dc=example,dc=org 
+member: uid=profesor01,ou=users,dc=example,dc=org
 member: uid=profesor02,ou=users,dc=example,dc=org
 
 # Grupo de Alumnos
+
 dn: cn=alumno,ou=groups,dc=example,dc=org
 objectClass: groupOfNames
 cn: alumno
 member: uid=alumno01,ou=users,dc=example,dc=org
-member: uid=alumno02,ou=users,dc=example,dc=org 
+member: uid=alumno02,ou=users,dc=example,dc=org
 member: uid=alumno03,ou=users,dc=example,dc=org
 
 # Grupo de Soporte Tecnico
-dn: cn=soporteTI,ou=groups,dc=example,dc=org 
-objectClass: groupOfNames 
-cn: soporteTI 
+
+dn: cn=soporteTI,ou=groups,dc=example,dc=org
+objectClass: groupOfNames
+cn: soporteTI
 member: uid=support01,ou=users,dc=example,dc=org
