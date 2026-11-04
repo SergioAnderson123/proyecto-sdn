@@ -61,6 +61,6 @@ Deduplicación: si ya hay un DROP activo para esa IP, no se reenvía.
 | Escalado por reincidencia (Bloque 3) | Diseño; el código usa timeout fijo de 300 s |
 | Registro de tiempos y `flowId` | Implementado (C4): por IP se guardan `flow_id`, `t_alerta` (EVE), `t_lectura`, `t_post` y `t_201` en `state.json`; el log muestra lectura->201 |
 | Feed de reputación (Bloque 5) | Diseño |
-| Reconciliación y retiro manual (Bloque 6) | Diseño |
+| Reconciliación periódica con ONOS y retiro manual (Bloque 6) | Implementado (C7): el integrador olvida las IPs cuyo flujo ya no existe; `R5/cli/r5ctl.py` lista, bloquea y desbloquea. Falta publicar el evento hacia el feed de reputación |
 | Script del espejo (Bloque 1) | Implementado: [`lab/espejo.py`](lab/espejo.py), reglas entrante y saliente, verificado con contadores |
 | Mediciones de tiempos, fracción que pasa y TCAM | Medido: ver [`resultados_R5.md`](resultados_R5.md) |

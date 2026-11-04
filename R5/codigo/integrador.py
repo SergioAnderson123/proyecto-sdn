@@ -30,9 +30,12 @@ LISTA_BLANCA = redes("LISTA_BLANCA", "10.0.0.99/32,10.0.0.10/32")  # gateway, DN
 CORE_DEVICE  = os.getenv("CORE_DEVICE", "of:0000000000000001")
 PRIORITY     = int(os.getenv("P_R5", "42000"))     # banda R5 41000-44999: sobre la sesión R2 (40001), bajo R1 (45000)
 MAX_SEVERITY = int(os.getenv("MAX_SEVERITY", "2"))
+INTRANET     = os.getenv("INTRANET_BLOCK", "1") == "1"   # bloquear también alertas interno -> interno (requiere espejo interno)
 BLOCK_SEC    = int(os.getenv("BLOCK_SEC", "300"))  # timeout de inactividad en ONOS
 POLL_SEC     = float(os.getenv("POLL_SEC", "0.05"))  # con 0.5 s la espera media alerta->POST era ~250 ms
 SAVE_EVERY   = 5
+RECONCILE_SEC = float(os.getenv("RECONCILE_SEC", "10"))   # cada cuánto compara su lista con los flujos reales de ONOS
+GRACIA_SEC   = 3            # un flujo recién creado puede tardar unos segundos en aparecer en ONOS
 BACKOFF_MIN, BACKOFF_MAX = 1, 30
 
 AUTH   = (ONOS_USER, ONOS_PASS)
@@ -133,6 +136,8 @@ def decidir(ev):
         res = (src, "core")          # atacante externo -> DROP en el Core
     elif s_int and not d_int:
         res = (src, "borde")         # host interno (posible C2) -> DROP en su borde
+    elif s_int and d_int and INTRANET:
+        res = (src, "borde")         # ataque dentro de la intranet (R3/R4) -> DROP en el borde del origen
     else:
         return None
     if en(res[0], LISTA_BLANCA):     # solo se protege a la IP que se iba a bloquear
@@ -165,6 +170,20 @@ def procesar(ev, st, t_lectura=None):
     }
     log.info("BLOQUEO %s en %s (%s) flow=%s lectura->201=%.1f ms", ip, device,
              ev["alert"].get("signature"), flow_id, (t_201 - t_lectura) * 1000)
+
+
+def reconciliar(st):
+    """Olvida las IPs cuyo flujo ya no existe en ONOS (expiró por inactividad o se borró a mano con r5ctl).
+    Sin esto, una IP liberada seguiría en la lista del integrador y sus alertas nuevas se ignorarían."""
+    if DRY_RUN or not st["bloqueadas"]:
+        return
+    flujos = onos("GET", f"/flows/application/{APP_ID}").json().get("flows", [])
+    activas = {c["ip"].split("/")[0] for f in flujos for c in f["selector"]["criteria"] if c["type"] == "IPV4_SRC"}
+    ahora = time.time()
+    for ip, v in list(st["bloqueadas"].items()):
+        if ip not in activas and ahora - v.get("t_201", 0) > GRACIA_SEC:
+            del st["bloqueadas"][ip]
+            log.info("LIBERADA %s: su flujo ya no existe en ONOS", ip)
 
 
 # ---------------- Estado ----------------
@@ -200,9 +219,16 @@ def main():
 
     st = cargar_estado()
     ultimo_guardado, espera = time.time(), BACKOFF_MIN
+    ultima_reconc = 0.0
     try:
         while True:
             ahora = time.time()
+            if ahora - ultima_reconc >= RECONCILE_SEC:
+                ultima_reconc = ahora
+                try:
+                    reconciliar(st)
+                except (Reintentar, Descartar) as e:
+                    log.warning("No se pudo reconciliar con ONOS: %s", e)
             st["bloqueadas"] = {k: v for k, v in st["bloqueadas"].items() if v["vence"] > ahora}
             try:
                 s = os.stat(EVE_PATH)
