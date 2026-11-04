@@ -1,6 +1,6 @@
 """Instala el espejo selectivo permanente en el Core (Bloque 1 de R5).
 
-Tres reglas permanentes (prioridad 30000) en el switch Core:
+Tres reglas permanentes (prioridad P_ESPEJO, por defecto 41000) en el switch Core:
   1. entrante: in_port=uplink, ipv4_dst=HOME_NET      -> NORMAL + puerto del IDS
   2. saliente: ipv4_src=HOME_NET, ipv4_dst=EXTERNA    -> NORMAL + puerto del IDS
   3. interna:  ipv4_src=HOME_NET, ipv4_dst=HOME_NET   -> NORMAL + puerto del IDS (R3/R4)
@@ -19,7 +19,11 @@ PUERTO_IDS = int(os.getenv("PUERTO_IDS", "4"))
 HOME_NET = os.getenv("ESPEJO_HOME_NET", "10.0.0.0/24")
 RED_EXTERNA = os.getenv("ESPEJO_RED_EXTERNA", "10.0.1.0/24")
 IDS_MAC = os.getenv("IDS_MAC")   # VNRT: la red virtual solo entrega al IDS las tramas dirigidas a su MAC
-PRIORIDAD = 30000
+# 41000: dentro de la banda de R5 (41000-44999), por encima del flujo de sesión y de los puertos de confianza de R2 (40001) y de la
+# base de R1 (40000); si estuviera por debajo, un Core marcado como "de confianza" por R2 taparía el espejo. Por debajo del DROP de R5
+# (42000), para que una IP bloqueada deje de copiarse al IDS, y del DROP temporal de R1 (45000).
+# El espejo NO debe instalarse en un switch con sesiones de usuario de R2: reenvía con NORMAL y saltaría las tablas de rol.
+PRIORIDAD = int(os.getenv("P_ESPEJO", "41000"))
 
 
 def regla(criterios):

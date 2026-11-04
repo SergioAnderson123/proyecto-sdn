@@ -65,7 +65,7 @@
   <div class="card kpi" style="--c:var(--rojo)"><span class="tag">Bloqueos activos</span><div class="v"><span id="nb">0</span><small>IP</small></div><div class="s">DROP prio 42000 · appId org.campus.r5</div></div>
   <div class="card kpi" style="--c:var(--ambar)"><span class="tag">Alertas accionables</span><div class="v"><span id="na">0</span></div><div class="s" id="ig">sev ≤ 2</div></div>
   <div class="card kpi" style="--c:var(--violeta)"><span class="tag">Alerta → bloqueo</span><div class="v"><span id="ult">—</span><small>ms</small></div><div class="s" id="ult2">último bloqueo</div></div>
-  <div class="card kpi" style="--c:var(--verde)"><span class="tag">Paquetes al IDS</span><div class="v"><span id="pk">0</span></div><div class="s" id="pk2">espejo selectivo · prio 30000</div></div>
+  <div class="card kpi" style="--c:var(--verde)"><span class="tag">Paquetes al IDS</span><div class="v"><span id="pk">0</span></div><div class="s" id="pk2">espejo selectivo</div></div>
  </div>
 
  <div class="fila f1">
@@ -89,7 +89,7 @@ async function tick(){try{const s=await (await fetch('/api/state')).json();
  $('hora').textContent=s.hora; $('nb').textContent=s.bloqueos.length; $('na').textContent=s.alertas.length;
  $('ig').textContent='+ '+s.ignoradas+' de severidad 3 ignoradas';
  const pk=s.espejo.reduce((a,e)=>a+e.pkts,0); $('pk').textContent=pk.toLocaleString('es');
- $('pk2').textContent=s.espejo.map(e=>e.regla+' '+e.pkts.toLocaleString('es')).join(' · ')||'espejo selectivo · prio 30000';
+ $('pk2').textContent=s.espejo.map(e=>e.regla+' '+e.pkts.toLocaleString('es')).join(' · ')||'espejo selectivo';
  const t=s.tiempos; if(t.length){$('ult').textContent=Math.round(t[0].total); $('ult2').textContent='M1 '+t[0].m1+' ms · M2 '+t[0].m2+' ms · '+t[0].ip}
  const max=Math.max(100,...t.map(x=>x.total));
  $('tm').innerHTML='<tr><th>IP</th><th>Firma</th><th>Dónde</th><th style="width:38%"></th><th class="num">Total</th></tr>'+

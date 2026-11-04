@@ -4,7 +4,7 @@ Fuente: hoja "Grupo 4" de `TEL354-2026-2-Ex1.xlsx` (filas 34-39 y 12). Entregabl
 
 ## Cómo funciona R5 (el trasfondo en seis líneas)
 
-1. El Core reenvía el tráfico Norte-Sur con `NORMAL` y, con una regla de prioridad 30000, **copia** cada paquete al puerto de Suricata (espejo). Suricata nunca está en el camino: si cae, la red sigue.
+1. El Core reenvía el tráfico Norte-Sur con `NORMAL` y, con reglas de prioridad 41000 (30000 en la primera versión), **copia** cada paquete al puerto de Suricata (espejo). Suricata nunca está en el camino: si cae, la red sigue.
 2. Suricata compara la copia con ~53 000 reglas ET Open más las locales y escribe una alerta en `eve-alerts.json`.
 3. El integrador (M09) lee las alertas nuevas cada 0,05 s, descarta lo que no importa (severidad > 2, lista blanca, interno↔interno, IP ya bloqueada) y decide **dónde** bloquear: Core si el atacante es externo, borde del host si es interno.
 4. Pide a ONOS por REST un flujo `ipv4_src = atacante`, sin acciones (= DROP), prioridad 42000, con timeout de inactividad.

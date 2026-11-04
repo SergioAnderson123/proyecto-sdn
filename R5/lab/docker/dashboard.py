@@ -22,6 +22,7 @@ STATE_PATH = os.getenv("STATE_PATH", "/var/lib/integrador/state.json")
 NOMBRES = {"of:0000000000000001": "s1 Core", "of:0000000000000002": "s2 borde (hsrv)",
            "of:0000000000000003": "s3 borde (hint)", "of:0000a223f2c04547": "s1 Core", "of:00001a749039894a": "s2 borde (h1,h2)", "of:0000ca272d265744": "s3 borde (h3,h4)"}
 CORE = os.getenv("CORE_DEVICE", "of:0000000000000001")
+P_ESPEJO = int(os.getenv("P_ESPEJO", "41000"))
 eventos, lock = [], threading.Lock()
 
 
@@ -65,7 +66,7 @@ def estado():
                          "timeout": f.get("timeout")})
     espejo = []
     for f in get(f"/flows/{CORE}").get("flows", []):
-        if f["priority"] == 30000:
+        if f["priority"] == P_ESPEJO:
             cr = {c["type"]: c.get("ip") or c.get("port") for c in f["selector"]["criteria"]}
             dire = "entrante" if "IN_PORT" in cr else ("interno" if cr.get("IPV4_DST") == cr.get("IPV4_SRC") else "saliente")
             espejo.append({"regla": dire, "pkts": f.get("packets", 0)})

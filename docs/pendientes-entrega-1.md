@@ -20,13 +20,18 @@ Cierre en Paideia: miércoles 14-oct-2026, 14:59. Un solo PDF autocontenido por 
 
 | Prioridad | Regla |
 |---|---|
-| 50000 | EAPOL -> controller (borde) y DROP de R5 |
-| 45000 | Blacklist MAB |
-| 40001 | Flujo de usuario |
+| 50000 | EAPOL -> controller (borde; ONOS AAA instala hoy 40000) |
+| 45000 | DROP temporal / blacklist MAB (R1) |
+| 42000 | DROP de R5 por IP de origen |
+| 41000 | Espejo de R5 en el Core (sobre la sesión de R2: ver `deploy/prioridades.yaml`) |
+| 40001 | Flujo de sesión y puertos de confianza (R2) |
 | 40000 | Base (LLDP/BDDP/ARP) |
-| 30000 | Reglas base en Tabla 10 y espejo en el Core |
+| 30000 | Reglas permitidas dentro de las tablas de rol 10/20/40 (R2) |
 | 20000 | Trampa MAB |
 | 0 | Table-miss DROP |
+
+   Propuesta cerrada en la integración R2 + R5: el espejo pasó de 30000 a 41000 porque, bajo la sesión (40001), un Core marcado como
+   "de confianza" por R2 lo tapaba; el DROP de R5 quedó en 42000 (no 50000) para ceder ante el DROP temporal de R1.
 
    En el Bloque 1A, el DROP de IP/DHCP en prio 40000 tapa la trampa MAB (20000); revisar.
 4. **R2: Docente con `ip_dst=0.0.0.0/0 -> NORMAL`** abre también el Sistema administrativo, que en SEM-07 es DROP. Añadir DROP explícito de mayor prioridad hacia recursos privilegiados.

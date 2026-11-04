@@ -25,6 +25,7 @@ PRIORIDAD = int(os.getenv("P_R5", "42000"))
 CORE = os.getenv("CORE_DEVICE", "of:0000000000000001")
 EVE = os.getenv("EVE_PATH", "/var/log/suricata/eve-alerts.json")
 MAX_SEVERIDAD = int(os.getenv("MAX_SEVERITY", "2"))
+PRIO_ESPEJO = int(os.getenv("P_ESPEJO", "41000"))   # misma variable que lab/espejo.py
 NOMBRES = {"of:0000000000000001": "s1 Core", "of:0000000000000002": "s2", "of:0000000000000003": "s3", "of:0000a223f2c04547": "s1 Core", "of:00001a749039894a": "s2 borde (h1,h2)", "of:0000ca272d265744": "s3 borde (h3,h4)"}
 
 
@@ -122,7 +123,7 @@ def cmd_estado(a):
         if "IN_PORT" in cr:
             return "entrante"
         return "interno" if cr.get("IPV4_DST") == cr.get("IPV4_SRC") else "saliente"
-    espejo = [(sentido(f), f.get("packets", 0)) for f in core if f["priority"] == 30000]
+    espejo = [(sentido(f), f.get("packets", 0)) for f in core if f["priority"] == PRIO_ESPEJO]
     print("Espejo al IDS:", ", ".join(f"{d} {p} paquetes" for d, p in espejo) or "NO instalado")
     print(f"Flujos en el Core: {len(core)}\n")
     cmd_bloqueos(a)

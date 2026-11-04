@@ -4,7 +4,7 @@ Entorno: ONOS (imagen `onosproject/onos`, 3.0.0-SNAPSHOT) y Mininet en Docker; O
 
 ## 1. Espejo selectivo (Bloque 1)
 
-Script: [`lab/espejo.py`](lab/espejo.py). Dos reglas permanentes en el Core, prioridad 30000, acción `OUTPUT NORMAL` + puerto 4 (`hids`):
+Script: [`lab/espejo.py`](lab/espejo.py). Dos reglas permanentes en el Core, prioridad 30000 en esta medición (41000 desde la integración con R2: `P_ESPEJO`), acción `OUTPUT NORMAL` + puerto 4 (`hids`):
 
 - entrante: `in_port=3` (uplink de `hext`), `ipv4_dst=10.0.0.0/24`;
 - saliente: `ipv4_src=10.0.0.0/24`, `ipv4_dst=10.0.1.0/24`.

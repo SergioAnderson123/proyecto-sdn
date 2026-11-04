@@ -121,7 +121,7 @@ def metricas():
     core = onos(f"/flows/{CORE}").get("flows", [])
     add("# TYPE r5_espejo_paquetes_total counter")
     for f in core:
-        if f["priority"] == 30000:
+        if f["priority"] == int(os.getenv("P_ESPEJO", "41000")):
             cr = {c["type"]: c.get("ip") or c.get("port") for c in f["selector"]["criteria"]}
             d = "entrante" if "IN_PORT" in cr else ("interno" if cr.get("IPV4_DST") == cr.get("IPV4_SRC") else "saliente")
             add(linea("r5_espejo_paquetes_total", f.get("packets", 0), direccion=d))
