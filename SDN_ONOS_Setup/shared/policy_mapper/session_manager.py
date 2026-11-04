@@ -17,6 +17,7 @@ class ActiveSession:
     vlan: int
     rol: str
     flow_id: Optional[str] = None
+    metodo: str = "802.1X"       # "802.1X" (RADIUS) o "Portal" (usuario y contraseña)
 
 
 class SessionManager:

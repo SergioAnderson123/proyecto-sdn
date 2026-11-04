@@ -14,6 +14,7 @@ import uvicorn
 
 import eventos
 import policy_tables
+import portal_auth
 from session_manager import ActiveSession, session_store
 
 app = FastAPI(title="SDN Zero Trust Policy Mapper")
@@ -85,6 +86,83 @@ async def revocar_sesion(r: Revocacion):
     return {"status": "revocada", "usuario": sesion.username}
 
 
+class PortalLogin(BaseModel):
+    usuario: str
+    clave: str
+    mac: str
+
+
+PORTAL_TOKEN = os.getenv("PORTAL_TOKEN", "")
+
+
+def _verificar_portal(token: str) -> None:
+    if PORTAL_TOKEN and token != PORTAL_TOKEN:
+        raise HTTPException(status_code=403, detail="Portal no autorizado")
+
+
+@app.post("/portal/login")
+async def portal_login(p: PortalLogin, x_portal_token: str = Header(default="")):
+    """Portal cautivo: valida usuario y contraseña contra LDAP e instala la sesión (mismo flujo 40001 que 802.1X).
+
+    La MAC la aporta el portal (la lee de su tabla ARP, no del cliente), por eso el endpoint exige `X-Portal-Token` si PORTAL_TOKEN está definido."""
+    _verificar_portal(x_portal_token)
+    mac = p.mac.lower().replace("-", ":")
+    grupos = await asyncio.to_thread(portal_auth.autenticar_ldap, p.usuario, p.clave)
+    if grupos is None:
+        eventos.registrar("rechazado", p.usuario, mac, detalle="Portal: usuario o contraseña incorrectos")
+        raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
+    rol = portal_auth.rol_de_grupos(POLITICA, grupos)
+    info = POLITICA["roles"].get(rol) if rol else None
+    if not info:
+        eventos.registrar("rechazado", p.usuario, mac, detalle="Portal: grupo LDAP sin rol de acceso")
+        raise HTTPException(status_code=403, detail="Su grupo no tiene acceso")
+    if session_store.get_by_mac(mac) or session_store.get_by_username(p.usuario):
+        eventos.registrar("conflicto", p.usuario, mac, detalle="Portal: usuario o MAC con sesión activa", rol=rol)
+        raise HTTPException(status_code=409, detail="Ya existe una sesión activa para este usuario o equipo")
+    ubic = await portal_auth.ubicar_host(mac, ONOS_BASE_URL, ONOS_AUTH)
+    if not ubic:
+        eventos.registrar("rechazado", p.usuario, mac, detalle="Portal: ONOS no conoce al equipo", rol=rol)
+        raise HTTPException(status_code=409, detail="No se pudo ubicar el equipo en la red; reintente")
+    dpid, port = ubic
+    vlan = int(info["tabla"])
+    if await policy_tables.faltantes(POLITICA, [dpid], ONOS_BASE_URL, ONOS_AUTH):
+        await policy_tables.sincronizar(POLITICA, [dpid], ONOS_BASE_URL, ONOS_AUTH)
+    flow_id = await inyectar_flujo_tabla_0(dpid, port, mac, vlan)
+    if not flow_id:
+        raise HTTPException(status_code=502, detail="No se pudo instalar la sesión en el switch")
+    nombre = rol.capitalize()
+    session_store.register_session(ActiveSession(username=p.usuario, mac=mac, dpid=dpid, port=port, vlan=vlan,
+                                                 rol=nombre, flow_id=flow_id, metodo="Portal"))
+    print(f"  [V] PORTAL: {p.usuario} ({rol}) en {dpid}:{port} -> tabla {vlan}")
+    eventos.registrar("admitido", p.usuario, mac, dpid, port, f"Portal cautivo: tabla {vlan}", nombre, vlan)
+    return {"status": "ok", "usuario": p.usuario, "rol": nombre, "tabla": vlan}
+
+
+class PortalLogout(BaseModel):
+    mac: str
+
+
+@app.post("/portal/logout")
+async def portal_logout(p: PortalLogout, x_portal_token: str = Header(default="")):
+    """Cierra una sesión creada por el portal (no toca las de 802.1X)."""
+    _verificar_portal(x_portal_token)
+    mac = p.mac.lower().replace("-", ":")
+    ses = session_store.get_by_mac(mac)
+    if not ses or ses.metodo != "Portal":
+        return {"status": "sin_sesion"}
+    session_store.remove_session(mac)
+    await eliminar_flujo_onos(ses.dpid, ses.flow_id)
+    eventos.registrar("logout", ses.username, mac, ses.dpid, ses.port, "Portal: sesión cerrada por el usuario", ses.rol)
+    return {"status": "cerrada"}
+
+
+@app.get("/portal/estado")
+async def portal_estado(mac: str):
+    """Sesión (si hay) de una MAC; el portal lo usa para mostrar «ya inició sesión»."""
+    ses = session_store.get_by_mac(mac.lower().replace("-", ":"))
+    return {"sesion": None if not ses else {"usuario": ses.username, "rol": ses.rol, "metodo": ses.metodo}}
+
+
 @app.post("/policy/sync")
 async def sincronizar_ahora():
     """Vuelve a instalar las tablas de rol (tras editar policy.yaml: reiniciar el mapper para recargarlo)."""
@@ -130,6 +208,7 @@ async def ver_sesiones():
                 "vlan": ses.vlan,
                 "rol": ses.rol,
                 "flow_id": ses.flow_id,
+                "metodo": ses.metodo,
             }
             for mac, ses in session_store._sessions_by_mac.items()
         },

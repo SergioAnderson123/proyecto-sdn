@@ -119,3 +119,20 @@ dn: cn=soporteTI,ou=groups,dc=example,dc=org
 objectClass: groupOfNames
 cn: soporteTI
 member: uid=support01,ou=users,dc=example,dc=org
+
+# Invitados (entran por el portal cautivo; sin MAC ni puerto asignados)
+
+dn: uid=guest01,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: guest01
+sn: Invitado
+cn: guest01@example.org
+mail: guest01@example.org
+userPassword: guest123
+
+# Grupo de Invitados
+
+dn: cn=invitado,ou=groups,dc=example,dc=org
+objectClass: groupOfNames
+cn: invitado
+member: uid=guest01,ou=users,dc=example,dc=org
