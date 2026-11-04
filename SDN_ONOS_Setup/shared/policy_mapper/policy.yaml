@@ -1,3 +1,29 @@
+# ---------------------------------------------------------------------------
+# Implementación en hardware de la matriz (leída por policy_tables.py).
+# ---------------------------------------------------------------------------
+
+# Rol que llega de RADIUS/LDAP -> rol de la matriz de `rules` y tabla del pipeline OpenFlow (la misma que la VLAN).
+roles:
+  docente: {matriz: professor, tabla: 10}
+  alumno:  {matriz: student,   tabla: 20}
+
+# Catálogo de recursos: IP y puerto TCP de cada servicio (topología topo_baseR2.py: h4 = servicios de alumnos, h5 = de profesores).
+# Los servicios sin entrada aquí no se instalan (p. ej. `internet` todavía no tiene host).
+services:
+  virtual_library:    {ip: 10.0.0.40, tcp: 8001}
+  learning_platform:  {ip: 10.0.0.40, tcp: 8002}
+  university_portal:  {ip: 10.0.0.40, tcp: 8003}
+  grade_system:       {ip: 10.0.0.50, tcp: 8101}
+  student_records:    {ip: 10.0.0.50, tcp: 8102}
+  research_database:  {ip: 10.0.0.50, tcp: 8103}
+  print_server:       {ip: 10.0.0.50, tcp: 8104}
+  network_management: {ip: 10.0.0.50, tcp: 8105}
+
+# Switches/puertos de confianza (servidores y troncales): no pasan por las tablas de rol.
+# `all` = todos los puertos. En s1 el puerto 4 es el enlace hacia s2 (tráfico de regreso de los servidores).
+trusted:
+  "of:0000000000000001": [4]
+  "of:0000000000000002": all
 
 rules:
   # Academic services

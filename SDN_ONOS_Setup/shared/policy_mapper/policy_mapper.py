@@ -4,6 +4,7 @@ Controlador de Políticas Zero Trust (PDP) y Enforzador SDN para ONOS.
 Implementa validaciones criptográficas, anti-spoofing y programación de flujos.
 """
 
+import asyncio
 import os
 from typing import List, Optional
 from fastapi import FastAPI, Header, HTTPException
@@ -11,6 +12,7 @@ import httpx
 from pydantic import BaseModel, Field
 import uvicorn
 
+import policy_tables
 from session_manager import ActiveSession, session_store
 
 app = FastAPI(title="SDN Zero Trust Policy Mapper")
@@ -21,6 +23,40 @@ ONOS_PORT = os.getenv("ONOS_PORT", "8181")
 ONOS_BASE_URL = f"http://{ONOS_HOST}:{ONOS_PORT}/onos/v1"
 ONOS_AAA_URL = f"http://{ONOS_HOST}:{ONOS_PORT}/onos/aaa/app/users"
 ONOS_AUTH = ("onos", "rocks")
+
+
+# -----------------------------------------------------------------------------
+# R2: TABLAS DE ROL (qué recursos alcanza cada rol) a partir de policy.yaml
+# -----------------------------------------------------------------------------
+POLITICA = policy_tables.cargar_politica()
+
+
+async def _sincronizar_tablas() -> dict:
+    dpids = await policy_tables.dispositivos(ONOS_BASE_URL, ONOS_AUTH)
+    return await policy_tables.sincronizar(POLITICA, dpids, ONOS_BASE_URL, ONOS_AUTH)
+
+
+async def _sincronizar_periodico() -> None:
+    """Los switches pueden conectarse después de arrancar el mapper: se reintenta cada 15 s (es idempotente)."""
+    while True:
+        try:
+            res = await _sincronizar_tablas()
+            if res:
+                print(f"  [R2 TABLAS] sincronizado: {res}")
+        except Exception as e:  # el lazo no debe morir por un error puntual
+            print(f"  [R2 TABLAS ERROR] {e}")
+        await asyncio.sleep(15)
+
+
+@app.on_event("startup")
+async def _iniciar_sincronizacion() -> None:
+    asyncio.create_task(_sincronizar_periodico())
+
+
+@app.post("/policy/sync")
+async def sincronizar_ahora():
+    """Vuelve a instalar las tablas de rol (tras editar policy.yaml: reiniciar el mapper para recargarlo)."""
+    return {"sincronizado": await _sincronizar_tablas()}
 
 
 class RadiusAttribute(BaseModel):
@@ -337,6 +373,9 @@ async def auth_webhook(
     else:
         print("  [X] RECHAZO: Rol institucional sin permisos")
         raise HTTPException(status_code=403, detail="Rol sin acceso autorizado")
+
+    # R2: las tablas de rol deben existir antes de que el flujo de sesión mande tráfico a ellas
+    await policy_tables.sincronizar(POLITICA, [dpid], ONOS_BASE_URL, ONOS_AUTH)
 
     # Inyección de regla en hardware en Tabla 0
     flow_id = await inyectar_flujo_tabla_0(dpid, port, mac_fisica, vlan_final)
