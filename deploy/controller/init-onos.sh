@@ -47,4 +47,10 @@ curl -s -u "$AUTH" -X POST -H "Content-Type: application/json" "$ONOS_URL/networ
     "radiusMac": "00:00:00:00:00:01",
     "vlanId": "-1"}}}}'
 
+# La app AAA puede haber arrancado ANTES de recibir esta configuración y fallar con "Remote RADIUS Server: null" (NPE en activate):
+# se reinicia para que lea la configuración recién inyectada.
+curl -s -u "$AUTH" -X DELETE "$ONOS_URL/applications/org.opencord.aaa/active" >/dev/null
+sleep 3
+curl -s -u "$AUTH" -X POST "$ONOS_URL/applications/org.opencord.aaa/active" >/dev/null
+
 echo "[+] ONOS configurado."

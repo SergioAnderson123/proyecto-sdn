@@ -77,4 +77,10 @@ curl -s -u onos:rocks -X POST -H "Content-Type: application/json" \
     }
   }'
 
+# La app AAA puede haber arrancado (su .oar ya estaba instalado) ANTES de recibir esta configuración y haber fallado con
+# "Remote RADIUS Server: null" (NullPointerException en activate). Se reinicia para que lea la configuración recién inyectada.
+curl -s -u onos:rocks -X DELETE http://onos:8181/onos/v1/applications/org.opencord.aaa/active > /dev/null
+sleep 3
+curl -s -u onos:rocks -X POST http://onos:8181/onos/v1/applications/org.opencord.aaa/active > /dev/null
+
 echo "[+] Configuración de ONOS completada exitosamente."
