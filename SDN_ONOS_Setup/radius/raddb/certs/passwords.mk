@@ -1,6 +1,6 @@
 PASSWORD_SERVER	= 'whatever'
 PASSWORD_INNER	= 'whatever'
 PASSWORD_CA	= 'whatever'
-PASSWORD_CLIENT	= 'whatever'
-USER_NAME	= 'user@example.org'
+PASSWORD_CLIENT	= 'support_password'
+USER_NAME	= 'support01@example.org'
 CA_DEFAULT_DAYS  = '60'

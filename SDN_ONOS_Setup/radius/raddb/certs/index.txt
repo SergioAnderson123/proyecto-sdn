@@ -1,1 +1,7 @@
 V	261129042339Z		03	unknown	/C=FR/ST=Radius/O=Example Inc./CN=user@example.org/emailAddress=user@example.org
+V	270101233121Z		04	unknown	/C=FR/ST=Radius/O=Example Inc./CN=alumno01@example.org/emailAddress=alumno01@example.org
+V	270101233155Z		05	unknown	/C=FR/ST=Radius/O=Example Inc./CN=alumno02@example.org/emailAddress=alumno02@example.org
+V	270101233203Z		06	unknown	/C=FR/ST=Radius/O=Example Inc./CN=alumno03@example.org/emailAddress=alumno03@example.org
+V	270101233257Z		07	unknown	/C=FR/ST=Radius/O=Example Inc./CN=profesor02@example.org/emailAddress=profesor02@example.org
+V	270101233306Z		08	unknown	/C=FR/ST=Radius/O=Example Inc./CN=profesor01@example.org/emailAddress=profesor01@example.org
+V	270101233428Z		09	unknown	/C=FR/ST=Radius/O=Example Inc./CN=support01@example.org/emailAddress=support01@example.org

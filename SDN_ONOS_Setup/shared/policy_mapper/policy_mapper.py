@@ -82,7 +82,7 @@ async def sadis_dinamico(port_id: str):
             dpid_port = f"of:{num_switch.zfill(16)}/1"
 
         print(f"[SADIS] Puerto consultado: {port_id} -> nasPortId: {dpid_port}")
-        return {"id": port_id, "nasPortId": dpid_port}
+        return {"id": port_id, "nasPortId": dpid_port, "uniTagList": []}
     except Exception:
         return {"id": port_id, "nasPortId": "of:0000000000000099/1"}
 

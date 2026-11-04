@@ -1,0 +1,50 @@
+
+rules:
+  # Academic services
+  - {src: administrator, dst: grade_system, allow: true}
+  - {src: professor,    dst: grade_system, allow: true}
+  - {src: student,      dst: grade_system, allow: false}
+  - {src: guest,        dst: grade_system, allow: false}
+
+  - {src: administrator, dst: virtual_library, allow: true}
+  - {src: professor,     dst: virtual_library, allow: true}
+  - {src: student,       dst: virtual_library, allow: true}
+  - {src: guest,         dst: virtual_library, allow: false}
+
+  - {src: administrator, dst: learning_platform, allow: true}
+  - {src: professor,     dst: learning_platform, allow: true}
+  - {src: student,       dst: learning_platform, allow: true}
+  - {src: guest,         dst: learning_platform, allow: false}
+
+  # Administrative services
+  - {src: administrator, dst: student_records, allow: true}
+  - {src: professor,     dst: student_records, allow: false}
+  - {src: student,       dst: student_records, allow: false}
+  - {src: guest,         dst: student_records, allow: false}
+
+  - {src: administrator, dst: university_portal, allow: true}
+  - {src: professor,     dst: university_portal, allow: true}
+  - {src: student,       dst: university_portal, allow: true}
+  - {src: guest,          dst: university_portal, allow: true}
+
+  # Network services
+  - {src: administrator, dst: internet, allow: true}
+  - {src: professor,     dst: internet, allow: true}
+  - {src: student,       dst: internet, allow: true}
+  - {src: guest,         dst: internet, allow: false}
+
+  - {src: administrator, dst: print_server, allow: true}
+  - {src: professor,     dst: print_server, allow: true}
+  - {src: student,       dst: print_server, allow: false}
+  - {src: guest,         dst: print_server, allow: false}
+
+  - {src: administrator, dst: research_database, allow: true}
+  - {src: professor,     dst: research_database, allow: true}
+  - {src: student,       dst: research_database, allow: false}
+  - {src: guest,         dst: research_database, allow: false}
+
+  # Infrastructure management
+  - {src: administrator, dst: network_management, allow: true}
+  - {src: professor,     dst: network_management, allow: false}
+  - {src: student,       dst: network_management, allow: false}
+  - {src: guest,         dst: network_management, allow: false}
