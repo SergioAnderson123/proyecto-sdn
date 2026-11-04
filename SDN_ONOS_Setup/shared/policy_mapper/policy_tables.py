@@ -13,6 +13,7 @@ Al salir hacia la red se quita la etiqueta VLAN (VLAN_POP): los hosts no hablan 
 Las funciones `flujos_*` son puras (sin red) para poder probarlas; `sincronizar` las envía a ONOS por REST.
 """
 import os
+from collections import Counter
 from typing import Dict, List, Optional
 
 import httpx
@@ -160,3 +161,21 @@ async def purgar_sesiones_huerfanas(onos_url: str, auth: tuple) -> int:
                 except httpx.RequestError:
                     pass
     return borrados
+
+
+def dispositivos_incompletos(politica: dict, dpids: List[str], flujos_onos: List[dict]) -> List[str]:
+    """Switches a los que les faltan flujos de R2 (pura: recibe los flujos que ONOS tiene bajo el appId de R2).
+
+    Reenviar siempre todo ponía los flujos en PENDING_ADD y reiniciaba sus contadores en cada admisión y cada 15 s."""
+    presentes = Counter(f["deviceId"] for f in flujos_onos if f.get("state") == "ADDED")
+    return [d for d in dpids if presentes[d] < len(flujos_dispositivo(politica, d))]
+
+
+async def faltantes(politica: dict, dpids: List[str], onos_url: str, auth: tuple) -> List[str]:
+    async with httpx.AsyncClient() as client:
+        try:
+            r = await client.get(f"{onos_url}/flows/application/{APP_ID}", auth=auth, timeout=3.0)
+            flujos = r.json().get("flows", []) if r.status_code == 200 else []   # 404: el appId aún no existe
+        except (httpx.RequestError, ValueError):
+            return list(dpids)                                                  # sin información: se reenvía por seguridad
+    return dispositivos_incompletos(politica, dpids, flujos)

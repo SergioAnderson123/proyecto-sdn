@@ -103,3 +103,27 @@ def test_solo_los_flujos_de_sesion_se_consideran_huerfanos():
     rol = {"priority": 30000, "tableId": 10, "selector": {"criteria": [{"type": "ETH_SRC", "mac": "00:00:00:00:00:11"}]}}
     assert pt.es_flujo_de_sesion(sesion)
     assert not pt.es_flujo_de_sesion(confianza) and not pt.es_flujo_de_sesion(rol)
+
+
+# ---------- solo se reenvía lo que falta (evita PENDING_ADD y el reinicio de contadores) ----------
+def _flujos_onos(pol, dpid, estado="ADDED", quitar=0):
+    f = [{"deviceId": dpid, "state": estado} for _ in pt.flujos_dispositivo(pol, dpid)]
+    return f[quitar:]
+
+
+def test_no_reenvia_si_ya_estan_todos_los_flujos(pol):
+    onos = _flujos_onos(pol, S1) + _flujos_onos(pol, S2)
+    assert pt.dispositivos_incompletos(pol, [S1, S2], onos) == []
+
+
+def test_reenvia_solo_al_switch_al_que_le_faltan(pol):
+    onos = _flujos_onos(pol, S1, quitar=1) + _flujos_onos(pol, S2)
+    assert pt.dispositivos_incompletos(pol, [S1, S2], onos) == [S1]
+
+
+def test_los_flujos_pendientes_no_cuentan_como_instalados(pol):
+    assert pt.dispositivos_incompletos(pol, [S1], _flujos_onos(pol, S1, estado="PENDING_ADD")) == [S1]
+
+
+def test_un_switch_nuevo_sin_flujos_se_detecta(pol):
+    assert pt.dispositivos_incompletos(pol, [S1, S2], []) == [S1, S2]

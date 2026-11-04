@@ -12,6 +12,7 @@ import httpx
 from pydantic import BaseModel, Field
 import uvicorn
 
+import eventos
 import policy_tables
 from session_manager import ActiveSession, session_store
 
@@ -31,9 +32,12 @@ ONOS_AUTH = ("onos", "rocks")
 POLITICA = policy_tables.cargar_politica()
 
 
-async def _sincronizar_tablas() -> dict:
+async def _sincronizar_tablas(forzar: bool = False) -> dict:
+    """Instala las tablas de rol donde faltan; con `forzar` las reenvía a todos los switches."""
     dpids = await policy_tables.dispositivos(ONOS_BASE_URL, ONOS_AUTH)
-    return await policy_tables.sincronizar(POLITICA, dpids, ONOS_BASE_URL, ONOS_AUTH)
+    if not forzar:
+        dpids = await policy_tables.faltantes(POLITICA, dpids, ONOS_BASE_URL, ONOS_AUTH)
+    return await policy_tables.sincronizar(POLITICA, dpids, ONOS_BASE_URL, ONOS_AUTH) if dpids else {}
 
 
 async def _sincronizar_periodico() -> None:
@@ -76,13 +80,15 @@ async def revocar_sesion(r: Revocacion):
     await eliminar_flujo_onos(sesion.dpid, sesion.flow_id)
     await inyectar_blacklist_temporal(sesion.dpid, sesion.port, sesion.mac, idle_timeout=r.segundos)
     print(f"\n[R5 -> R2] Sesión de {sesion.username} ({mac}) revocada por {r.motivo}; lista negra {r.segundos} s")
+    eventos.registrar("revocado", sesion.username, mac, sesion.dpid, sesion.port,
+                      f"Revocada por {r.motivo}; lista negra {r.segundos} s", sesion.rol)
     return {"status": "revocada", "usuario": sesion.username}
 
 
 @app.post("/policy/sync")
 async def sincronizar_ahora():
     """Vuelve a instalar las tablas de rol (tras editar policy.yaml: reiniciar el mapper para recargarlo)."""
-    return {"sincronizado": await _sincronizar_tablas()}
+    return {"sincronizado": await _sincronizar_tablas(forzar=True)}
 
 
 class RadiusAttribute(BaseModel):
@@ -104,6 +110,12 @@ class RadiusPayload(BaseModel):
     switch_port: Optional[RadiusAttribute] = Field(
         alias="NAS-Port-Id", default=None
     )
+
+@app.get("/events")
+async def ver_eventos(limit: int = 50):
+    """Bitácora de accesos (admitidos, rechazados, conflictos, logout y revocaciones), la más reciente primero."""
+    return {"events": eventos.listar(limit)}
+
 
 @app.get("/sessions")
 async def ver_sesiones():
@@ -337,6 +349,7 @@ async def auth_webhook(
     # 1. Obtener estado topológico real desde ONOS
     datos_onos = await obtener_datos_onos(identidad_onos)
     if not datos_onos:
+        eventos.registrar("rechazado", identidad_ldap, mac_esperada, detalle="Sesión EAP no encontrada en ONOS AAA", rol=x_rol_ldap)
         raise HTTPException(
             status_code=403, detail="Sesion EAP no encontrada en ONOS AAA"
         )
@@ -355,6 +368,8 @@ async def auth_webhook(
         await inyectar_blacklist_temporal(
             dpid, port, mac_fisica, idle_timeout=300
         )
+        eventos.registrar("rechazado", identidad_ldap, mac_fisica, dpid, port,
+                          f"MAC registrada {mac_esperada} distinta de la física; lista negra 300 s", x_rol_ldap)
         raise HTTPException(
             status_code=403, detail="Device Binding Failed: MAC no coincide"
         )
@@ -371,6 +386,8 @@ async def auth_webhook(
             f"  [ALERTA DE SEGURIDAD] MAC Spoofing / Conflicto de sesión detectado para {identidad_ldap} ({mac_fisica})."
         )
         await inyectar_blacklist_temporal(dpid, port, mac_fisica, idle_timeout=600)
+        eventos.registrar("conflicto", identidad_ldap, mac_fisica, dpid, port,
+                          "Usuario o MAC con sesión activa (posible suplantación); lista negra 600 s", x_rol_ldap)
         raise HTTPException(
             status_code=409,
             detail="Conflicto de seguridad: El usuario o MAC ya posee una sesión activa",
@@ -382,6 +399,8 @@ async def auth_webhook(
                 print(
                     f"  [X] RECHAZO: Ubicación física no autorizada. Esperado {x_dpid_ldap}:{x_port_ldap} -> Real: {dpid}:{port}"
                 )
+                eventos.registrar("rechazado", identidad_ldap, mac_fisica, dpid, port,
+                                  f"Ubicación no autorizada: esperado {x_dpid_ldap}:{x_port_ldap}", x_rol_ldap)
                 raise HTTPException(
                     status_code=403,
                     detail="Acceso restringido: Puerto físico no asignado",
@@ -401,10 +420,12 @@ async def auth_webhook(
         rol_nombre = "Administrador"
     else:
         print("  [X] RECHAZO: Rol institucional sin permisos")
+        eventos.registrar("rechazado", identidad_ldap, mac_fisica, dpid, port, "Rol institucional sin permisos", x_rol_ldap)
         raise HTTPException(status_code=403, detail="Rol sin acceso autorizado")
 
     # R2: las tablas de rol deben existir antes de que el flujo de sesión mande tráfico a ellas
-    await policy_tables.sincronizar(POLITICA, [dpid], ONOS_BASE_URL, ONOS_AUTH)
+    if await policy_tables.faltantes(POLITICA, [dpid], ONOS_BASE_URL, ONOS_AUTH):
+        await policy_tables.sincronizar(POLITICA, [dpid], ONOS_BASE_URL, ONOS_AUTH)
 
     # Inyección de regla en hardware en Tabla 0
     flow_id = await inyectar_flujo_tabla_0(dpid, port, mac_fisica, vlan_final)
@@ -425,6 +446,7 @@ async def auth_webhook(
     print(
         f"  [V] APROBADO: {identidad_ldap} asignado a VLAN {vlan_final} (Tabla {vlan_final})"
     )
+    eventos.registrar("admitido", identidad_ldap, mac_fisica, dpid, port, f"VLAN {vlan_final}, tabla {vlan_final}", rol_nombre, vlan_final)
 
     return {
         "Tunnel-Type": "VLAN",
@@ -463,6 +485,7 @@ async def logout_webhook(payload: RadiusPayload):
             print(
                 f"\n[<<< LOGOUT] Sesión revocada y flujo {sesion.flow_id} eliminado de OVS para {sesion.username} ({mac})"
             )
+            eventos.registrar("logout", sesion.username, mac, sesion.dpid, sesion.port, "Accounting-Stop: flujo de sesión eliminado", sesion.rol)
             return {"status": "session_terminated"}
 
     print(
