@@ -89,7 +89,22 @@ def mac_de(ip):
     return None
 
 
-def revocar_sesion(ip):
+def mac_del_evento(ev, ip):
+    """MAC del host `ip` según la alerta de Suricata (eve-log con `ethernet: yes`), o None.
+
+    Es la fuente preferida para I11: no depende de que ONOS haya aprendido al host, y en el espejo solo se reescribe la MAC
+    destino (IDS_MAC), por lo que la MAC origen de la copia es la real."""
+    ether = ev.get("ether") or {}
+    if ev.get("src_ip") == ip:
+        mac = ether.get("src_mac")
+    elif ev.get("dest_ip") == ip:
+        mac = ether.get("dest_mac")
+    else:
+        mac = None
+    return mac.lower() if mac else None
+
+
+def revocar_sesion(ip, mac=None):
     """I11: tras bloquear a un host interno, pide al Policy Mapper que revoque su sesión de R1/R2.
 
     El DROP por IP de R5 solo aísla el tráfico IPv4; sin esto la sesión (flujo 40001) seguiría registrada y el usuario podría
@@ -98,9 +113,9 @@ def revocar_sesion(ip):
     if not MAPPER_URL:
         return None
     try:
-        mac = mac_de(ip)
+        mac = mac or mac_de(ip)
         if not mac:
-            log.warning("I11: ONOS no conoce la MAC de %s; no se revoca su sesión", ip)
+            log.warning("I11: no se conoce la MAC de %s (ni la alerta ni ONOS); no se revoca su sesión", ip)
             return None
         r = requests.post(f"{MAPPER_URL}/sessions/revoke", json={"mac": mac, "motivo": "R5", "segundos": BLOCK_SEC}, timeout=3)
         estado = r.json().get("status") if r.status_code == 200 else None
@@ -204,7 +219,7 @@ def procesar(ev, st, t_lectura=None):
     log.info("BLOQUEO %s en %s (%s) flow=%s lectura->201=%.1f ms", ip, device,
              ev["alert"].get("signature"), flow_id, (t_201 - t_lectura) * 1000)
     if donde == "borde":                    # host interno: además del DROP, se revoca su sesión de R1/R2 (I11)
-        st["bloqueadas"][ip]["sesion"] = revocar_sesion(ip)
+        st["bloqueadas"][ip]["sesion"] = revocar_sesion(ip, mac_del_evento(ev, ip))
 
 
 def reconciliar(st):

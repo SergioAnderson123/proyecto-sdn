@@ -322,3 +322,32 @@ def test_i11_atacante_externo_no_toca_sesiones(onos, mapper):
     st = estado()
     integ.procesar(alerta("10.0.1.11", "10.0.0.10"), st)             # externo -> Core: no hay sesión R1/R2 que revocar
     assert "sesion" not in st["bloqueadas"]["10.0.1.11"] and mapper.llamadas == []
+
+
+# ---------- I11: la MAC sale de la alerta de Suricata (ether) antes que de ONOS ----------
+def con_ether(ev, src_mac, dest_mac):
+    ev = dict(ev)
+    ev["ether"] = {"src_mac": src_mac, "dest_mac": dest_mac}
+    return ev
+
+
+def test_mac_del_evento_toma_la_mac_origen_si_el_atacante_es_el_origen():
+    ev = con_ether(alerta("10.0.0.21", "10.0.1.50"), "AA:BB:CC:00:00:01", "AA:BB:CC:00:00:02")
+    assert integ.mac_del_evento(ev, "10.0.0.21") == "aa:bb:cc:00:00:01"
+
+
+def test_mac_del_evento_toma_la_mac_destino_si_el_evento_esta_invertido():
+    ev = con_ether(alerta("10.0.0.10", "10.0.0.21", direction="to_client"), "AA:BB:CC:00:00:01", "AA:BB:CC:00:00:02")
+    assert integ.mac_del_evento(ev, "10.0.0.21") == "aa:bb:cc:00:00:02"
+
+
+def test_mac_del_evento_sin_ether_es_none():
+    assert integ.mac_del_evento(alerta("10.0.0.21", "10.0.1.50"), "10.0.0.21") is None
+
+
+def test_i11_usa_la_mac_de_la_alerta_sin_consultar_a_onos(onos, mapper):
+    ev = con_ether(alerta("10.0.0.21", "10.0.1.50"), "00:00:00:00:00:AB", "00:00:00:00:00:CD")
+    st = estado()
+    integ.procesar(ev, st)
+    assert st["bloqueadas"]["10.0.0.21"]["sesion"] == "revocada"
+    assert mapper.llamadas[0][1]["mac"] == "00:00:00:00:00:ab"
