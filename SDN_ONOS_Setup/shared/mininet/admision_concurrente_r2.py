@@ -19,7 +19,7 @@ USUARIOS = [("h1", "h1-eth0", "profesor01@example.org", "00:00:00:00:00:11", "wp
             ("h3", "h3-eth0", "support01@example.org", "00:00:00:00:00:31", "wpa_support_01"),
             ("h1", "h1-p2", "profesor02@example.org", "00:00:00:00:00:12", "wpa_profe_02"),
             ("h2", "h2-p1", "alumno01@example.org", "00:00:00:00:00:21", "wpa_alumno_01")]
-# alumno03 queda fuera: su certificado resuelve en LDAP a la MAC de alumno02 (…:22), el mapper lo rechaza (device binding)
+# alumno03 queda fuera: en una prueba aislada el mapper lo rechazó por device binding (MAC …:22); después autenticó bien, causa sin establecer
 
 
 def mnx(host, *cmd):

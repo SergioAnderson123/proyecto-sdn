@@ -48,8 +48,9 @@ La latencia casi no crece con la concurrencia (+170 ms para el tercero) y la tas
 de botella sigue siendo el cliente (≈ 2,2 s), no el controlador. **No se pudo pasar de K = 3**: con 5 usuarios (dos por puerto,
 usando interfaces macvlan en h1 y h2) solo se admite uno por ráfaga. La causa probable es que el AAA de ONOS asocia la sesión al
 puerto (connect point), de modo que dos supplicants simultáneos en el mismo puerto chocan; con K ≤ 3 hay un usuario por puerto.
-Para medir más concurrencia hacen falta más puertos de acceso en la topología. Además, `alumno03` no autentica: su certificado se
-resuelve en LDAP a la MAC de `alumno02` (…:22) y el mapper lo rechaza por device binding (certificado mal emitido).
+Para medir más concurrencia hacen falta más puertos de acceso en la topología. Además, `alumno03` falló en una prueba aislada con el mapper
+diciendo que su MAC registrada era la de `alumno02` (…:22); más tarde autenticó con normalidad (VLAN 20), así que **la causa no está
+establecida** (no se puede afirmar que el certificado esté mal emitido; queda pendiente reproducirlo).
 
 ## 4. Matriz de aceptación
 24 de 24 casos (3 roles × 8 servicios) coinciden con `policy.yaml`.
