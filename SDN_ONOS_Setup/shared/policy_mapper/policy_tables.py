@@ -34,6 +34,15 @@ def cargar_politica(ruta: Optional[str] = None) -> dict:
     return p
 
 
+PRIO_SESION = 40001     # flujo de sesión del Policy Mapper: in_port + eth_src -> push_vlan + goto_table
+
+
+def es_flujo_de_sesion(flujo: dict) -> bool:
+    """Flujo de sesión de un usuario (tabla 0, prioridad 40001, con ETH_SRC); no los de confianza (sin ETH_SRC)."""
+    return (flujo.get("priority") == PRIO_SESION and flujo.get("tableId") == 0
+            and any(c.get("type") == "ETH_SRC" for c in flujo.get("selector", {}).get("criteria", [])))
+
+
 def servicios_permitidos(politica: dict, rol_matriz: str) -> Dict[str, bool]:
     """{servicio: permitido} para un rol de la matriz; lo que no figura queda denegado."""
     res: Dict[str, bool] = {}
@@ -129,3 +138,25 @@ async def sincronizar(politica: dict, dpids: List[str], onos_url: str, auth: tup
             except httpx.RequestError as e:
                 print(f"  [R2 TABLAS ERROR] {dpid}: {e}")
     return resultado
+
+
+async def purgar_sesiones_huerfanas(onos_url: str, auth: tuple) -> int:
+    """Borra de ONOS los flujos de sesión que sobreviven a un reinicio del Policy Mapper o de la topología.
+
+    Las sesiones viven en memoria del mapper pero sus flujos persisten en ONOS (y se reinstalan al reconectar un switch).
+    Un flujo huérfano tiene prioridad sobre el EAPOL->controlador de R1: el supplicant del usuario nunca llega a
+    autenticar y, peor, el tráfico seguiría pasando sin sesión. Tras un reinicio todos deben volver a autenticarse."""
+    borrados = 0
+    async with httpx.AsyncClient() as client:
+        try:
+            flujos = (await client.get(f"{onos_url}/flows", auth=auth, timeout=5.0)).json().get("flows", [])
+        except (httpx.RequestError, ValueError):
+            return 0
+        for f in flujos:
+            if es_flujo_de_sesion(f):
+                try:
+                    r = await client.delete(f"{onos_url}/flows/{f['deviceId']}/{f['id']}", auth=auth, timeout=3.0)
+                    borrados += 1 if r.status_code in (200, 204) else 0
+                except httpx.RequestError:
+                    pass
+    return borrados

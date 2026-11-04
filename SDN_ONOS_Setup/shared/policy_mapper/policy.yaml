@@ -6,6 +6,7 @@
 roles:
   docente: {matriz: professor, tabla: 10}
   alumno:  {matriz: student,   tabla: 20}
+  soporte: {matriz: administrator, tabla: 40}   # soporte TI (grupo LDAP soporteTI); la tabla 30 queda reservada a IoT/MAB
 
 # Catálogo de recursos: IP y puerto TCP de cada servicio (topología topo_baseR2.py: h4 = servicios de alumnos, h5 = de profesores).
 # Los servicios sin entrada aquí no se instalan (p. ej. `internet` todavía no tiene host).

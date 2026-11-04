@@ -68,11 +68,11 @@ def test_switch_de_confianza_total_no_lleva_tablas_de_rol(pol):
     assert f[0]["priority"] == pt.PRIO_CONFIANZA
 
 
-def test_switch_de_acceso_lleva_puerto_de_confianza_y_ambas_tablas(pol):
+def test_switch_de_acceso_lleva_puerto_de_confianza_y_las_tablas_de_rol(pol):
     f = pt.flujos_dispositivo(pol, S1)
     confianza = [x for x in f if x["priority"] == pt.PRIO_CONFIANZA]
     assert len(confianza) == 1 and confianza[0]["selector"]["criteria"] == [{"type": "IN_PORT", "port": 4}]
-    assert {x["tableId"] for x in f} == {0, 10, 20}
+    assert {x["tableId"] for x in f} == {0, 10, 20, 40}
 
 
 def test_switch_desconocido_no_recibe_nada(pol):
@@ -86,7 +86,20 @@ def test_la_prioridad_de_rol_no_pisa_la_banda_de_r1_r5():
 
 def test_los_flujos_con_pop_vlan_exigen_el_vlan_vid_de_su_rol(pol):
     # sin VLAN_VID, OVS responde MATCH_INCONSISTENT al pop_vlan (visto en el laboratorio)
-    for rol, tabla in (("docente", 10), ("alumno", 20)):
+    for rol, tabla in (("docente", 10), ("alumno", 20), ("soporte", 40)):
         for x in pt.flujos_tabla_rol(pol, S1, rol, tabla):
             if x["priority"] == pt.PRIO_ROL:
                 assert {"type": "VLAN_VID", "vlanId": tabla} in x["selector"]["criteria"]
+
+def test_administrador_alcanza_todos_los_servicios_del_catalogo(pol):
+    d = destinos(pt.flujos_tabla_rol(pol, S1, "soporte", 40))
+    assert d == {(s["ip"], int(s["tcp"])) for s in pol["services"].values()}
+    assert len(pt.flujos_tabla_rol(pol, S1, "soporte", 40)) == len(pol["services"]) + 2   # + ARP + DROP
+
+
+def test_solo_los_flujos_de_sesion_se_consideran_huerfanos():
+    sesion = {"priority": 40001, "tableId": 0, "selector": {"criteria": [{"type": "IN_PORT", "port": 1}, {"type": "ETH_SRC", "mac": "00:00:00:00:00:11"}]}}
+    confianza = {"priority": 40001, "tableId": 0, "selector": {"criteria": [{"type": "IN_PORT", "port": 4}]}}
+    rol = {"priority": 30000, "tableId": 10, "selector": {"criteria": [{"type": "ETH_SRC", "mac": "00:00:00:00:00:11"}]}}
+    assert pt.es_flujo_de_sesion(sesion)
+    assert not pt.es_flujo_de_sesion(confianza) and not pt.es_flujo_de_sesion(rol)

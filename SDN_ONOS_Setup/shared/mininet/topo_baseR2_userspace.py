@@ -22,6 +22,8 @@ class MininetSinOffload(Mininet):
 
     def start(self):
         super().start()
+        # LDAP asigna support01 a la MAC ...:31 en el puerto 3 de s1; topo_baseR2.py le da ...:33 a h3.
+        self.get('h3').setMAC('00:00:00:00:00:31')
         for h in self.hosts:
             for intf in h.intfList():
                 if intf.name != 'lo':

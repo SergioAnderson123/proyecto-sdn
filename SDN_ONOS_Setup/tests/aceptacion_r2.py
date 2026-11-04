@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import policy_tables as pt  # noqa: E402
 
 # host de Mininet -> rol de LDAP del usuario autenticado en él
-USUARIOS = {"h1": "docente", "h2": "alumno"}
+USUARIOS = {"h1": "docente", "h2": "alumno", "h3": "soporte"}
 
 
 def curl(host: str, ip: str, puerto: int) -> str:
@@ -27,7 +27,7 @@ def curl(host: str, ip: str, puerto: int) -> str:
 def main() -> int:
     pol = pt.cargar_politica()
     fallos, total = 0, 0
-    print(f"{'host':<5}{'rol':<8}{'servicio':<20}{'esperado':<10}{'observado':<11}resultado")
+    print(f"{'host':<5}{'rol':<9}{'servicio':<20}{'esperado':<10}{'observado':<11}resultado")
     for host, rol in USUARIOS.items():
         permitidos = pt.servicios_permitidos(pol, pol["roles"][rol]["matriz"])
         for nombre, srv in sorted(pol["services"].items()):
@@ -37,7 +37,7 @@ def main() -> int:
             ok = esperado == observado
             total += 1
             fallos += 0 if ok else 1
-            print(f"{host:<5}{rol:<8}{nombre:<20}{esperado:<10}{observado:<11}{'OK' if ok else 'FALLA'}")
+            print(f"{host:<5}{rol:<9}{nombre:<20}{esperado:<10}{observado:<11}{'OK' if ok else 'FALLA'}")
     print(f"\n{total - fallos} de {total} casos correctos")
     return 1 if fallos else 0
 

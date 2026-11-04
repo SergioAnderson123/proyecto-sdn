@@ -50,6 +50,10 @@ async def _sincronizar_periodico() -> None:
 
 @app.on_event("startup")
 async def _iniciar_sincronizacion() -> None:
+    # las sesiones están en memoria: los flujos de sesión que quedaron en ONOS ya no tienen dueño
+    n = await policy_tables.purgar_sesiones_huerfanas(ONOS_BASE_URL, ONOS_AUTH)
+    if n:
+        print(f"  [R2 SESIONES] {n} flujo(s) de sesión huérfanos eliminados al arrancar; los usuarios deben autenticar de nuevo")
     asyncio.create_task(_sincronizar_periodico())
 
 
@@ -370,6 +374,9 @@ async def auth_webhook(
     elif "alumno" in rol_lower:
         vlan_final = 20  # VLAN 20 y Tabla 20 (Bloqueo a Sistema de Notas)
         rol_nombre = "Alumno"
+    elif "soporte" in rol_lower:
+        vlan_final = 40  # VLAN 40 y Tabla 40 (Administrador: acceso total; la 30 queda para IoT/MAB)
+        rol_nombre = "Administrador"
     else:
         print("  [X] RECHAZO: Rol institucional sin permisos")
         raise HTTPException(status_code=403, detail="Rol sin acceso autorizado")
