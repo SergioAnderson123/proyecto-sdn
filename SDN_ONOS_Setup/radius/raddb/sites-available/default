@@ -830,6 +830,13 @@ post-auth {
 			Tunnel-Private-Group-Id = "alumno"
 		}
 	}
+	elsif (LDAP-Group == "soporteTI") {
+		update reply {
+			Tunnel-Type = VLAN,
+			Tunnel-Medium-Type = IEEE-802,
+			Tunnel-Private-Group-Id = "soporte"
+		}
+	}
 	#  R1: rol, MAC, DPID y puerto autorizados (LDAP, por CN del certificado)
 	#  como cabeceras HTTP para el webhook del Policy Mapper
 	update control {
