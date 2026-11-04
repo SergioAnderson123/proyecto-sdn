@@ -39,4 +39,30 @@ DRY_RUN=1 python3 R5/codigo/integrador.py   # simulación sin tocar ONOS
 
 El resto de parámetros (`HOME_NET`, `LISTA_BLANCA`, `CORE_DEVICE`, `P_R5`, `POLL_SEC`...) también se leen del entorno; ver [`R5/r5.env.example`](R5/r5.env.example).
 
+## Laboratorio en vivo con vistas profesionales
+
+```
+docker compose -f R5/lab/docker/compose.yml up -d --build
+```
+
+| Vista | URL | Qué muestra |
+|---|---|---|
+| Grafana (tablero "R5 · Seguridad perimetral") | http://localhost:3000 | Bloqueos, alertas por firma, tiempos alerta → bloqueo, espejo, captura de Suricata, TCAM |
+| EveBox ([jasonish/evebox](https://github.com/jasonish/evebox), MIT) | http://localhost:5636 | Consola de alertas de Suricata |
+| Panel de escenarios | http://localhost:8080 | Narración de cada ataque |
+
+Los ataques se lanzan con `pruebas-r5/correr_escenarios.ps1`. Las métricas salen de `R5/lab/docker/monitoring/exporter.py`; el tablero se regenera con `gen_dashboard.py`.
+
+## Administrar R5 desde la terminal (CLI)
+
+```
+python3 R5/cli/r5ctl.py estado               # bloqueos, espejo y últimas alertas
+python3 R5/cli/r5ctl.py bloqueos
+python3 R5/cli/r5ctl.py alertas -n 20
+python3 R5/cli/r5ctl.py bloquear 10.0.1.100 --seg 600
+python3 R5/cli/r5ctl.py desbloquear 10.0.1.100   # falso positivo
+```
+
+Usa las mismas variables de entorno que el integrador. Tras `desbloquear`, el integrador olvida la IP en su próxima reconciliación (`RECONCILE_SEC`, 10 s por defecto) y vuelve a bloquearla si reincide.
+
 No subir credenciales al repo: usar variables de entorno.

@@ -1,0 +1,98 @@
+# Laboratorio autocontenido de R5 (independiente del compose del grupo).
+#   docker compose -f R5/lab/docker/compose.yml up -d --build
+#
+#   http://localhost:3000   Grafana  - tablero "R5 · Seguridad perimetral" (métricas)
+#   http://localhost:5636   EveBox   - consola de alertas de Suricata
+#   http://localhost:8080   panel de escenarios (narración de cada ataque)
+#   http://localhost:9090   Prometheus
+#
+# Todo el tráfico de ataque ocurre dentro de la red virtual de Mininet del contenedor "lab".
+services:
+  onos:
+    image: onosproject/onos:2.7-latest
+    container_name: r5-onos
+    hostname: onos
+    ports:
+      - "8181:8181"
+    networks: [r5]
+
+  lab:
+    build:
+      context: .
+      dockerfile: Containerfile
+    container_name: r5-lab
+    hostname: lab
+    privileged: true
+    depends_on: [onos]
+    environment:
+      ONOS_URL: http://onos:8181/onos/v1
+      ONOS_USER: onos
+      ONOS_PASS: rocks
+      HOME_NET: 10.0.0.0/24
+      LISTA_BLANCA: 10.0.0.99/32,10.0.0.10/32
+      EVE_PATH: /var/log/suricata/eve-alerts.json
+      STATE_PATH: /var/lib/integrador/state.json
+    volumes:
+      - ../..:/opt/r5
+      - suricata-var:/var/lib/suricata
+      - suricata-log:/var/log/suricata
+      - evidencia:/evidencia
+    ports:
+      - "8080:8080"
+    command: ["bash", "-c", "sed 's/\\r$//' /opt/r5/lab/docker/r5-up.sh | bash"]
+    networks: [r5]
+
+  evebox:
+    image: jasonish/evebox:latest
+    container_name: r5-evebox
+    command: ["-c", "/etc/evebox/evebox.yaml"]
+    volumes:
+      - ./monitoring/evebox.yaml:/etc/evebox/evebox.yaml:ro
+      - suricata-log:/var/log/suricata:ro
+      - evebox-data:/var/lib/evebox
+    ports:
+      - "5636:5636"
+    networks: [r5]
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: r5-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks: [r5]
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: r5-grafana
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: 1s
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/r5-perimetral.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"   # evita que Grafana intente actualizar plugins al arrancar (tarda y falla)
+      GF_PLUGINS_PLUGIN_ADMIN_ENABLED: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    networks: [r5]
+
+volumes:
+  suricata-var:
+  suricata-log:
+  evebox-data:
+  evidencia:
+
+networks:
+  r5:
+    driver: bridge

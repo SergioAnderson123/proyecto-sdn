@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>R5 · Perímetro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600&family=Space+Grotesk:wght@300;500&family=Source+Code+Pro:wght@400;600&display=swap" rel="stylesheet">
+<style>
+ /* Sistema visual tomado de sanidhyy/brainwave: paleta n-*, acentos color-*, taglines, bordes conic-gradient */
+ :root{--n1:#fff;--n2:#CAC6DD;--n3:#ADA8C3;--n4:#757185;--n5:#3F3A52;--n6:#252134;--n7:#15131D;--n8:#0E0C15;
+  --stroke:#26242C;--violeta:#AC6AFF;--ambar:#FFC876;--rojo:#FF776F;--verde:#7ADB78;--azul:#858DFF;--rosa:#FF98E2;
+  --sora:"Sora",system-ui,sans-serif;--grot:"Space Grotesk",system-ui,sans-serif;--code:"Source Code Pro",Consolas,monospace}
+ *{box-sizing:border-box}
+ body{margin:0;background:var(--n8);color:var(--n2);font:300 14px/1.5 var(--sora);min-height:100vh;
+  background-image:radial-gradient(60rem 28rem at 85% -10%,rgba(172,106,255,.13),transparent 60%),radial-gradient(40rem 22rem at -5% 110%,rgba(133,141,255,.08),transparent 60%)}
+ .wrap{max-width:1500px;margin:0 auto;padding:20px 28px 28px}
+ .tag{font:300 11px/1 var(--grot);letter-spacing:.15em;text-transform:uppercase;color:var(--n4)}
+ header{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:18px}
+ h1{margin:6px 0 0;font:600 26px/1.15 var(--sora);color:var(--n1);letter-spacing:-.01em}
+ h1 i{font-style:normal;background:linear-gradient(90deg,var(--violeta),var(--ambar));-webkit-background-clip:text;background-clip:text;color:transparent}
+ .reloj{font:600 22px/1 var(--code);color:var(--n1);text-align:right} .reloj .tag{display:block;margin-bottom:6px}
+ .vivo{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--verde);margin-right:8px;box-shadow:0 0 0 0 rgba(122,219,120,.6);animation:p 1.8s infinite}
+ @keyframes p{70%{box-shadow:0 0 0 8px rgba(122,219,120,0)}100%{box-shadow:0 0 0 0 rgba(122,219,120,0)}}
+
+ .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px}
+ .card{position:relative;background:var(--n7);border:1px solid var(--stroke);border-radius:18px;padding:18px 20px;overflow:hidden}
+ .kpi:before{content:"";position:absolute;inset:0 0 auto 0;height:2px;background:var(--c,var(--violeta));opacity:.9}
+ .kpi .v{font:600 40px/1.1 var(--code);color:var(--n1);margin-top:12px;letter-spacing:-.02em}
+ .kpi .v small{font:400 14px var(--sora);color:var(--n4);margin-left:6px;letter-spacing:0}
+ .kpi .s{margin-top:4px;font:300 12px var(--sora);color:var(--n4)}
+
+ .fila{display:grid;gap:14px;margin-bottom:14px}
+ .f1{grid-template-columns:1.5fr 1fr} .f2{grid-template-columns:1.25fr 1fr .7fr}
+ h2{margin:0 0 14px;display:flex;justify-content:space-between;align-items:center}
+ table{width:100%;border-collapse:collapse;font-size:13px}
+ th{font:300 10.5px var(--grot);letter-spacing:.15em;text-transform:uppercase;color:var(--n4);text-align:left;padding:0 8px 8px 0;border-bottom:1px solid var(--stroke)}
+ td{padding:8px 8px 8px 0;border-bottom:1px solid #1d1b26;white-space:nowrap;vertical-align:middle}
+ tr:last-child td{border-bottom:0} td.w{color:var(--n3);max-width:190px;overflow:hidden;text-overflow:ellipsis}
+ .m{font-family:var(--code);font-size:12.5px} .num{font-family:var(--code);text-align:right} th.num{text-align:right}
+ .ip{color:var(--rojo)} .vacio{color:var(--n5);font:300 13px var(--sora);padding:18px 0}
+ .chip{display:inline-block;padding:1px 9px;border-radius:99px;font:600 11px var(--code);border:1px solid}
+ .s1,.s2{color:var(--rojo);border-color:rgba(255,119,111,.4);background:rgba(255,119,111,.1)}
+ .borde{color:var(--ambar);border-color:rgba(255,200,118,.4);background:rgba(255,200,118,.08)}
+ .core{color:var(--violeta);border-color:rgba(172,106,255,.45);background:rgba(172,106,255,.1)}
+
+ /* barras de tiempo: M1 alerta->lectura, M2 lectura->201 */
+ .barra{display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--n6);min-width:220px}
+ .barra b{display:block;height:100%} .b1{background:var(--azul)} .b2{background:var(--violeta)}
+ .leyenda{display:flex;gap:16px;font:300 11px var(--grot);letter-spacing:.1em;text-transform:uppercase;color:var(--n4)}
+ .leyenda span:before{content:"";display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;background:var(--c)}
+ .ms{font:600 13px var(--code);color:var(--n1)} .ms small{color:var(--n4);font-weight:400}
+
+ /* línea de tiempo del escenario: solo títulos, sin explicación */
+ .tl{display:flex;flex-direction:column;gap:2px}
+ .ev{display:grid;grid-template-columns:62px 14px 1fr;align-items:center;gap:8px;padding:5px 0}
+ .ev .t{font:400 11.5px var(--code);color:var(--n4)} .ev .p{width:8px;height:8px;border-radius:50%;background:var(--n5)}
+ .ev.ok .p{background:var(--verde)} .ev.mal .p{background:var(--rojo)} .ev.info .p{background:var(--ambar)} .ev.paso .p{background:var(--azul)}
+ .ev .x{color:var(--n2);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ pre{margin:0;font:400 11px/1.55 var(--code);color:var(--n4);white-space:pre-wrap;word-break:break-all;max-height:130px;overflow:hidden}
+</style></head><body><div class="wrap">
+ <header>
+  <div><span class="tag">TEL354 · Grupo 4 · Requerimiento R5</span><h1>Seguridad <i>perimetral</i> IDS–SDN</h1></div>
+  <div class="reloj"><span class="tag"><span class="vivo"></span>En vivo</span><span id="hora">--:--:--</span></div>
+ </header>
+
+ <div class="kpis">
+  <div class="card kpi" style="--c:var(--rojo)"><span class="tag">Bloqueos activos</span><div class="v"><span id="nb">0</span><small>IP</small></div><div class="s">DROP prio 42000 · appId org.campus.r5</div></div>
+  <div class="card kpi" style="--c:var(--ambar)"><span class="tag">Alertas accionables</span><div class="v"><span id="na">0</span></div><div class="s" id="ig">sev ≤ 2</div></div>
+  <div class="card kpi" style="--c:var(--violeta)"><span class="tag">Alerta → bloqueo</span><div class="v"><span id="ult">—</span><small>ms</small></div><div class="s" id="ult2">último bloqueo</div></div>
+  <div class="card kpi" style="--c:var(--verde)"><span class="tag">Paquetes al IDS</span><div class="v"><span id="pk">0</span></div><div class="s" id="pk2">espejo selectivo · prio 30000</div></div>
+ </div>
+
+ <div class="fila f1">
+  <div class="card"><h2><span class="tag">Tiempo de reacción</span><span class="leyenda"><span style="--c:var(--azul)">M1 alerta→lectura</span><span style="--c:var(--violeta)">M2 lectura→201</span></span></h2>
+   <table id="tm"></table></div>
+  <div class="card"><h2><span class="tag">Escenario</span></h2><div class="tl" id="ev"></div></div>
+ </div>
+
+ <div class="fila f2">
+  <div class="card"><h2><span class="tag">Alertas de Suricata</span></h2><table id="al"></table></div>
+  <div class="card"><h2><span class="tag">Flujos DROP en ONOS</span></h2><table id="bl"></table></div>
+  <div class="card"><h2><span class="tag">Espejo</span></h2><table id="es"></table></div>
+ </div>
+
+ <div class="card"><h2><span class="tag">Integrador M09</span></h2><pre id="lg"></pre></div>
+</div>
+<script>
+const $=i=>document.getElementById(i), esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const vacio=(n,t)=>`<tr><td colspan="${n}" class="vacio">${t}</td></tr>`;
+async function tick(){try{const s=await (await fetch('/api/state')).json();
+ $('hora').textContent=s.hora; $('nb').textContent=s.bloqueos.length; $('na').textContent=s.alertas.length;
+ $('ig').textContent='+ '+s.ignoradas+' de severidad 3 ignoradas';
+ const pk=s.espejo.reduce((a,e)=>a+e.pkts,0); $('pk').textContent=pk.toLocaleString('es');
+ $('pk2').textContent=s.espejo.map(e=>e.regla+' '+e.pkts.toLocaleString('es')).join(' · ')||'espejo selectivo · prio 30000';
+ const t=s.tiempos; if(t.length){$('ult').textContent=Math.round(t[0].total); $('ult2').textContent='M1 '+t[0].m1+' ms · M2 '+t[0].m2+' ms · '+t[0].ip}
+ const max=Math.max(100,...t.map(x=>x.total));
+ $('tm').innerHTML='<tr><th>IP</th><th>Firma</th><th>Dónde</th><th style="width:38%"></th><th class="num">Total</th></tr>'+
+  (t.map(x=>`<tr><td class="m ip">${x.ip}</td><td class="m">${x.sid??''}</td><td><span class="chip ${x.donde}">${x.donde}</span></td>
+   <td><div class="barra" style="width:${Math.max(8,x.total/max*100)}%"><b class="b1" style="flex:${Math.max(x.m1,.5)}"></b><b class="b2" style="flex:${Math.max(x.m2,.5)}"></b></div></td>
+   <td class="num ms">${x.total} <small>ms</small></td></tr>`).join('')||vacio(5,'Sin bloqueos todavía'));
+ $('ev').innerHTML=s.eventos.slice(-9).reverse().map(e=>`<div class="ev ${e.tipo||''}" title="${esc(e.texto||'')}"><span class="t">${e.t}</span><span class="p"></span><span class="x">${esc(e.titulo||e.texto||'')}</span></div>`).join('')||'<div class="vacio">Sin escenario en curso</div>';
+ $('al').innerHTML='<tr><th>Hora</th><th>Origen</th><th>Dest.</th><th>Sev</th><th>Firma</th></tr>'+
+  (s.alertas.slice(0,6).map(a=>`<tr><td class="m">${a.t}</td><td class="m ip">${a.src}</td><td class="m">${a.dst}:${a.dport??''}</td><td><span class="chip s${a.sev}">${a.sev}</span></td><td class="w" title="${esc(a.firma)}">${esc(a.firma)}</td></tr>`).join('')||vacio(5,'Sin alertas'));
+ $('bl').innerHTML='<tr><th>IP</th><th>Switch</th><th class="num">Pkts</th><th class="num">Vida</th></tr>'+
+  (s.bloqueos.map(b=>`<tr><td class="m ip">${b.ip}</td><td>${esc(b.dev)}</td><td class="num m">${b.pkts}</td><td class="num m">${b.vida}s</td></tr>`).join('')||vacio(4,'Sin bloqueos'));
+ $('es').innerHTML='<tr><th>Regla</th><th class="num">Pkts</th></tr>'+s.espejo.map(e=>`<tr><td>${e.regla}</td><td class="num m" style="color:var(--verde)">${e.pkts.toLocaleString('es')}</td></tr>`).join('');
+ $('lg').textContent=s.log.join('\n');}catch(e){} setTimeout(tick,1000)}
+tick();
+</script></body></html>
