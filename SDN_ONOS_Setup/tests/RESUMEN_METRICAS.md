@@ -57,7 +57,8 @@ resuelve en LDAP a la MAC de `alumno02` (…:22) y el mapper lo rechaza por devi
 ## Límites que hay que declarar
 - OVS en modo usuario sobre Docker: los tiempos absolutos no representan hardware real; en VNRT serán distintos.
 - La carga de la sección 2 mide solo ONOS → switch, con lotes; no incluye RADIUS ni LDAP bajo concurrencia.
-- La sección 3 mide una admisión a la vez (no hay medición de varias admisiones simultáneas ni de sesiones por segundo en EAP-TLS).
+- La sección 3 mide una admisión a la vez; la 3b llega solo a 3 simultáneas (un usuario por puerto). No hay medición de cientos de sesiones EAP-TLS concurrentes.
+- El barrido de la sección 5 usa una carga pequeña: no encontró un umbral de degradación, y los fallos de algunas configuraciones no son atribuibles con certeza a un recurso.
 - Con el monitor en vivo abierto (docker stats cada 2 s) la medición se ensucia: las cifras de este resumen se tomaron con una
   corrida limpia, y las primeras corridas con el panel abierto dieron 2 a 22 s por ruido de CPU en un portátil con poca batería.
 
