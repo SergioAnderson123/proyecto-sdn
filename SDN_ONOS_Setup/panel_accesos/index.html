@@ -47,7 +47,7 @@
         <div class="col-lg-8">
           <div class="card">
             <div class="card-header"><h3 class="card-title">Sesiones activas</h3><div class="card-actions text-secondary small" id="n-ses"></div></div>
-            <div class="table-responsive"><table class="table card-table table-vcenter tabla-compacta"><thead><tr><th>Usuario</th><th>Rol</th><th>VLAN</th><th>Puerto</th><th>MAC</th></tr></thead><tbody id="t-ses"></tbody></table></div>
+            <div class="table-responsive"><table class="table card-table table-vcenter tabla-compacta"><thead><tr><th>Usuario</th><th>Rol</th><th>Método</th><th>VLAN</th><th>Puerto</th><th>MAC</th></tr></thead><tbody id="t-ses"></tbody></table></div>
           </div>
         </div>
         <div class="col-lg-4">
@@ -80,7 +80,7 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const ROL = { Docente: "blue", Alumno: "teal", Administrador: "purple" };
+const ROL = { Docente: "blue", Alumno: "teal", Administrador: "purple", Invitado: "orange" };
 const TIPO = {
   admitido:  { color: "green",  texto: "Admitido" },
   logout:    { color: "secondary", texto: "Sesión cerrada" },
@@ -119,8 +119,9 @@ function pintar(e) {
       <td><div class="d-flex align-items-center gap-2"><span class="avatar avatar-sm bg-${ROL[s.rol] || "secondary"}-lt">${iniciales(s.usuario)}</span>
         <div><div class="fw-medium">${esc(s.usuario.split("@")[0])}</div><div class="text-secondary small">${esc(s.usuario.split("@")[1] || "")}</div></div></div></td>
       <td><span class="badge bg-${ROL[s.rol] || "secondary"}-lt">${esc(s.rol)}</span></td>
+      <td><span class="badge ${s.metodo === "Portal" ? "bg-orange-lt" : "bg-azure-lt"}">${esc(s.metodo || "802.1X")}</span></td>
       <td>${s.vlan}</td><td>${esc(s.switch)} · ${esc(s.puerto)}</td><td class="mono text-secondary">${esc(s.mac)}</td></tr>`).join("")
-    || `<tr><td colspan="5" class="vacio">Sin sesiones activas</td></tr>`;
+    || `<tr><td colspan="6" class="vacio">Sin sesiones activas</td></tr>`;
 
   $("actividad").innerHTML = e.eventos.map((v) => {
     const t = TIPO[v.tipo] || { color: "secondary", texto: v.tipo };

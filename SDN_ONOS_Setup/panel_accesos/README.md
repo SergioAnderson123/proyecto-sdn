@@ -1,6 +1,6 @@
 # Panel de accesos (R1 · R2 · R5)
 
-Vista de estado en vivo y de solo lectura: **quién está autenticado, quién fue rechazado y por qué, cuántas entradas de TCAM hay por switch y tabla, qué hosts bloqueó el IDS y cuánto tráfico se copia a Suricata**. No es un portal de login: con 802.1X EAP-TLS la autenticación la hace el cliente (`wpa_supplicant`) con su certificado.
+Vista de estado en vivo y de solo lectura: **quién está autenticado, quién fue rechazado y por qué, cuántas entradas de TCAM hay por switch y tabla, qué hosts bloqueó el IDS y cuánto tráfico se copia a Suricata**. No es un portal de login: con 802.1X EAP-TLS la autenticación la hace el cliente (`wpa_supplicant`) con su certificado; para invitados y equipos sin 802.1X existe el [portal cautivo](../portal_cautivo/README.md). La tabla de sesiones muestra el **método** de cada una (802.1X o Portal).
 
 ```bash
 python panel_accesos/server.py 8090      # desde SDN_ONOS_Setup; abrir http://localhost:8090  (?tema=light para el tema claro)

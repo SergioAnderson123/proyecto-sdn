@@ -54,7 +54,7 @@ def estado():
     disp = (pedir(ONOS + "/devices", True) or {}).get("devices", [])
 
     sesiones = [{"mac": mac, "usuario": s["username"], "rol": s["rol"], "vlan": s["vlan"], "switch": nombre(s["dpid"]),
-                 "puerto": s["port"], "flow_id": s.get("flow_id")} for mac, s in (ses or {}).get("sessions", {}).items()]
+                 "puerto": s["port"], "flow_id": s.get("flow_id"), "metodo": s.get("metodo", "802.1X")} for mac, s in (ses or {}).get("sessions", {}).items()]
 
     tcam = {}
     for f in flujos:
