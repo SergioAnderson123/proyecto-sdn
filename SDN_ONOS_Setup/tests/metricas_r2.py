@@ -7,6 +7,7 @@
   python tests/metricas_r2.py admision [N]      admisión REAL: N veces por rol (docente h1, alumno h2, soporte h3) se cierra la sesión,
                                                 se vuelve a lanzar wpa_supplicant y se mide cuánto tarda hasta que la sesión está
                                                 activa en el Policy Mapper y hasta que el primer servicio permitido responde 200
+  python tests/metricas_r2.py concurrente [R] [K ..]  K usuarios inician sesión a la vez (R repeticiones por nivel; K hasta 6)
   python tests/metricas_r2.py todo              tcam + carga con 50, 200, 500 y 1000
 
 Requiere el stack levantado y la topología en marcha. Escribe en pruebas-r2/metricas.log y pruebas-r2/carga_sesiones.csv
@@ -146,6 +147,7 @@ def carga(ns):
         w.writerow(["sesiones", "onos_acepta_ms", "visible_switch_ms", "flujos_por_s", "tcam_s1", "onos_cpu", "onos_ram"])
         w.writerows(filas)
     log("resultados: pruebas-r2/carga_sesiones.csv")
+    return filas
 
 
 MAPPER = "http://localhost:5000"
@@ -191,8 +193,22 @@ def admision(n, roles=()):
     p.wait()
 
 
+def concurrente(reps, niveles):
+    """Admisiones simultáneas (K usuarios a la vez) dentro del contenedor; registra su salida."""
+    log("")
+    log("== Admisiones simultáneas (K usuarios inician sesión a la vez) ==")
+    p = subprocess.Popen(["docker", "exec", "mininet", "python3", "/root/shared-host/admision_concurrente_r2.py", str(reps), *niveles],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf8")
+    for linea in p.stdout:
+        log(linea.rstrip())
+    p.wait()
+
+
 def main():
     arg = sys.argv[1:] or ["todo"]
+    if arg[0] == "concurrente":
+        concurrente(int(arg[1]) if len(arg) > 1 else 5, arg[2:])
+        return
     if arg[0] == "admision":
         admision(int(arg[1]) if len(arg) > 1 else 10, arg[2:])
         return
