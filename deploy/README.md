@@ -34,7 +34,7 @@ Apagar: `docker compose down` en cada carpeta.
 - **MAC del IDS:** la red virtual solo entrega a una VM las tramas dirigidas a su MAC. El espejo reescribe `eth_dst` de la copia con `IDS_MAC` (la calcula `ids/up.sh`); sin eso Suricata ve una fraccion minima del trafico.
 - **Hace falta un "exterior":** R5 necesita un puerto del Core hacia un host externo o gateway (`PUERTO_UPLINK`). En la topologia base del curso el gateway no esta en el plano de datos.
 - **Recursos:** ONOS y el IDS en una sola VM de 2 vCPU y 2 GB no caben (medido). Por eso son VM distintas.
-- **R2 y el espejo (por verificar):** el flujo de sesion de R2 (prioridad 40001, tabla 0) hace `goto_table`; un espejo de prioridad 30000 en la misma tabla no se evaluaria para esos paquetes. Habra que repetir el espejo en las tablas de rol (10, 20, 30) o usar un espejo nativo de OVS. El DROP de R5 (42000) si prevalece sobre 40001.
+- **R2 y R5 conviven por prioridades y por switches** (mapa único en `deploy/prioridades.yaml`, verificado por `deploy/tests`): el espejo de R5 va a **41000**, sobre el flujo de sesion y los puertos de confianza de R2 (40001); el DROP de R5 a 42000 y el DROP temporal de R1 a 45000. El espejo solo se instala en el Core (sin sesiones de usuario): en un switch de acceso reenvia con NORMAL y se saltaria las tablas de rol de R2. Cuando R5 bloquea a un host interno, el integrador pide al Policy Mapper `POST /sessions/revoke` (`MAPPER_URL`) para revocar tambien su sesion (I11).
 - **ET Open:** `SURICATA_ET=1` descarga las ~50 mil reglas; necesita varios GB de RAM. Por defecto solo las reglas locales (`R5/suricata/local.rules`).
 
 ## Estado de la validacion
