@@ -256,3 +256,69 @@ def test_guardado_atomico_no_deja_temporales(tmp_path, monkeypatch):
     monkeypatch.setattr(integ, "STATE_PATH", str(tmp_path / "state.json"))
     integ.guardar_estado(estado())
     assert sorted(p.name for p in tmp_path.iterdir()) == ["state.json"]
+
+
+# ---------- I11: revocar la sesión de R1/R2 al bloquear un host interno ----------
+class PostFalso:
+    def __init__(self, estado="revocada", codigo=200, falla=None):
+        self.llamadas, self.estado, self.codigo, self.falla = [], estado, codigo, falla
+
+    def __call__(self, url, json=None, timeout=None, **kw):
+        self.llamadas.append((url, json))
+        if self.falla:
+            raise self.falla
+        return Resp({"status": self.estado}, self.codigo)
+
+
+@pytest.fixture
+def mapper(monkeypatch):
+    monkeypatch.setattr(integ, "MAPPER_URL", "http://mapper.test:5000")
+    falso = PostFalso()
+    monkeypatch.setattr(integ.requests, "post", falso)
+    return falso
+
+
+HOST_INTERNO = [{"ipAddresses": ["10.0.0.21"], "mac": "00:00:00:00:00:AB", "locations": [{"elementId": "of:0000000000000003", "port": "1"}]}]
+
+
+def test_i11_desactivada_sin_mapper_url(onos, monkeypatch):
+    monkeypatch.setattr(integ, "MAPPER_URL", "")
+    assert integ.revocar_sesion("10.0.0.21") is None
+    assert onos.llamadas == []
+
+
+def test_i11_pide_al_mapper_revocar_con_la_mac_de_onos(onos, mapper):
+    onos.hosts = HOST_INTERNO
+    assert integ.revocar_sesion("10.0.0.21") == "revocada"
+    url, cuerpo = mapper.llamadas[0]
+    assert url == "http://mapper.test:5000/sessions/revoke"
+    assert cuerpo == {"mac": "00:00:00:00:00:ab", "motivo": "R5", "segundos": integ.BLOCK_SEC}
+
+
+def test_i11_sin_mac_en_onos_no_llama_al_mapper(onos, mapper):
+    assert integ.revocar_sesion("10.0.0.21") is None
+    assert mapper.llamadas == []
+
+
+@pytest.mark.parametrize("falla", [integ.requests.ConnectionError("caído"), integ.requests.Timeout("lento")])
+def test_i11_un_mapper_caido_no_rompe_el_bloqueo(onos, monkeypatch, falla):
+    monkeypatch.setattr(integ, "MAPPER_URL", "http://mapper.test:5000")
+    monkeypatch.setattr(integ.requests, "post", PostFalso(falla=falla))
+    onos.hosts = HOST_INTERNO
+    st = estado()
+    integ.procesar(alerta("10.0.0.21", "10.0.1.50"), st)           # no lanza
+    assert "10.0.0.21" in st["bloqueadas"] and st["bloqueadas"]["10.0.0.21"]["sesion"] is None
+
+
+def test_i11_host_interno_bloqueado_queda_con_su_sesion_revocada(onos, mapper):
+    onos.hosts = HOST_INTERNO
+    st = estado()
+    integ.procesar(alerta("10.0.0.21", "10.0.1.50"), st)
+    assert st["bloqueadas"]["10.0.0.21"]["sesion"] == "revocada"
+    assert len(mapper.llamadas) == 1
+
+
+def test_i11_atacante_externo_no_toca_sesiones(onos, mapper):
+    st = estado()
+    integ.procesar(alerta("10.0.1.11", "10.0.0.10"), st)             # externo -> Core: no hay sesión R1/R2 que revocar
+    assert "sesion" not in st["bloqueadas"]["10.0.1.11"] and mapper.llamadas == []

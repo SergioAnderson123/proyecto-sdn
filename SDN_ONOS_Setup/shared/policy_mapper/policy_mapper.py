@@ -57,6 +57,28 @@ async def _iniciar_sincronizacion() -> None:
     asyncio.create_task(_sincronizar_periodico())
 
 
+class Revocacion(BaseModel):
+    mac: str
+    motivo: str = "R5"
+    segundos: int = 300
+
+
+@app.post("/sessions/revoke")
+async def revocar_sesion(r: Revocacion):
+    """I11 (R5): revoca la sesión de una MAC que el IDS bloqueó.
+
+    Borra el flujo de sesión 40001 y deja la MAC en la lista negra temporal (45000) de R1 durante `segundos`, de modo que
+    el usuario no recupere acceso con la misma credencial sin volver a pasar por R1 cuando termine el bloqueo."""
+    mac = r.mac.lower().replace("-", ":")
+    sesion = session_store.remove_session(mac)
+    if not sesion:
+        return {"status": "sin_sesion"}
+    await eliminar_flujo_onos(sesion.dpid, sesion.flow_id)
+    await inyectar_blacklist_temporal(sesion.dpid, sesion.port, sesion.mac, idle_timeout=r.segundos)
+    print(f"\n[R5 -> R2] Sesión de {sesion.username} ({mac}) revocada por {r.motivo}; lista negra {r.segundos} s")
+    return {"status": "revocada", "usuario": sesion.username}
+
+
 @app.post("/policy/sync")
 async def sincronizar_ahora():
     """Vuelve a instalar las tablas de rol (tras editar policy.yaml: reiniciar el mapper para recargarlo)."""

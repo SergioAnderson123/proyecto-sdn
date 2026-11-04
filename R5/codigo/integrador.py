@@ -18,6 +18,7 @@ ONOS_PASS  = os.getenv("ONOS_PASS")
 ONOS_CA    = os.getenv("ONOS_CA")     # ruta al CA; si no se define, usa el del sistema
 APP_ID     = os.getenv("APP_ID", "org.campus.r5")   # nombre propio: permite listar/borrar solo nuestras reglas
 DRY_RUN    = os.getenv("DRY_RUN") == "1"
+MAPPER_URL = os.getenv("MAPPER_URL", "").rstrip("/")   # Policy Mapper de R1/R2 (p. ej. http://192.168.0.10:5000); vacío = I11 desactivada
 
 
 def redes(var, defecto):
@@ -76,6 +77,38 @@ def ubicar_host(ip):
             return h["locations"][0]["elementId"]
     log.warning("host %s no encontrado en ONOS; se bloquea en el Core", ip)
     return CORE_DEVICE                               # plan B: al menos se corta el tráfico Norte-Sur
+
+
+def mac_de(ip):
+    """MAC de un host según ONOS (GET /hosts), o None."""
+    if DRY_RUN:
+        return None
+    for h in onos("GET", "/hosts").json().get("hosts", []):
+        if ip in h.get("ipAddresses", []) and h.get("mac"):
+            return h["mac"].lower()
+    return None
+
+
+def revocar_sesion(ip):
+    """I11: tras bloquear a un host interno, pide al Policy Mapper que revoque su sesión de R1/R2.
+
+    El DROP por IP de R5 solo aísla el tráfico IPv4; sin esto la sesión (flujo 40001) seguiría registrada y el usuario podría
+    volver a pasar en cuanto expire el DROP. Es opcional y no debe impedir el bloqueo: cualquier fallo solo se registra.
+    Devuelve el estado que responde el mapper ("revocada" o "sin_sesion") o None."""
+    if not MAPPER_URL:
+        return None
+    try:
+        mac = mac_de(ip)
+        if not mac:
+            log.warning("I11: ONOS no conoce la MAC de %s; no se revoca su sesión", ip)
+            return None
+        r = requests.post(f"{MAPPER_URL}/sessions/revoke", json={"mac": mac, "motivo": "R5", "segundos": BLOCK_SEC}, timeout=3)
+        estado = r.json().get("status") if r.status_code == 200 else None
+        log.info("I11: sesión de %s (%s) -> %s", ip, mac, estado or f"HTTP {r.status_code}")
+        return estado
+    except (Reintentar, Descartar, requests.RequestException, ValueError) as e:
+        log.warning("I11: no se pudo revocar la sesión de %s: %s", ip, e)
+        return None
 
 
 def regla_drop(device, ip):
@@ -170,6 +203,8 @@ def procesar(ev, st, t_lectura=None):
     }
     log.info("BLOQUEO %s en %s (%s) flow=%s lectura->201=%.1f ms", ip, device,
              ev["alert"].get("signature"), flow_id, (t_201 - t_lectura) * 1000)
+    if donde == "borde":                    # host interno: además del DROP, se revoca su sesión de R1/R2 (I11)
+        st["bloqueadas"][ip]["sesion"] = revocar_sesion(ip)
 
 
 def reconciliar(st):
