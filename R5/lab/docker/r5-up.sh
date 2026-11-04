@@ -52,7 +52,7 @@ fi
 cp "$R5/suricata/local.rules" /var/lib/suricata/rules/local.rules
 grep -q 'local.rules' "$SURI" || sed -i 's/^\( *\)- suricata.rules/&\n\1- local.rules/' "$SURI"
 sed -i 's|^\( *HOME_NET:\).*|\1 "[10.0.0.0/24]"|' "$SURI"
-grep -q 'eve-alerts.json' "$SURI" || sed -i '/^outputs:/a\  - eve-log:\n      enabled: yes\n      filetype: regular\n      filename: eve-alerts.json\n      types:\n        - alert' "$SURI"
+grep -q 'eve-alerts.json' "$SURI" || sed -i '/^outputs:/a\  - eve-log:\n      enabled: yes\n      filetype: regular\n      filename: eve-alerts.json\n      ethernet: yes\n      types:\n        - alert' "$SURI"
 suricata -T -c "$SURI" >"$LOG/suricata-test.log" 2>&1 && say "configuración de Suricata válida" || say "ERROR en la configuración de Suricata (ver $LOG/suricata-test.log)"
 
 # --- Topología ---

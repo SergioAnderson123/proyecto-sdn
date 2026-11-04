@@ -10,6 +10,6 @@ t = re.sub(r'(?ms)^rule-files:\n(?:\s*-.*\n)+', 'rule-files:\n  - local.rules\n 
 t = re.sub(r'(?ms)^af-packet:\n\s*- interface: \S+', 'af-packet:\n  - interface: ens4', t, count=1)
 # eve-log existente: se desactiva y se agrega uno propio solo con alertas
 t = re.sub(r'(?ms)(- eve-log:\n\s+enabled: )yes', r'\1no', t, count=1)
-t = t.replace("outputs:\n", "outputs:\n  - eve-log:\n      enabled: yes\n      filetype: regular\n      filename: eve-alerts.json\n      types:\n        - alert\n", 1)
+t = t.replace("outputs:\n", "outputs:\n  - eve-log:\n      enabled: yes\n      filetype: regular\n      filename: eve-alerts.json\n      ethernet: yes\n      types:\n        - alert\n", 1)
 open(f"{home}/suricata.yaml", "w").write(t)
 print("suricata.yaml generado")

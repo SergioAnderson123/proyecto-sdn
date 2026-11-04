@@ -28,7 +28,7 @@ import re, sys
 p = sys.argv[1]
 t = open(p).read()
 t = re.sub(r'(- eve-log:\n\s+enabled: )yes', r'\1no', t, count=1)
-t = t.replace("outputs:\n", "outputs:\n  - eve-log:\n      enabled: yes\n      filetype: regular\n      filename: eve-alerts.json\n      types:\n        - alert\n", 1)
+t = t.replace("outputs:\n", "outputs:\n  - eve-log:\n      enabled: yes\n      filetype: regular\n      filename: eve-alerts.json\n      ethernet: yes\n      types:\n        - alert\n", 1)
 open(p, "w").write(t)
 PY
 fi
