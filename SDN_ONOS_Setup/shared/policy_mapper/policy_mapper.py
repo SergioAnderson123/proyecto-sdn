@@ -262,9 +262,13 @@ async def sadis_dinamico(port_id: str):
 # CLIENTE ONOS REST API
 # -----------------------------------------------------------------------------
 async def obtener_datos_onos(username_externo: str) -> Optional[dict]:
-  """Consulta ONOS AAA priorizando la sesión en negociación activa (PENDING)
+  """Consulta ONOS AAA y ubica la sesión de `username_externo`.
 
-  frente a sesiones residuales (AUTHORIZED/UNAUTHORIZED).
+  FreeRADIUS no recibe Calling-Station-Id ni NAS-Port-Id en el Access-Request que arma el AAA de ONOS (no son
+  configurables en esta versión), así que el webhook no sabe por sí solo desde qué puerto físico llama. ONOS sí
+  distingue los puertos internamente (un subscriberId "dpid/puerto" por negociación), así que si para el MISMO
+  usuario hay negociaciones en más de un puerto a la vez, es MAC/identidad clonada en curso (nadie legítimo se
+  conecta por dos puertos a la vez): se devuelve ambigüedad en vez de adivinar cuál es la real.
   """
   async with httpx.AsyncClient() as client:
     try:
@@ -280,8 +284,7 @@ async def obtener_datos_onos(username_externo: str) -> Optional[dict]:
         if not isinstance(sesiones_aaa, list):
           return None
 
-        candidato_en_progreso = None
-        candidato_fallback = None
+        por_ubicacion: dict = {}   # (dpid, puerto) -> mejor candidato visto en esa ubicación
 
         for sesion in reversed(sesiones_aaa):
           if (
@@ -310,15 +313,20 @@ async def obtener_datos_onos(username_externo: str) -> Optional[dict]:
                 "state": estado,
             }
 
-            # Si la sesión está en negociación activa (PENDING o STARTED), es la actual
-            if "PENDING" in estado or "START" in estado:
-              return info
+            clave = (dpid, str(port))
+            previo = por_ubicacion.get(clave)
+            # por ubicación nos quedamos con la negociación activa (PENDING/START); si no hay, la más reciente
+            if previo is None or "PENDING" in estado or "START" in estado:
+              if previo is None or not ("PENDING" in previo["state"] or "START" in previo["state"]):
+                por_ubicacion[clave] = info
 
-            # Si no está en PENDING, guardamos el intento más reciente como respaldo
-            if not candidato_fallback:
-              candidato_fallback = info
+        if not por_ubicacion:
+          return None
+        if len(por_ubicacion) > 1:
+          # mismo usuario negociando desde más de un puerto a la vez: identidad clonada, no se puede saber cuál es la real
+          return {"ambiguo": True, "ubicaciones": list(por_ubicacion.values())}
 
-        return candidato_en_progreso or candidato_fallback
+        return next(iter(por_ubicacion.values()))
 
     except httpx.RequestError as e:
       print(f"[ONOS API] Error de conexión: {e}")
@@ -449,6 +457,14 @@ async def auth_webhook(
         eventos.registrar("rechazado", identidad_ldap, mac_esperada, detalle="Sesión EAP no encontrada en ONOS AAA", rol=x_rol_ldap)
         raise HTTPException(
             status_code=403, detail="Sesion EAP no encontrada en ONOS AAA"
+        )
+    if datos_onos.get("ambiguo"):
+        ubicaciones = ", ".join(f"{u['dpid']}:{u['port']}" for u in datos_onos["ubicaciones"])
+        print(f"  [ALERTA DE SEGURIDAD] {identidad_ldap} negociando EAP en más de un puerto a la vez: {ubicaciones}")
+        eventos.registrar("conflicto", identidad_ldap, mac_esperada, detalle=f"Misma identidad en varios puertos a la vez ({ubicaciones}); posible clonación", rol=x_rol_ldap)
+        raise HTTPException(
+            status_code=409,
+            detail="Conflicto de seguridad: la misma identidad está negociando en más de un puerto a la vez",
         )
 
     mac_fisica = datos_onos["mac_onos"]

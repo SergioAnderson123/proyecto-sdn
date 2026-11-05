@@ -45,6 +45,19 @@ Cierre en Paideia: miércoles 14-oct-2026, 14:59. Un solo PDF autocontenido por 
 12. **Nombre del log:** el diagrama dice `eve.json`; el código lee la ruta de `EVE_PATH`. En el laboratorio se usó `eve.json`; ajustar el diagrama o el README.
 13. **`policy_mapper.py` vs. diagramas.** El código actual valida device binding y devuelve la VLAN a FreeRADIUS (atributos `Tunnel-*`), pero no tiene Session Manager (sin HTTP 409 por sesión duplicada), no instala flujos en ONOS ni expone `/api/mab-request` ni `/webhook/stop`. Marcarlo como implementado parcialmente, o completarlo. Además, las credenciales de ONOS están fijas en el código: pasarlas a variables de entorno.
 
+14. **R1/R2: identidad clonada en dos puertos a la vez (MAC spoofing + certificado copiado).** Probado en vivo:
+    un atacante copia el supplicant de un host legítimo a otro host y le clona la MAC, autenticando ambos casi
+    al mismo tiempo. ONOS AAA sí distingue los puertos internamente (`subscriberId` separado por dpid/puerto),
+    pero FreeRADIUS nunca recibe `Calling-Station-Id` ni `NAS-Port-Id` del Access-Request que arma el AAA de
+    ONOS (verificado con el log de depuración de FreeRADIUS; no es configurable en esta versión del AAA — no
+    hay propiedad de componente para activarlo). Antes del parche, `obtener_datos_onos()` adivinaba la ubicación
+    por heurística (PENDING o la más reciente) sin saber que había dos negociaciones simultáneas, y en un caso
+    probado ambas peticiones resolvieron con el mismo puerto equivocado; solo se salvó porque ese usuario tenía
+    ubicación fija en LDAP (`physicalDeliveryOfficeName`/`roomNumber`), algo que no todos los roles tienen.
+    **Corregido:** si para el mismo usuario hay negociaciones en más de un `subscriberId` (puerto físico) a la
+    vez, se rechaza explícitamente con 409 y un evento `conflicto` ("posible clonación"), en vez de resolver con
+    una heurística ciega. Pruebas en `shared/policy_mapper/tests/test_identidad_clonada.py`.
+
 ## Rúbrica: qué falta medir
 
 - **R1:** logins/s, latencia de autenticación desglosada, multiplataforma (emisión de certificados, equipos sin suplicante), niveles de roles.
