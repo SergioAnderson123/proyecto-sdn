@@ -14,8 +14,8 @@ if ! ip link show portal0 >/dev/null 2>&1; then
     ip link set "$i" up
     ethtool -K "$i" tx off rx off tso off gso off >/dev/null 2>&1   # OVS en modo usuario descarta TCP con checksum "pendiente"
   done
-  ovs-vsctl --may-exist add-port "$SW" portal1
 fi
+ovs-vsctl --may-exist add-port "$SW" portal1   # también si el veth sobrevivió pero la topología se recreó
 
 pkill -f "[p]ortal_cautivo/server.py|[o]pt/portal/server.py" 2>/dev/null
 MAPPER_URL=${MAPPER_URL:-http://policy_mapper:5000} PORTAL_IP="$IP" nohup python3 "$DIR/server.py" >/var/log/portal.log 2>&1 &
