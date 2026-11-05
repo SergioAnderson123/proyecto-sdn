@@ -1,3 +1,47 @@
+# ---------------------------------------------------------------------------
+# Implementación en hardware de la matriz (leída por policy_tables.py).
+# ---------------------------------------------------------------------------
+
+# Rol que llega de RADIUS/LDAP -> rol de la matriz de `rules` y tabla del pipeline OpenFlow (la misma que la VLAN).
+roles:
+  docente: {matriz: professor, tabla: 10}
+  alumno:  {matriz: student,   tabla: 20}
+  soporte: {matriz: administrator, tabla: 40}   # soporte TI (grupo LDAP soporteTI); la tabla 30 queda reservada a IoT/MAB
+  invitado: {matriz: guest, tabla: 50}          # invitados y equipos sin 802.1X: entran por el portal cautivo con usuario y contraseña
+
+# Portal cautivo (usuario y contraseña validados contra LDAP): para invitados y dispositivos que no hablan 802.1X.
+# El portal es un servidor web con IP en el plano de datos. Un usuario SIN sesión solo puede alcanzar al portal; su tráfico HTTP hacia
+# los destinos de `desvios` se reescribe hacia el portal (que responde con una redirección al formulario) y la respuesta se reescribe
+# de vuelta para que el cliente crea que habló con el destino original. Con sesión, el flujo de sesión (40001) tiene prioridad.
+portal:
+  ip: 10.0.0.60
+  mac: "02:00:00:00:00:60"
+  puerto: 8080
+  switches: ["of:0000000000000001"]   # switches de acceso donde se instalan los flujos del portal
+  desvios:                            # destino original (ip, mac y puerto) -> puerto del portal que lo representa
+    - {ip: 10.0.0.40, mac: "00:00:00:00:00:44", tcp: 8003, puerto_portal: 8083}
+  grupos: {profesor: docente, alumno: alumno, soporteTI: soporte, invitado: invitado}   # grupo LDAP -> rol
+  # Duración máxima de una sesión del portal (s), por rol; al vencer se borra el flujo y hay que volver a entrar.
+  # Las de 802.1X no vencen: terminan con el Accounting-Stop del switch.
+  duracion_s: {invitado: 1800, default: 28800}
+
+# Catálogo de recursos: IP y puerto TCP de cada servicio (topología topo_baseR2.py: h4 = servicios de alumnos, h5 = de profesores).
+# Los servicios sin entrada aquí no se instalan (p. ej. `internet` todavía no tiene host).
+services:
+  virtual_library:    {ip: 10.0.0.40, tcp: 8001}
+  learning_platform:  {ip: 10.0.0.40, tcp: 8002}
+  university_portal:  {ip: 10.0.0.40, tcp: 8003}
+  grade_system:       {ip: 10.0.0.50, tcp: 8101}
+  student_records:    {ip: 10.0.0.50, tcp: 8102}
+  research_database:  {ip: 10.0.0.50, tcp: 8103}
+  print_server:       {ip: 10.0.0.50, tcp: 8104}
+  network_management: {ip: 10.0.0.50, tcp: 8105}
+
+# Switches/puertos de confianza (servidores y troncales): no pasan por las tablas de rol.
+# `all` = todos los puertos. En s1 el puerto 4 es el enlace hacia s2 (tráfico de regreso de los servidores).
+trusted:
+  "of:0000000000000001": [4]
+  "of:0000000000000002": all
 
 rules:
   # Academic services

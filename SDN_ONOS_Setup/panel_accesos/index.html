@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="es" data-bs-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control de accesos</title>
+<!-- Diseño: Tabler (MIT), https://github.com/tabler/tabler. CSS fijado a la v1.4.0 y servido localmente. -->
+<link rel="stylesheet" href="/static/tabler.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --tblr-font-sans-serif: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { font-feature-settings: "cv11", "ss01"; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .8125rem; }
+  .kpi-valor { font-size: 2.1rem; font-weight: 700; line-height: 1.1; letter-spacing: -.02em; }
+  .barra-tabla { height: .5rem; }
+  .evento { display: grid; grid-template-columns: 10px 1fr auto; gap: .75rem; align-items: start; }
+  .evento .punto { width: 10px; height: 10px; border-radius: 50%; margin-top: .4rem; }
+  .vacio { padding: 2rem 1rem; text-align: center; color: var(--tblr-secondary); }
+  .tabla-compacta td, .tabla-compacta th { padding-top: .55rem; padding-bottom: .55rem; }
+  .pulso { animation: pulso 1.8s infinite; }
+  @keyframes pulso { 0% { box-shadow: 0 0 0 0 rgba(47,179,68,.55); } 70% { box-shadow: 0 0 0 8px rgba(47,179,68,0); } 100% { box-shadow: 0 0 0 0 rgba(47,179,68,0); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="navbar navbar-expand-md d-print-none border-bottom">
+    <div class="container-xl">
+      <a class="navbar-brand d-flex align-items-center gap-2 pe-0">
+        <span class="avatar avatar-sm bg-primary-lt"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a12 12 0 0 0 8.5 3a12 12 0 0 1 -8.5 15a12 12 0 0 1 -8.5 -15a12 12 0 0 0 8.5 -3"/><path d="M12 11m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/><path d="M12 12l0 2.5"/></svg></span>
+        <span class="fw-bold">Control de accesos</span><span class="text-secondary fw-normal d-none d-sm-inline">· R1 · R2 · R5</span>
+      </a>
+      <div class="navbar-nav flex-row ms-auto align-items-center gap-3">
+        <span class="d-flex align-items-center gap-2 text-secondary small"><span class="status-dot bg-secondary" id="s-onos"></span>ONOS</span>
+        <span class="d-flex align-items-center gap-2 text-secondary small"><span class="status-dot bg-secondary" id="s-mapper"></span>Policy Mapper</span>
+        <span class="mono text-secondary" id="reloj">--:--:--</span>
+        <button class="btn btn-icon btn-ghost-secondary" id="tema" title="Cambiar tema" aria-label="Cambiar tema">◐</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="page-body">
+    <div class="container-xl">
+      <div class="row row-deck row-cards mb-3" id="kpis"></div>
+
+      <div class="row row-deck row-cards mb-3">
+        <div class="col-lg-8">
+          <div class="card">
+            <div class="card-header"><h3 class="card-title">Sesiones activas</h3><div class="card-actions text-secondary small" id="n-ses"></div></div>
+            <div class="table-responsive"><table class="table card-table table-vcenter tabla-compacta"><thead><tr><th>Usuario</th><th>Rol</th><th>Método</th><th>VLAN</th><th>Puerto</th><th>MAC</th></tr></thead><tbody id="t-ses"></tbody></table></div>
+          </div>
+        </div>
+        <div class="col-lg-4">
+          <div class="card">
+            <div class="card-header"><h3 class="card-title">Actividad reciente</h3></div>
+            <div class="list-group list-group-flush overflow-auto" style="max-height: 24rem" id="actividad"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row row-deck row-cards">
+        <div class="col-lg-4">
+          <div class="card"><div class="card-header"><h3 class="card-title">TCAM por switch</h3></div><div class="card-body" id="tcam"></div></div>
+        </div>
+        <div class="col-lg-5">
+          <div class="card">
+            <div class="card-header"><h3 class="card-title">Bloqueos del IDS (R5)</h3><div class="card-actions text-secondary small">DROP prio 42000</div></div>
+            <div class="table-responsive"><table class="table card-table table-vcenter tabla-compacta"><thead><tr><th>IP</th><th>Switch</th><th class="text-end">Paquetes</th><th class="text-end">Vida</th></tr></thead><tbody id="t-r5"></tbody></table></div>
+          </div>
+        </div>
+        <div class="col-lg-3">
+          <div class="card"><div class="card-header"><h3 class="card-title">Espejo al IDS</h3></div><div class="card-body" id="espejo"></div>
+            <div class="card-header border-top"><h3 class="card-title">Lista negra (R1)</h3></div><div class="list-group list-group-flush" id="negra"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ROL = { Docente: "blue", Alumno: "teal", Administrador: "purple", Invitado: "orange" };
+const TIPO = {
+  admitido:  { color: "green",  texto: "Admitido" },
+  logout:    { color: "secondary", texto: "Sesión cerrada" },
+  rechazado: { color: "red",    texto: "Rechazado" },
+  conflicto: { color: "orange", texto: "Conflicto" },
+  revocado:  { color: "purple", texto: "Revocado por R5" },
+};
+const iniciales = (u) => (u || "?").slice(0, 2).toUpperCase();
+const hace = (t, ahora) => { const s = Math.max(0, Math.round(ahora - t)); return s < 60 ? `hace ${s} s` : s < 3600 ? `hace ${Math.floor(s / 60)} min` : `hace ${Math.floor(s / 3600)} h`; };
+const num = (n) => Number(n).toLocaleString("es");
+
+function kpi(titulo, valor, sub, color) {
+  return `<div class="col-sm-6 col-lg-3"><div class="card"><div class="card-body">
+    <div class="d-flex align-items-center"><div class="subheader">${titulo}</div><span class="ms-auto badge bg-${color}-lt">${color === "green" ? "OK" : color === "red" ? "alerta" : "&nbsp;"}</span></div>
+    <div class="kpi-valor mt-2">${valor}</div><div class="text-secondary small mt-1">${sub}</div></div></div></div>`;
+}
+
+function pintar(e) {
+  const ahora = e.hora;
+  $("s-onos").className = "status-dot " + (e.salud.onos ? "bg-green pulso" : "bg-red");
+  $("s-mapper").className = "status-dot " + (e.salud.mapper ? "bg-green pulso" : "bg-red");
+  $("reloj").textContent = new Date(ahora * 1000).toLocaleTimeString("es");
+
+  const porRol = {};
+  e.sesiones.forEach((s) => (porRol[s.rol] = (porRol[s.rol] || 0) + 1));
+  const denegados = e.eventos.filter((v) => (v.tipo === "rechazado" || v.tipo === "conflicto") && ahora - v.t < 900).length;
+  const switches = Object.entries(e.tcam);
+  $("kpis").innerHTML =
+    kpi("Sesiones activas", e.sesiones.length, Object.entries(porRol).map(([r, n]) => `${r} ${n}`).join(" · ") || "ninguna", "green") +
+    kpi("Accesos denegados", denegados, "últimos 15 minutos", denegados ? "red" : "green") +
+    kpi("Entradas TCAM", switches.reduce((a, [, d]) => a + d.total, 0), switches.map(([n, d]) => `${n} ${d.total}`).join(" · ") || "sin switches", "green") +
+    kpi("Hosts bloqueados (R5)", e.bloqueos_r5.length, e.eventos.filter((v) => v.tipo === "revocado").length + " sesión(es) revocada(s)", e.bloqueos_r5.length ? "red" : "green");
+
+  $("n-ses").textContent = e.sesiones.length + (e.sesiones.length === 1 ? " usuario" : " usuarios");
+  $("t-ses").innerHTML = e.sesiones.map((s) => `<tr>
+      <td><div class="d-flex align-items-center gap-2"><span class="avatar avatar-sm bg-${ROL[s.rol] || "secondary"}-lt">${iniciales(s.usuario)}</span>
+        <div><div class="fw-medium">${esc(s.usuario.split("@")[0])}</div><div class="text-secondary small">${esc(s.usuario.split("@")[1] || "")}</div></div></div></td>
+      <td><span class="badge bg-${ROL[s.rol] || "secondary"}-lt">${esc(s.rol)}</span></td>
+      <td><span class="badge ${s.metodo === "Portal" ? "bg-orange-lt" : "bg-azure-lt"}">${esc(s.metodo || "802.1X")}</span>${s.expira ? `<div class="text-secondary small">vence en ${Math.max(0, Math.round((s.expira - e.hora) / 60))} min</div>` : ""}</td>
+      <td>${s.vlan}</td><td>${esc(s.switch)} · ${esc(s.puerto)}</td><td class="mono text-secondary">${esc(s.mac)}</td></tr>`).join("")
+    || `<tr><td colspan="6" class="vacio">Sin sesiones activas</td></tr>`;
+
+  $("actividad").innerHTML = e.eventos.map((v) => {
+    const t = TIPO[v.tipo] || { color: "secondary", texto: v.tipo };
+    return `<div class="list-group-item"><div class="evento"><span class="punto bg-${t.color}"></span>
+      <div><div><span class="fw-medium">${esc(v.usuario || v.mac || "desconocido")}</span> <span class="badge bg-${t.color}-lt ms-1">${t.texto}</span></div>
+      <div class="text-secondary small">${esc(v.detalle)}</div></div><div class="text-secondary small text-nowrap">${hace(v.t, ahora)}</div></div></div>`;
+  }).join("") || `<div class="vacio">Todavía no hay actividad</div>`;
+
+  const max = Math.max(1, ...switches.map(([, d]) => d.total));
+  $("tcam").innerHTML = switches.map(([n, d]) => `<div class="mb-4">
+      <div class="d-flex mb-1"><span class="fw-medium">${esc(n)}</span><span class="ms-auto mono">${d.total} entradas${d.pendientes ? ` <span class="text-red">· ${d.pendientes} pendientes</span>` : ""}</span></div>
+      <div class="progress barra-tabla mb-2"><div class="progress-bar bg-primary" style="width:${(100 * d.total / max).toFixed(0)}%"></div></div>
+      <div class="d-flex flex-wrap gap-1">${Object.entries(d.tablas).map(([t, c]) => `<span class="badge bg-secondary-lt">tabla ${t}: ${c}</span>`).join("")}</div></div>`).join("")
+    || `<div class="vacio">Sin datos de ONOS</div>`;
+
+  $("t-r5").innerHTML = e.bloqueos_r5.map((b) => `<tr><td class="mono text-red">${esc(b.ip)}</td><td>${esc(b.switch)}</td>
+      <td class="text-end">${num(b.paquetes)}</td><td class="text-end text-secondary">${b.vida} s</td></tr>`).join("")
+    || `<tr><td colspan="4" class="vacio">Ningún host bloqueado</td></tr>`;
+
+  const esp = e.espejo, tot = Object.values(esp).reduce((a, n) => a + n, 0);
+  $("espejo").innerHTML = `<div class="kpi-valor">${num(tot)}</div><div class="text-secondary small mb-3">paquetes copiados a Suricata</div>` +
+    ["entrante", "interno", "saliente"].map((k) => `<div class="d-flex mb-1"><span class="text-secondary">${k}</span><span class="ms-auto mono">${num(esp[k] || 0)}</span></div>`).join("");
+  $("negra").innerHTML = e.lista_negra.map((b) => `<div class="list-group-item d-flex align-items-center"><span class="mono">${esc(b.mac)}</span>
+      <span class="ms-auto text-secondary small">${esc(b.switch)}:${esc(b.puerto)} · ${b.vida} s</span></div>`).join("") || `<div class="vacio py-3">Lista vacía</div>`;
+}
+
+async function ciclo() {
+  try { pintar(await (await fetch("/api/estado")).json()); } catch (err) { $("s-onos").className = $("s-mapper").className = "status-dot bg-red"; }
+  setTimeout(ciclo, 2000);
+}
+function tema(t) { document.documentElement.setAttribute("data-bs-theme", t); try { localStorage.setItem("tema-accesos", t); } catch (e) { /* sin almacenamiento */ } }
+try { tema(localStorage.getItem("tema-accesos") || "dark"); } catch (e) { /* tema por defecto */ }
+const pedido = new URLSearchParams(location.search).get("tema");   // ?tema=light | dark
+if (pedido === "light" || pedido === "dark") tema(pedido);
+$("tema").onclick = () => tema(document.documentElement.getAttribute("data-bs-theme") === "dark" ? "light" : "dark");
+ciclo();
+</script>
+</body>
+</html>

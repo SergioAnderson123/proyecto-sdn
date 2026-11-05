@@ -1,0 +1,17 @@
+# Mapa único de prioridades OpenFlow de R1, R2 y R5 (la verifica deploy/tests/test_prioridades.py contra el código).
+# Mayor número = se evalúa antes. Cada requerimiento solo usa su banda.
+r1:
+  eapol: 50000          # diseño; ONOS AAA instala hoy 40000
+  drop_temporal: 45000  # lista negra por suplantación (Policy Mapper)
+  base: 40000           # LLDP, BDDP, ARP, DHCP al controlador
+r5:                     # banda 41000-44999 (LLSD SEM-09)
+  drop: 42000           # DROP por IP de origen (integrador M09)
+  espejo: 41000         # copia al IDS en el Core; debe quedar sobre la sesión y los puertos de confianza de R2
+r2:
+  sesion: 40001         # in_port + eth_src -> push_vlan + goto_table (solo switches de acceso)
+  confianza: 40001      # puertos de servidores y troncales -> NORMAL
+  tabla_rol: 30000      # reglas permitidas dentro de las tablas de rol (10, 20, 40): otra tabla, no compite con la tabla 0
+  tablas: {docente: 10, alumno: 20, soporte: 40, invitado: 50}   # la 30 queda reservada a IoT/MAB
+  portal_arp: 40002     # portal cautivo: ARP de quien no tiene sesión (R1 solo lo manda al controlador)
+  portal_retorno: 40002 # portal cautivo: reescribe la respuesta del portal al destino original (sobre la confianza de la troncal)
+  portal: 35000         # portal cautivo: tráfico al portal y desvío del HTTP; bajo la sesión, así que con sesión nunca se desvía

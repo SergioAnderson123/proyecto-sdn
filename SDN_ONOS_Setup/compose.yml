@@ -68,6 +68,7 @@ services:
     environment:
       - ONOS_HOST=onos
       - ONOS_PORT=8181
+      - AAA_CACHE_TTL_S=${AAA_CACHE_TTL_S:-0.05}
     ports:
       - "5000:5000"
     volumes:

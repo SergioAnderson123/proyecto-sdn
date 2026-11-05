@@ -20,13 +20,18 @@ Cierre en Paideia: miércoles 14-oct-2026, 14:59. Un solo PDF autocontenido por 
 
 | Prioridad | Regla |
 |---|---|
-| 50000 | EAPOL -> controller (borde) y DROP de R5 |
-| 45000 | Blacklist MAB |
-| 40001 | Flujo de usuario |
+| 50000 | EAPOL -> controller (borde; ONOS AAA instala hoy 40000) |
+| 45000 | DROP temporal / blacklist MAB (R1) |
+| 42000 | DROP de R5 por IP de origen |
+| 41000 | Espejo de R5 en el Core (sobre la sesión de R2: ver `deploy/prioridades.yaml`) |
+| 40001 | Flujo de sesión y puertos de confianza (R2) |
 | 40000 | Base (LLDP/BDDP/ARP) |
-| 30000 | Reglas base en Tabla 10 y espejo en el Core |
+| 30000 | Reglas permitidas dentro de las tablas de rol 10/20/40 (R2) |
 | 20000 | Trampa MAB |
 | 0 | Table-miss DROP |
+
+   Propuesta cerrada en la integración R2 + R5: el espejo pasó de 30000 a 41000 porque, bajo la sesión (40001), un Core marcado como
+   "de confianza" por R2 lo tapaba; el DROP de R5 quedó en 42000 (no 50000) para ceder ante el DROP temporal de R1.
 
    En el Bloque 1A, el DROP de IP/DHCP en prio 40000 tapa la trampa MAB (20000); revisar.
 4. **R2: Docente con `ip_dst=0.0.0.0/0 -> NORMAL`** abre también el Sistema administrativo, que en SEM-07 es DROP. Añadir DROP explícito de mayor prioridad hacia recursos privilegiados.
@@ -39,6 +44,41 @@ Cierre en Paideia: miércoles 14-oct-2026, 14:59. Un solo PDF autocontenido por 
 11. **Timeout de ONOS REST.** Medido en R5: es de inactividad (un DROP de 300 s siguió vivo a los 371 s mientras recibía tráfico). Falta confirmar si R1 asume lo mismo con `idle_timeout = 300`.
 12. **Nombre del log:** el diagrama dice `eve.json`; el código lee la ruta de `EVE_PATH`. En el laboratorio se usó `eve.json`; ajustar el diagrama o el README.
 13. **`policy_mapper.py` vs. diagramas.** El código actual valida device binding y devuelve la VLAN a FreeRADIUS (atributos `Tunnel-*`), pero no tiene Session Manager (sin HTTP 409 por sesión duplicada), no instala flujos en ONOS ni expone `/api/mab-request` ni `/webhook/stop`. Marcarlo como implementado parcialmente, o completarlo. Además, las credenciales de ONOS están fijas en el código: pasarlas a variables de entorno.
+
+14. **R1/R2: identidad clonada en dos puertos a la vez (MAC spoofing + certificado copiado).** Probado en vivo:
+    un atacante copia el supplicant de un host legítimo a otro host y le clona la MAC, autenticando ambos casi
+    al mismo tiempo. ONOS AAA sí distingue los puertos internamente (`subscriberId` separado por dpid/puerto),
+    pero FreeRADIUS nunca recibe `Calling-Station-Id` ni `NAS-Port-Id` del Access-Request que arma el AAA de
+    ONOS (verificado con el log de depuración de FreeRADIUS; no es configurable en esta versión del AAA — no
+    hay propiedad de componente para activarlo). Antes del parche, `obtener_datos_onos()` adivinaba la ubicación
+    por heurística (PENDING o la más reciente) sin saber que había dos negociaciones simultáneas, y en un caso
+    probado ambas peticiones resolvieron con el mismo puerto equivocado; solo se salvó porque ese usuario tenía
+    ubicación fija en LDAP (`physicalDeliveryOfficeName`/`roomNumber`), algo que no todos los roles tienen.
+    **Corregido:** si para el mismo usuario hay negociaciones en más de un `subscriberId` (puerto físico) a la
+    vez, se rechaza explícitamente con 409 y un evento `conflicto` ("posible clonación"), en vez de resolver con
+    una heurística ciega. Pruebas en `shared/policy_mapper/tests/test_identidad_clonada.py`.
+
+15. **R2: caché de `/onos/aaa/app/users` con varios logins a la vez.** Se cachea esa tabla (compartida entre
+    llamadas concurrentes, una sola petición HTTP real por ventana) por `AAA_CACHE_TTL_S` (50 ms por defecto).
+    Medido en el laboratorio, comparando K=1/3/5 con TTL 0 (sin caché), 50 ms y 150 ms, 4 repeticiones cada uno
+    (`admision_concurrente_r2.py`):
+
+    | TTL | K=5: fallos/20 | K=5: sesiones/s |
+    |---|---|---|
+    | 0 (sin caché) | 14 | 2,14 |
+    | 50 ms | 16 | 2,19 |
+    | 150 ms | 14 | 2,18 |
+
+    **La caché no mejora el resultado a K=5** (dentro del margen de ruido de la prueba): el retraso con varios
+    logins a la vez no viene de pedir la tabla de ONOS AAA repetidas veces (eso sí se confirmó reducido con
+    pruebas unitarias: una sola petición real para N llamadas concurrentes). El cuello de botella real, visto en
+    la bitácora durante la prueba: bajo carga, la propia tabla de ONOS AAA cruza identidades entre puertos
+    distintos (se vio a `profesor01` reportado negociando en el puerto físico de `alumno02`, sin que hubiera
+    ningún clon de por medio) — coincide con la limitación ya documentada de que el AAA de ONOS admite un solo
+    supplicante por puerto, pero aquí el cruce ocurre entre USUARIOS DISTINTOS en puertos distintos, no solo
+    dentro del mismo puerto. La caché queda igual (es una mejora real y de bajo riesgo: menos carga sobre ONOS,
+    sin empeorar nada en K=1/3), pero no resuelve el problema de fondo; falta investigar ese cruce en el AAA de
+    ONOS por separado.
 
 ## Rúbrica: qué falta medir
 

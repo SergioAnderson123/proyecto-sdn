@@ -1,0 +1,12 @@
+FROM fedora:latest
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Laboratorio R5: Mininet + OVS (modo usuario) + Suricata + herramientas de ataque para pruebas propias.
+RUN dnf -y install \
+        openvswitch mininet iproute iputils net-tools procps-ng which \
+        suricata nmap hping3 tcpdump curl ethtool python3 python3-requests \
+    && dnf clean all
+
+WORKDIR /root

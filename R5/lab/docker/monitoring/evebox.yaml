@@ -1,0 +1,17 @@
+# EveBox (https://github.com/jasonish/evebox): consola de alertas de Suricata.
+# Lee eve-alerts.json directamente con su base SQLite embebida; no necesita Elasticsearch.
+http:
+  tls:
+    enabled: false
+authentication:
+  required: false
+database:
+  type: sqlite
+  retention:
+    days: 7
+input:
+  enabled: true
+  paths:
+    - "/var/log/suricata/eve-alerts.json"
+geoip:
+  disabled: true
