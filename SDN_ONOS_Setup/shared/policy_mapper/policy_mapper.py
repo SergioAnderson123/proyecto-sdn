@@ -261,15 +261,16 @@ async def sadis_dinamico(port_id: str):
 # -----------------------------------------------------------------------------
 # CLIENTE ONOS REST API
 # -----------------------------------------------------------------------------
-async def obtener_datos_onos(username_externo: str) -> Optional[dict]:
-  """Consulta ONOS AAA y ubica la sesión de `username_externo`.
+async def candidatos_onos(username_externo: str) -> List[dict]:
+  """Todas las ubicaciones (dpid, puerto) donde ONOS AAA tiene a `username_externo` negociando ahora mismo.
 
   FreeRADIUS no recibe Calling-Station-Id ni NAS-Port-Id en el Access-Request que arma el AAA de ONOS (no son
-  configurables en esta versión), así que el webhook no sabe por sí solo desde qué puerto físico llama. ONOS sí
-  distingue los puertos internamente (un subscriberId "dpid/puerto" por negociación), así que si para el MISMO
-  usuario hay negociaciones en más de un puerto a la vez, es MAC/identidad clonada en curso (nadie legítimo se
-  conecta por dos puertos a la vez): se devuelve ambigüedad en vez de adivinar cuál es la real.
-  """
+  configurables en esta versión), así que el webhook no sabe por sí solo desde qué puerto físico llama cada vez
+  que se invoca; tiene que volver a preguntarle a ONOS. ONOS sí distingue los puertos internamente (un
+  subscriberId "dpid/puerto" por negociación), así que si aquí aparece más de una ubicación para el MISMO
+  usuario, hay dos negociaciones físicas a la vez con la misma identidad (nadie legítimo se conecta por dos
+  puertos a la vez): es quien llama (`auth_webhook`) el que decide, con la ubicación fija de LDAP, cuál de las
+  dos es la real, en vez de que esta función adivine."""
   async with httpx.AsyncClient() as client:
     try:
       response = await client.get(ONOS_AAA_URL, auth=ONOS_AUTH, timeout=2.0)
@@ -282,7 +283,7 @@ async def obtener_datos_onos(username_externo: str) -> Optional[dict]:
         )
 
         if not isinstance(sesiones_aaa, list):
-          return None
+          return []
 
         por_ubicacion: dict = {}   # (dpid, puerto) -> mejor candidato visto en esa ubicación
 
@@ -320,17 +321,25 @@ async def obtener_datos_onos(username_externo: str) -> Optional[dict]:
               if previo is None or not ("PENDING" in previo["state"] or "START" in previo["state"]):
                 por_ubicacion[clave] = info
 
-        if not por_ubicacion:
-          return None
-        if len(por_ubicacion) > 1:
-          # mismo usuario negociando desde más de un puerto a la vez: identidad clonada, no se puede saber cuál es la real
-          return {"ambiguo": True, "ubicaciones": list(por_ubicacion.values())}
-
-        return next(iter(por_ubicacion.values()))
+        return list(por_ubicacion.values())
 
     except httpx.RequestError as e:
       print(f"[ONOS API] Error de conexión: {e}")
-  return None
+  return []
+
+
+_candados_por_usuario: dict = {}   # identidad_onos -> asyncio.Lock
+
+
+def _candado_de(identidad_onos: str) -> asyncio.Lock:
+  """Un candado por identidad (no global): dos negociaciones del MISMO usuario se resuelven una tras otra (así se
+  puede comparar sus ubicaciones sin que una pise a la otra), pero usuarios distintos se siguen autenticando en
+  paralelo sin esperarse."""
+  candado = _candados_por_usuario.get(identidad_onos)
+  if candado is None:
+    candado = asyncio.Lock()
+    _candados_por_usuario[identidad_onos] = candado
+  return candado
 
 
 async def inyectar_flujo_tabla_0(
@@ -451,25 +460,64 @@ async def auth_webhook(
         f"\n[>>>] EVALUANDO POLÍTICA ZERO TRUST: {identidad_ldap} ({x_rol_ldap})"
     )
 
-    # 1. Obtener estado topológico real desde ONOS
-    datos_onos = await obtener_datos_onos(identidad_onos)
-    if not datos_onos:
-        eventos.registrar("rechazado", identidad_ldap, mac_esperada, detalle="Sesión EAP no encontrada en ONOS AAA", rol=x_rol_ldap)
-        raise HTTPException(
-            status_code=403, detail="Sesion EAP no encontrada en ONOS AAA"
-        )
-    if datos_onos.get("ambiguo"):
-        ubicaciones = ", ".join(f"{u['dpid']}:{u['port']}" for u in datos_onos["ubicaciones"])
-        print(f"  [ALERTA DE SEGURIDAD] {identidad_ldap} negociando EAP en más de un puerto a la vez: {ubicaciones}")
-        eventos.registrar("conflicto", identidad_ldap, mac_esperada, detalle=f"Misma identidad en varios puertos a la vez ({ubicaciones}); posible clonación", rol=x_rol_ldap)
-        raise HTTPException(
-            status_code=409,
-            detail="Conflicto de seguridad: la misma identidad está negociando en más de un puerto a la vez",
-        )
+    # Candado por usuario (no global): si el MISMO usuario negocia por dos puertos a la vez, se resuelve una
+    # llamada completa antes de empezar la otra, para poder comparar sus ubicaciones sin pisarse; otros usuarios
+    # siguen autenticando en paralelo sin esperar por este candado.
+    async with _candado_de(identidad_onos):
+        # 1. Obtener TODAS las ubicaciones donde ONOS ve a esta identidad negociando ahora mismo
+        candidatos = await candidatos_onos(identidad_onos)
+        if not candidatos:
+            eventos.registrar("rechazado", identidad_ldap, mac_esperada, detalle="Sesión EAP no encontrada en ONOS AAA", rol=x_rol_ldap)
+            raise HTTPException(
+                status_code=403, detail="Sesion EAP no encontrada en ONOS AAA"
+            )
 
-    mac_fisica = datos_onos["mac_onos"]
-    dpid = datos_onos["dpid"]
-    port = datos_onos["port"]
+        datos_onos = candidatos[0]
+        if len(candidatos) > 1:
+            # La misma identidad negocia por más de un puerto a la vez: con MAC clonada no hay forma de saber,
+            # solo por el paquete, cuál de las dos llamadas es la física legítima. Se usa la ubicación fija de
+            # LDAP como referencia (no depende de qué llamada se está procesando) para decidir cuál ganar y
+            # rechazar cada una de las demás por su cuenta, con su propio motivo, en vez de un error compartido.
+            ganador = next((c for c in candidatos if x_dpid_ldap and x_port_ldap
+                            and c["dpid"] == x_dpid_ldap and c["port"] == str(x_port_ldap)), None)
+            if not ganador:
+                # Sin ubicación fija en LDAP para este usuario no hay con qué decidir: no se admite a nadie.
+                ubicaciones = ", ".join(f"{u['dpid']}:{u['port']}" for u in candidatos)
+                print(f"  [ALERTA DE SEGURIDAD] {identidad_ldap} negociando EAP en más de un puerto a la vez, sin ubicación fija en LDAP para decidir: {ubicaciones}")
+                eventos.registrar("conflicto", identidad_ldap, mac_esperada,
+                                  detalle=f"Misma identidad en varios puertos a la vez ({ubicaciones}); sin ubicación fija en LDAP para resolverlo", rol=x_rol_ldap)
+                raise HTTPException(
+                    status_code=409,
+                    detail="Conflicto de seguridad: la misma identidad está negociando en más de un puerto a la vez",
+                )
+            sesion_del_ganador = session_store.get_by_username(identidad_ldap)
+            ya_resuelto = (sesion_del_ganador is not None and sesion_del_ganador.dpid == ganador["dpid"]
+                          and str(sesion_del_ganador.port) == ganador["port"])
+            if not ya_resuelto:
+                # primera vez que se ve esta ambigüedad: se rechaza cada ubicación que no ganó, por su cuenta
+                for otro in candidatos:
+                    if otro is ganador:
+                        continue
+                    print(f"  [ALERTA DE SEGURIDAD] {identidad_ldap} también negociando en {otro['dpid']}:{otro['port']} "
+                          f"(se esperaba {x_dpid_ldap}:{x_port_ldap}); posible clonación")
+                    await inyectar_blacklist_temporal(otro["dpid"], otro["port"], otro["mac_onos"], idle_timeout=600)
+                    eventos.registrar("conflicto", identidad_ldap, otro["mac_onos"], otro["dpid"], otro["port"],
+                                      f"Ubicación no autorizada ({otro['dpid']}:{otro['port']}); se esperaba {x_dpid_ldap}:{x_port_ldap}. Posible clonación; lista negra 600 s",
+                                      x_rol_ldap)
+            # si ya_resuelto, esta llamada es una segunda confirmación de la misma negociación ganadora: nada
+            # que rechazar otra vez; _procesar_webhook la reconoce como la sesión ya activa y la confirma.
+            datos_onos = ganador
+
+        mac_fisica = datos_onos["mac_onos"]
+        dpid = datos_onos["dpid"]
+        port = datos_onos["port"]
+        return await _procesar_webhook(identidad_ldap, mac_esperada, mac_fisica, dpid, port, x_rol_ldap, x_dpid_ldap, x_port_ldap)
+
+
+async def _procesar_webhook(identidad_ldap: str, mac_esperada: str, mac_fisica: str, dpid: str, port: str,
+                            x_rol_ldap: str, x_dpid_ldap: str, x_port_ldap: str) -> dict:
+    """El resto de la política (validación de MAC, sesión duplicada, ubicación y asignación de rol), ya con una
+    única ubicación física resuelta."""
 
     # -------------------------------------------------------------------------
     # VALIDACIÓN 1: Coincidencia de Hardware en LDAP (1. vs 1.2 Usuario Externo)
@@ -494,7 +542,17 @@ async def auth_webhook(
     ) or session_store.get_by_mac(mac_fisica)
 
     if sesion_activa:
-        # CASO A: Ya existe una sesión activa -> Intento de clonación / suplantación
+        if sesion_activa.dpid == dpid and str(sesion_activa.port) == str(port) and sesion_activa.mac == mac_fisica:
+            # Es la MISMA sesión que ya está instalada (reintento o segunda llamada de la misma negociación que
+            # ya ganó la resolución de ambigüedad), no un conflicto nuevo: se confirma sin volver a bloquear nada.
+            print(f"  [=] {identidad_ldap} ya tiene esta misma sesión activa en {dpid}:{port}; se confirma sin reprocesar")
+            return {
+                "Tunnel-Type": "VLAN",
+                "Tunnel-Medium-Type": "IEEE-802",
+                "Tunnel-Private-Group-Id": str(sesion_activa.vlan),
+                "Reply-Message": "Acceso Zero Trust Autorizado",
+            }
+        # CASO A: Ya existe una sesión activa EN OTRA UBICACIÓN -> Intento de clonación / suplantación
         print(
             f"  [ALERTA DE SEGURIDAD] MAC Spoofing / Conflicto de sesión detectado para {identidad_ldap} ({mac_fisica})."
         )
