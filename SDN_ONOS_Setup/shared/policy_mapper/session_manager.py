@@ -50,6 +50,7 @@ class SessionManager:
 
         self._sessions_by_mac[mac] = session
         self._sessions_by_port[port_key] = session
+        self._sessions_by_user[session.username.lower()] = session
 
     def remove_session(self, mac: str) -> Optional[ActiveSession]:
         mac = mac.lower()
@@ -57,6 +58,9 @@ class SessionManager:
         if session:
             port_key = f"{session.dpid}:{session.port}"
             self._sessions_by_port.pop(port_key, None)
+            # solo si sigue siendo la misma sesión (una más nueva del mismo usuario ya pudo haber pisado el índice)
+            if self._sessions_by_user.get(session.username.lower()) is session:
+                self._sessions_by_user.pop(session.username.lower(), None)
         return session
 
     def is_spoofing(self, mac: str, dpid: str, port: str) -> bool:
