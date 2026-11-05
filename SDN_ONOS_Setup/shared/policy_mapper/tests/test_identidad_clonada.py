@@ -43,6 +43,8 @@ def _onos_con(entradas, monkeypatch):
     async def get_falso(self, url, auth=None, timeout=None):
         return _RespuestaFalsa({"users": entradas})
     monkeypatch.setattr(pm.httpx.AsyncClient, "get", get_falso)
+    pm._cache_aaa_tabla = None   # cada reconfiguración debe verse de inmediato, no la de la caché de la llamada anterior
+    pm._cache_aaa_hasta = 0.0
 
 
 def _entrada(subscriber_id, mac=MAC, estado="AUTHORIZED_STATE", username=USUARIO):
@@ -105,6 +107,8 @@ def cliente(monkeypatch):
     monkeypatch.setattr(pm.policy_tables, "faltantes", sin_faltantes)
 
     pm._candados_por_usuario.clear()
+    pm._cache_aaa_tabla = None
+    pm._cache_aaa_hasta = 0.0
     session_store.remove_session(MAC)
     eventos.limpiar()
     yield TestClient(pm.app), bloqueados

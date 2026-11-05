@@ -58,6 +58,28 @@ Cierre en Paideia: miércoles 14-oct-2026, 14:59. Un solo PDF autocontenido por 
     vez, se rechaza explícitamente con 409 y un evento `conflicto` ("posible clonación"), en vez de resolver con
     una heurística ciega. Pruebas en `shared/policy_mapper/tests/test_identidad_clonada.py`.
 
+15. **R2: caché de `/onos/aaa/app/users` con varios logins a la vez.** Se cachea esa tabla (compartida entre
+    llamadas concurrentes, una sola petición HTTP real por ventana) por `AAA_CACHE_TTL_S` (50 ms por defecto).
+    Medido en el laboratorio, comparando K=1/3/5 con TTL 0 (sin caché), 50 ms y 150 ms, 4 repeticiones cada uno
+    (`admision_concurrente_r2.py`):
+
+    | TTL | K=5: fallos/20 | K=5: sesiones/s |
+    |---|---|---|
+    | 0 (sin caché) | 14 | 2,14 |
+    | 50 ms | 16 | 2,19 |
+    | 150 ms | 14 | 2,18 |
+
+    **La caché no mejora el resultado a K=5** (dentro del margen de ruido de la prueba): el retraso con varios
+    logins a la vez no viene de pedir la tabla de ONOS AAA repetidas veces (eso sí se confirmó reducido con
+    pruebas unitarias: una sola petición real para N llamadas concurrentes). El cuello de botella real, visto en
+    la bitácora durante la prueba: bajo carga, la propia tabla de ONOS AAA cruza identidades entre puertos
+    distintos (se vio a `profesor01` reportado negociando en el puerto físico de `alumno02`, sin que hubiera
+    ningún clon de por medio) — coincide con la limitación ya documentada de que el AAA de ONOS admite un solo
+    supplicante por puerto, pero aquí el cruce ocurre entre USUARIOS DISTINTOS en puertos distintos, no solo
+    dentro del mismo puerto. La caché queda igual (es una mejora real y de bajo riesgo: menos carga sobre ONOS,
+    sin empeorar nada en K=1/3), pero no resuelve el problema de fondo; falta investigar ese cruce en el AAA de
+    ONOS por separado.
+
 ## Rúbrica: qué falta medir
 
 - **R1:** logins/s, latencia de autenticación desglosada, multiplataforma (emisión de certificados, equipos sin suplicante), niveles de roles.

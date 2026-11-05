@@ -261,16 +261,26 @@ async def sadis_dinamico(port_id: str):
 # -----------------------------------------------------------------------------
 # CLIENTE ONOS REST API
 # -----------------------------------------------------------------------------
-async def candidatos_onos(username_externo: str) -> List[dict]:
-  """Todas las ubicaciones (dpid, puerto) donde ONOS AAA tiene a `username_externo` negociando ahora mismo.
+# Con varios logins a la vez, cada webhook volvía a pedirle a ONOS la tabla COMPLETA de /onos/aaa/app/users por su
+# cuenta (medido en el laboratorio: a partir de 5 negociaciones simultáneas ya hay varias pidiéndola dentro de la
+# misma ventana de milisegundos). Se cachea esa tabla cruda un instante muy corto -AAA_CACHE_TTL_S, por defecto
+# afinado en pruebas de carga- y se comparte entre todas las llamadas que caigan dentro de esa ventana: solo UNA
+# de ellas hace la petición HTTP real (las demás esperan ese resultado en vez de abrir su propia conexión). El
+# filtrado por usuario sigue siendo por llamada (la caché solo evita repetir la petición a ONOS, no cambia a quién
+# se admite). Nunca sirve nada más viejo que el TTL: con 50 ms de margen -muy por debajo de los ~2.3 s que tarda
+# un EAP-TLS completo- no hay riesgo real de resolver con un estado atrasado.
+AAA_CACHE_TTL_S = float(os.getenv("AAA_CACHE_TTL_S", "0.05"))
 
-  FreeRADIUS no recibe Calling-Station-Id ni NAS-Port-Id en el Access-Request que arma el AAA de ONOS (no son
-  configurables en esta versión), así que el webhook no sabe por sí solo desde qué puerto físico llama cada vez
-  que se invoca; tiene que volver a preguntarle a ONOS. ONOS sí distingue los puertos internamente (un
-  subscriberId "dpid/puerto" por negociación), así que si aquí aparece más de una ubicación para el MISMO
-  usuario, hay dos negociaciones físicas a la vez con la misma identidad (nadie legítimo se conecta por dos
-  puertos a la vez): es quien llama (`auth_webhook`) el que decide, con la ubicación fija de LDAP, cuál de las
-  dos es la real, en vez de que esta función adivine."""
+_cache_aaa_tabla: Optional[list] = None
+_cache_aaa_hasta: float = 0.0
+_cache_aaa_candado = asyncio.Lock()
+_cache_aaa_peticiones_reales = 0   # cuántas veces se pidió la tabla de verdad a ONOS (lo usan las pruebas/mediciones)
+
+
+async def _pedir_tabla_aaa() -> list:
+  """La tabla cruda de /onos/aaa/app/users, sin cachear ni filtrar."""
+  global _cache_aaa_peticiones_reales
+  _cache_aaa_peticiones_reales += 1
   async with httpx.AsyncClient() as client:
     try:
       response = await client.get(ONOS_AAA_URL, auth=ONOS_AUTH, timeout=2.0)
@@ -281,51 +291,64 @@ async def candidatos_onos(username_externo: str) -> List[dict]:
             if isinstance(datos, dict)
             else datos
         )
-
-        if not isinstance(sesiones_aaa, list):
-          return []
-
-        por_ubicacion: dict = {}   # (dpid, puerto) -> mejor candidato visto en esa ubicación
-
-        for sesion in reversed(sesiones_aaa):
-          if (
-              isinstance(sesion, dict)
-              and sesion.get("username") == username_externo
-          ):
-            subscriber_id = sesion.get("subscriberId", "")
-            port = (
-                subscriber_id.split("/")[-1] if "/" in subscriber_id else "1"
-            )
-            dpid = (
-                subscriber_id.split("/")[0]
-                if "/" in subscriber_id
-                else "of:0000000000000001"
-            )
-            mac_onos = sesion.get("macAddress", "").strip().lower()
-            estado = str(
-                sesion.get("state", sesion.get("authState", ""))
-            ).upper()
-
-            info = {
-                "dpid": dpid,
-                "port": str(port),
-                "mac_onos": mac_onos,
-                "username_onos": sesion.get("username", ""),
-                "state": estado,
-            }
-
-            clave = (dpid, str(port))
-            previo = por_ubicacion.get(clave)
-            # por ubicación nos quedamos con la negociación activa (PENDING/START); si no hay, la más reciente
-            if previo is None or "PENDING" in estado or "START" in estado:
-              if previo is None or not ("PENDING" in previo["state"] or "START" in previo["state"]):
-                por_ubicacion[clave] = info
-
-        return list(por_ubicacion.values())
-
+        return sesiones_aaa if isinstance(sesiones_aaa, list) else []
     except httpx.RequestError as e:
       print(f"[ONOS API] Error de conexión: {e}")
   return []
+
+
+async def _tabla_aaa() -> list:
+  """La tabla de /onos/aaa/app/users, cacheada por AAA_CACHE_TTL_S segundos (ver comentario arriba)."""
+  global _cache_aaa_tabla, _cache_aaa_hasta
+  ahora = time.monotonic()
+  if _cache_aaa_tabla is not None and ahora < _cache_aaa_hasta:
+    return _cache_aaa_tabla
+  async with _cache_aaa_candado:
+    ahora = time.monotonic()
+    if _cache_aaa_tabla is not None and ahora < _cache_aaa_hasta:
+      return _cache_aaa_tabla   # alguien más ya la refrescó mientras esperábamos el candado
+    _cache_aaa_tabla = await _pedir_tabla_aaa()
+    _cache_aaa_hasta = time.monotonic() + AAA_CACHE_TTL_S
+    return _cache_aaa_tabla
+
+
+async def candidatos_onos(username_externo: str) -> List[dict]:
+  """Todas las ubicaciones (dpid, puerto) donde ONOS AAA tiene a `username_externo` negociando ahora mismo.
+
+  FreeRADIUS no recibe Calling-Station-Id ni NAS-Port-Id en el Access-Request que arma el AAA de ONOS (no son
+  configurables en esta versión), así que el webhook no sabe por sí solo desde qué puerto físico llama cada vez
+  que se invoca; tiene que volver a preguntarle a ONOS (o leer la tabla cacheada en `_tabla_aaa`). ONOS sí
+  distingue los puertos internamente (un subscriberId "dpid/puerto" por negociación), así que si aquí aparece más
+  de una ubicación para el MISMO usuario, hay dos negociaciones físicas a la vez con la misma identidad (nadie
+  legítimo se conecta por dos puertos a la vez): es quien llama (`auth_webhook`) el que decide, con la ubicación
+  fija de LDAP, cuál de las dos es la real, en vez de que esta función adivine."""
+  sesiones_aaa = await _tabla_aaa()
+  por_ubicacion: dict = {}   # (dpid, puerto) -> mejor candidato visto en esa ubicación
+
+  for sesion in reversed(sesiones_aaa):
+    if isinstance(sesion, dict) and sesion.get("username") == username_externo:
+      subscriber_id = sesion.get("subscriberId", "")
+      port = subscriber_id.split("/")[-1] if "/" in subscriber_id else "1"
+      dpid = subscriber_id.split("/")[0] if "/" in subscriber_id else "of:0000000000000001"
+      mac_onos = sesion.get("macAddress", "").strip().lower()
+      estado = str(sesion.get("state", sesion.get("authState", ""))).upper()
+
+      info = {
+          "dpid": dpid,
+          "port": str(port),
+          "mac_onos": mac_onos,
+          "username_onos": sesion.get("username", ""),
+          "state": estado,
+      }
+
+      clave = (dpid, str(port))
+      previo = por_ubicacion.get(clave)
+      # por ubicación nos quedamos con la negociación activa (PENDING/START); si no hay, la más reciente
+      if previo is None or "PENDING" in estado or "START" in estado:
+        if previo is None or not ("PENDING" in previo["state"] or "START" in previo["state"]):
+          por_ubicacion[clave] = info
+
+  return list(por_ubicacion.values())
 
 
 _candados_por_usuario: dict = {}   # identidad_onos -> asyncio.Lock
