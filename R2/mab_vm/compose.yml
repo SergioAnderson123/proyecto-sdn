@@ -6,8 +6,8 @@ services:
     environment:
       R1_URL: http://policy_mapper:5000
       ONOS_URL: http://onos:8181
-      VM_ACCESS_PORTS: of:00001a749039894a/2
-      VM_MAX_CHILDREN: "2"
+      VM_ACCESS_PORTS: ${VM_ACCESS_PORTS:-of:00001a749039894a/2}   # deviceId/puerto de acceso de la VM; ajustar en el .env
+      VM_MAX_CHILDREN: "${VM_MAX_CHILDREN:-2}"
     ports:
       - "127.0.0.1:5001:5001"
     volumes:

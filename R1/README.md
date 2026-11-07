@@ -16,9 +16,9 @@ Pruebas: `python -m pytest R1/shared/policy_mapper/tests -q` (requiere `pip inst
 
 ---
 
-# Using podman/docker
+# Podman / Docker
 ```
-podman compose build
-podman compose up -d
+podman compose -f R1/compose.yml build   # desde la raíz del repo
+podman compose -f R1/compose.yml up -d
 podman ps
 ```
