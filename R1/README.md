@@ -9,8 +9,6 @@ Stack de laboratorio: ONOS 2.7, Mininet, OpenLDAP, Policy Mapper (FastAPI) y Fre
 | `shared/ldap/`, `shared/mininet/` | Estructura LDAP, topología base y supplicants (`wpa_*.conf`) |
 | `radius/`, `mininet/`, `policy_mapper/` | Imagen y configuración de FreeRADIUS, Mininet (`init-onos.sh`, `start-ovs.sh`) y Policy Mapper (Dockerfile) |
 | `deploy/controller/` | Despliegue en la VM Controller de VNRT ([README](deploy/README.md)) |
-| `standalone/` | Versión inicial de R1 con su propio docker-compose |
-| `codigo/` | Copia de `policy_mapper.py` de la Primera Entrega (la vigente está en `shared/policy_mapper/`) |
 
 El Policy Mapper también usa módulos de R2 (`R2/policy/`), que `compose.yml` monta junto al código de R1.
 

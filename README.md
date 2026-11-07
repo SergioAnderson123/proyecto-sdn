@@ -19,7 +19,6 @@ R1/   Control de acceso: 802.1X/EAP-TLS, OpenLDAP, FreeRADIUS, Policy Mapper (ba
   shared/                LDAP, Policy Mapper, topología Mininet base y supplicants
   radius/  mininet/  policy_mapper/   imágenes y configuración de cada servicio
   deploy/controller/     despliegue en la VM Controller de VNRT
-  standalone/            versión inicial de R1 con docker-compose propio
 R2/   Restricción de recursos: tablas de rol, fallback MAB, portal cautivo y panel
   policy/                policy.yaml, policy_tables.py y portal_auth.py (se montan en el Policy Mapper)
   mininet/               topología R2, admisión y servicios de prueba
