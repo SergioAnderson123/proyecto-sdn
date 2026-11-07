@@ -107,6 +107,8 @@ En el Controller, los tres deben aparecer con `"available": true`:
 curl -s -u onos:rocks http://127.0.0.1:8181/onos/v1/devices | python3 -m json.tool | grep -E '"id"|"available"'
 ```
 
+No pongas comentarios al final de una variable del inventario (`controller_ip=1.2.3.4   # texto`): en INI de Ansible el `#` forma parte del valor y `set-controller` crea un controlador por cada palabra. Si en `list controller` aparecen targets raros (`los`, `de`, `DESDE`...), quita el comentario en `inventory.ini` y vuelve a lanzar el playbook (reemplaza los controladores). Para limpiarlos a mano: `sudo ovs-vsctl del-controller <bridge>`.
+
 Si `is_connected` es `false`: desde el switch prueba `nc -zv <controller_ip> 6653` y en el Controller `ss -tlnp | grep 6653` y `docker ps | grep onos`. Lo habitual es que `controller_ip` no sea la IP del Controller vista desde los switches.
 
 El playbook instala Open vSwitch si falta, pone fail-mode `secure` y `OpenFlow13`, apunta cada bridge a `tcp:<controller_ip>:6653` y espera a que el switch quede conectado (`is_connected=true`). Comprueba el nombre del bridge de cada switch con `sudo ovs-vsctl list-br`. `inventory.ini` no se versiona.
