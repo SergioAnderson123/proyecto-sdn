@@ -39,9 +39,17 @@
       changed_when: true
 
     - name: Esperar la conexion con el controlador
-      ansible.builtin.command: ovs-vsctl get controller {{ bridge }} is_connected
+      # La tabla Controller se indexa por UUID, no por bridge: se busca por su target.
+      ansible.builtin.command:
+        argv:
+          - ovs-vsctl
+          - --bare
+          - --columns=is_connected
+          - find
+          - Controller
+          - 'target="tcp:{{ controller_ip }}:{{ controller_port }}"'
       register: conectado
-      until: conectado.stdout.strip() == "true"
+      until: "'true' in conectado.stdout"
       retries: 10
       delay: 3
       changed_when: false

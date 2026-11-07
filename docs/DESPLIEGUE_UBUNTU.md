@@ -88,9 +88,26 @@ Si cambias la IP del inventario, repite `ssh-copy-id` con la IP nueva. Alternati
 
 ```bash
 ansible -i inventory.ini switches -m ping
-ansible-playbook -i inventory.ini switches.yml                 # aplicar
-ansible-playbook -i inventory.ini switches.yml -e reset=true   # además borra los flujos anteriores
+ansible-playbook -i inventory.ini switches.yml --ask-become-pass                 # aplicar
+ansible-playbook -i inventory.ini switches.yml --ask-become-pass -e reset=true   # además borra los flujos anteriores
 ```
+
+`--ask-become-pass` es necesario si `ubuntu` pide contraseña para `sudo` en los switches (si no, falla con `Missing sudo password`). Alternativas: `ansible_become_password=...` bajo `[switches:vars]` del inventario (texto plano; no lo compartas) o `sudo` sin contraseña en cada switch.
+
+Verificar la conexión con ONOS. En cada switch debe salir `tcp:<controller_ip>:6653` con `is_connected` en `true` (la tabla Controller se consulta por `target`, no por nombre de bridge):
+
+```bash
+sudo ovs-vsctl --bare --columns=target,is_connected list controller
+sudo ovs-vsctl show | grep -A2 Controller
+```
+
+En el Controller, los tres deben aparecer con `"available": true`:
+
+```bash
+curl -s -u onos:rocks http://127.0.0.1:8181/onos/v1/devices | python3 -m json.tool | grep -E '"id"|"available"'
+```
+
+Si `is_connected` es `false`: desde el switch prueba `nc -zv <controller_ip> 6653` y en el Controller `ss -tlnp | grep 6653` y `docker ps | grep onos`. Lo habitual es que `controller_ip` no sea la IP del Controller vista desde los switches.
 
 El playbook instala Open vSwitch si falta, pone fail-mode `secure` y `OpenFlow13`, apunta cada bridge a `tcp:<controller_ip>:6653` y espera a que el switch quede conectado (`is_connected=true`). Comprueba el nombre del bridge de cada switch con `sudo ovs-vsctl list-br`. `inventory.ini` no se versiona.
 
