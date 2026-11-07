@@ -13,17 +13,27 @@ Integrantes: Santiago Gabriel Linares Rivera, Mariana Jimena Huertas Oliva, Serg
 ## Estructura
 
 ```
-R1_R2/
-  flujos_R1_R2.md        flujos de R1 y R2 (transcripción de los diagramas)
-  diagramas/             PNG de cada bloque
-R5/
-  flujos_R5.md           flujos de R5 (transcripción)
-  Flujos_R5.pdf          diagrama original
-  codigo/integrador.py   M09: integrador IDS-SDN (eve-alerts.json -> ONOS REST)
-docs/
-  pendientes-entrega-1.md  incoherencias y checklist de la Primera Entrega
-  entrega-1/               enunciado y presentación del parcial
+R1/   Control de acceso: 802.1X/EAP-TLS, OpenLDAP, FreeRADIUS, Policy Mapper (base) y stack Docker
+  compose.yml            stack de laboratorio (ONOS, Mininet, OpenLDAP, Policy Mapper, FreeRADIUS)
+  flujos_R1_R2.md        flujos de R1 y R2 (transcripción de los diagramas)  ·  diagramas/
+  shared/                LDAP, Policy Mapper, topología Mininet base y supplicants
+  radius/  mininet/  policy_mapper/   imágenes y configuración de cada servicio
+  deploy/controller/     despliegue en la VM Controller de VNRT
+  standalone/            versión inicial de R1 con docker-compose propio
+R2/   Restricción de recursos: tablas de rol, fallback MAB, portal cautivo y panel
+  policy/                policy.yaml, policy_tables.py y portal_auth.py (se montan en el Policy Mapper)
+  mininet/               topología R2, admisión y servicios de prueba
+  mab_vm/  fallback/     fallback MAB de VM y overrides de compose
+  portal_cautivo/  panel_accesos/  tests/  diagramas/
+R5/   Seguridad perimetral: Suricata + integrador hacia ONOS
+  codigo/  cli/  lab/  suricata/  tests/
+  deploy/ids/            despliegue en la VM IDS; deploy/prioridades.yaml es el mapa único de prioridades R1/R2/R5
+docs/   entregables y documentos del curso (no son código de un requerimiento)
 ```
+
+R1 y R2 comparten el Policy Mapper: el código base está en `R1/shared/policy_mapper/` y los módulos de R2 en `R2/policy/`. `R1/compose.yml` monta ambas carpetas (`PYTHONPATH=/app:/r2_policy`).
+
+Cada requerimiento tiene su propio README con los comandos de arranque y de prueba: [R1](R1/README.md), [R2](R2/README.md) y [R5](R5/flujos_R5.md).
 
 ## Pila
 

@@ -23,7 +23,7 @@ Cierre en Paideia: miércoles 14-oct-2026, 14:59. Un solo PDF autocontenido por 
 | 50000 | EAPOL -> controller (borde; ONOS AAA instala hoy 40000) |
 | 45000 | DROP temporal / blacklist MAB (R1) |
 | 42000 | DROP de R5 por IP de origen |
-| 41000 | Espejo de R5 en el Core (sobre la sesión de R2: ver `deploy/prioridades.yaml`) |
+| 41000 | Espejo de R5 en el Core (sobre la sesión de R2: ver `R5/deploy/prioridades.yaml`) |
 | 40001 | Flujo de sesión y puertos de confianza (R2) |
 | 40000 | Base (LLDP/BDDP/ARP) |
 | 30000 | Reglas permitidas dentro de las tablas de rol 10/20/40 (R2) |
@@ -56,7 +56,7 @@ Cierre en Paideia: miércoles 14-oct-2026, 14:59. Un solo PDF autocontenido por 
     ubicación fija en LDAP (`physicalDeliveryOfficeName`/`roomNumber`), algo que no todos los roles tienen.
     **Corregido:** si para el mismo usuario hay negociaciones en más de un `subscriberId` (puerto físico) a la
     vez, se rechaza explícitamente con 409 y un evento `conflicto` ("posible clonación"), en vez de resolver con
-    una heurística ciega. Pruebas en `shared/policy_mapper/tests/test_identidad_clonada.py`.
+    una heurística ciega. Pruebas en `R1/shared/policy_mapper/tests/test_identidad_clonada.py`.
 
 15. **R2: caché de `/onos/aaa/app/users` con varios logins a la vez.** Se cachea esa tabla (compartida entre
     llamadas concurrentes, una sola petición HTTP real por ventana) por `AAA_CACHE_TTL_S` (50 ms por defecto).

@@ -1,11 +1,11 @@
 # Prueba en vivo de la integración R2 + R5 (laboratorio Docker)
 
-Topología `SDN_ONOS_Setup/shared/mininet/topo_baseR2_userspace.py` (con el host `hids`, 10.0.0.99, en s2 puerto 4):
+Topología `R2/mininet/topo_baseR2_userspace.py` (montado en el contenedor como `/root/shared-r2/`) (con el host `hids`, 10.0.0.99, en s2 puerto 4):
 s1 = acceso (h1 profesor, h2 alumno, h3 soporte; sesiones y tablas de rol de R2), s2 = servidores h4/h5 y **Core de R5**.
 
 ## Pasos
-1. Stack R1/R2: `docker compose up -d` en `SDN_ONOS_Setup`, `mininet/start-ovs.sh`, `init-onos.sh` (reinicia la app AAA al final) y la topología.
-2. Servicios y sesiones: `shared/mininet/servicios_r2.sh` y un `wpa_supplicant` por host (h1, h2, h3).
+1. Stack R1/R2: `docker compose up -d` en `R1`, `mininet/start-ovs.sh`, `init-onos.sh` (reinicia la app AAA al final) y la topología.
+2. Servicios y sesiones: `R2/mininet/servicios_r2.sh` y un `wpa_supplicant` por host (h1, h2, h3).
 3. Instalar en el contenedor `mininet` (una vez): `dnf -y install suricata python3-requests`.
 4. Copiar a `/root/r5`: `R5/codigo/integrador.py`, `R5/lab/espejo.py`, `R5/suricata/local.rules`, `ids_en_hids.sh` y `tormenta.sh`.
 5. `bash /root/r5/ids_en_hids.sh espejo` (espejo en s2, prioridad 41000), `... suricata` (en el namespace de hids) y `... integrador`.
