@@ -71,6 +71,22 @@ sudo apt-get install -y ansible
 cd R1/deploy/switches
 cp inventory.ini.example inventory.ini
 nano inventory.ini        # ansible_host/ansible_port y bridge de cada switch; controller_ip = IP del Controller vista desde los switches
+```
+
+Antes del primer `ping`, crea una llave SSH y cópiala a cada switch (el inventario trae `~/.ssh/id_rsa` por defecto, que normalmente no existe; si la llave no existe, Ansible falla con `no such identity` y `Permission denied (publickey,password)`):
+
+```bash
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
+for p in 5801 5802 5803; do ssh-copy-id -i ~/.ssh/id_ed25519.pub -p $p ubuntu@<IP-de-los-switches>; done   # pide la contraseña de ubuntu una vez por switch
+sed -i 's|^ansible_ssh_private_key_file=.*|ansible_ssh_private_key_file=/root/.ssh/id_ed25519|' inventory.ini   # ruta absoluta: usa /home/<usuario>/... si no eres root
+grep -n private_key inventory.ini        # debe mostrar la línea; si no, añádela bajo [switches:vars]
+echo 'ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new' >> inventory.ini   # opcional: no pregunta por las huellas (bajo [switches:vars], al final del archivo)
+ssh -i ~/.ssh/id_ed25519 -p 5801 ubuntu@<IP-de-los-switches> hostname   # debe responder sw1
+```
+
+Si cambias la IP del inventario, repite `ssh-copy-id` con la IP nueva. Alternativa sin llaves: `sudo apt-get install -y sshpass`, borrar la línea `ansible_ssh_private_key_file` y usar `--ask-pass --ask-become-pass` en cada comando de Ansible.
+
+```bash
 ansible -i inventory.ini switches -m ping
 ansible-playbook -i inventory.ini switches.yml                 # aplicar
 ansible-playbook -i inventory.ini switches.yml -e reset=true   # además borra los flujos anteriores
