@@ -1,0 +1,12 @@
+{
+  "escaneo_s": 40.05,
+  "syn_enviados": 559,
+  "syn_que_llegaron_al_servidor": 27,
+  "pct_pasa": 4.8,
+  "primera_alerta_s": 0.823,
+  "n_alertas": 16,
+  "bloqueado_en": "of:0000a223f2c04547",
+  "lectura_a_201_ms": 19.5,
+  "alerta_a_201_s": 0.07,
+  "primer_syn_a_201_s": 0.893
+}

@@ -1,0 +1,13 @@
+{
+  "tipo": "udp",
+  "segundos_hasta_el_drop": 1.49,
+  "n_alertas": 778,
+  "firmas": [
+    "LOCAL R4 Inundacion UDP interna"
+  ],
+  "primera_alerta_s": 1.308,
+  "bloqueado_en": "of:0000ca272d265744",
+  "paquetes_capturados": 605,
+  "descartes_suricata": 0,
+  "lectura_a_201_ms": 50.0
+}

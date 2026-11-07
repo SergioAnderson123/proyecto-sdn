@@ -1,0 +1,9 @@
+{
+  "alertas": 52,
+  "firmas": [
+    "LOCAL Port scan SYN"
+  ],
+  "bloqueado": true,
+  "paquetes_capturados": 230,
+  "descartes_suricata": 0
+}

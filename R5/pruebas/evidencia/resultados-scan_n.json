@@ -1,0 +1,361 @@
+{
+  "n": 30,
+  "resumen": {
+    "primera_alerta_s": {
+      "n": 30,
+      "media": 0.429,
+      "desv": 0.047,
+      "min": 0.298,
+      "p50": 0.441,
+      "p95": 0.503,
+      "max": 0.513
+    },
+    "alerta_a_201_ms": {
+      "n": 30,
+      "media": 48.587,
+      "desv": 16.506,
+      "min": 17.2,
+      "p50": 51.9,
+      "p95": 76.2,
+      "max": 76.5
+    },
+    "lectura_a_201_ms": {
+      "n": 30,
+      "media": 6.133,
+      "desv": 0.59,
+      "min": 5.3,
+      "p50": 6.2,
+      "p95": 7.2,
+      "max": 8.0
+    },
+    "primer_syn_a_201_s": {
+      "n": 30,
+      "media": 0.477,
+      "desv": 0.048,
+      "min": 0.354,
+      "p50": 0.491,
+      "p95": 0.554,
+      "max": 0.555
+    },
+    "pct_pasa": {
+      "n": 30,
+      "media": 12.467,
+      "desv": 1.947,
+      "min": 6.2,
+      "p50": 13.0,
+      "p95": 14.4,
+      "max": 14.4
+    },
+    "syn_llegaron": {
+      "n": 30,
+      "media": 23.833,
+      "desv": 4.042,
+      "min": 11,
+      "p50": 25,
+      "p95": 28,
+      "max": 28
+    }
+  },
+  "filas": [
+    {
+      "i": 1,
+      "syn_enviados": 190,
+      "syn_llegaron": 23,
+      "pct_pasa": 12.1,
+      "primera_alerta_s": 0.48,
+      "lectura_a_201_ms": 5.6,
+      "primer_syn_a_201_s": 0.507,
+      "alerta_a_201_ms": 27.5
+    },
+    {
+      "i": 2,
+      "syn_enviados": 190,
+      "syn_llegaron": 24,
+      "pct_pasa": 12.6,
+      "primera_alerta_s": 0.428,
+      "lectura_a_201_ms": 6.0,
+      "primer_syn_a_201_s": 0.463,
+      "alerta_a_201_ms": 35.1
+    },
+    {
+      "i": 3,
+      "syn_enviados": 192,
+      "syn_llegaron": 26,
+      "pct_pasa": 13.5,
+      "primera_alerta_s": 0.483,
+      "lectura_a_201_ms": 6.8,
+      "primer_syn_a_201_s": 0.543,
+      "alerta_a_201_ms": 59.8
+    },
+    {
+      "i": 4,
+      "syn_enviados": 194,
+      "syn_llegaron": 27,
+      "pct_pasa": 13.9,
+      "primera_alerta_s": 0.447,
+      "lectura_a_201_ms": 6.6,
+      "primer_syn_a_201_s": 0.501,
+      "alerta_a_201_ms": 54.7
+    },
+    {
+      "i": 5,
+      "syn_enviados": 178,
+      "syn_llegaron": 11,
+      "pct_pasa": 6.2,
+      "primera_alerta_s": 0.298,
+      "lectura_a_201_ms": 5.3,
+      "primer_syn_a_201_s": 0.354,
+      "alerta_a_201_ms": 56.0
+    },
+    {
+      "i": 6,
+      "syn_enviados": 195,
+      "syn_llegaron": 28,
+      "pct_pasa": 14.4,
+      "primera_alerta_s": 0.428,
+      "lectura_a_201_ms": 6.1,
+      "primer_syn_a_201_s": 0.505,
+      "alerta_a_201_ms": 76.2
+    },
+    {
+      "i": 7,
+      "syn_enviados": 192,
+      "syn_llegaron": 25,
+      "pct_pasa": 13.0,
+      "primera_alerta_s": 0.457,
+      "lectura_a_201_ms": 8.0,
+      "primer_syn_a_201_s": 0.503,
+      "alerta_a_201_ms": 45.4
+    },
+    {
+      "i": 8,
+      "syn_enviados": 193,
+      "syn_llegaron": 27,
+      "pct_pasa": 14.0,
+      "primera_alerta_s": 0.441,
+      "lectura_a_201_ms": 6.7,
+      "primer_syn_a_201_s": 0.503,
+      "alerta_a_201_ms": 62.2
+    },
+    {
+      "i": 9,
+      "syn_enviados": 193,
+      "syn_llegaron": 26,
+      "pct_pasa": 13.5,
+      "primera_alerta_s": 0.444,
+      "lectura_a_201_ms": 5.5,
+      "primer_syn_a_201_s": 0.498,
+      "alerta_a_201_ms": 54.5
+    },
+    {
+      "i": 10,
+      "syn_enviados": 190,
+      "syn_llegaron": 24,
+      "pct_pasa": 12.6,
+      "primera_alerta_s": 0.406,
+      "lectura_a_201_ms": 5.9,
+      "primer_syn_a_201_s": 0.458,
+      "alerta_a_201_ms": 51.9
+    },
+    {
+      "i": 11,
+      "syn_enviados": 192,
+      "syn_llegaron": 27,
+      "pct_pasa": 14.1,
+      "primera_alerta_s": 0.483,
+      "lectura_a_201_ms": 6.1,
+      "primer_syn_a_201_s": 0.555,
+      "alerta_a_201_ms": 72.6
+    },
+    {
+      "i": 12,
+      "syn_enviados": 192,
+      "syn_llegaron": 25,
+      "pct_pasa": 13.0,
+      "primera_alerta_s": 0.423,
+      "lectura_a_201_ms": 5.5,
+      "primer_syn_a_201_s": 0.47,
+      "alerta_a_201_ms": 47.1
+    },
+    {
+      "i": 13,
+      "syn_enviados": 184,
+      "syn_llegaron": 16,
+      "pct_pasa": 8.7,
+      "primera_alerta_s": 0.352,
+      "lectura_a_201_ms": 5.8,
+      "primer_syn_a_201_s": 0.409,
+      "alerta_a_201_ms": 57.1
+    },
+    {
+      "i": 14,
+      "syn_enviados": 192,
+      "syn_llegaron": 26,
+      "pct_pasa": 13.5,
+      "primera_alerta_s": 0.41,
+      "lectura_a_201_ms": 7.2,
+      "primer_syn_a_201_s": 0.467,
+      "alerta_a_201_ms": 57.2
+    },
+    {
+      "i": 15,
+      "syn_enviados": 193,
+      "syn_llegaron": 25,
+      "pct_pasa": 13.0,
+      "primera_alerta_s": 0.381,
+      "lectura_a_201_ms": 6.2,
+      "primer_syn_a_201_s": 0.418,
+      "alerta_a_201_ms": 37.1
+    },
+    {
+      "i": 16,
+      "syn_enviados": 192,
+      "syn_llegaron": 25,
+      "pct_pasa": 13.0,
+      "primera_alerta_s": 0.462,
+      "lectura_a_201_ms": 6.4,
+      "primer_syn_a_201_s": 0.489,
+      "alerta_a_201_ms": 27.2
+    },
+    {
+      "i": 17,
+      "syn_enviados": 189,
+      "syn_llegaron": 22,
+      "pct_pasa": 11.6,
+      "primera_alerta_s": 0.451,
+      "lectura_a_201_ms": 6.2,
+      "primer_syn_a_201_s": 0.47,
+      "alerta_a_201_ms": 18.6
+    },
+    {
+      "i": 18,
+      "syn_enviados": 191,
+      "syn_llegaron": 25,
+      "pct_pasa": 13.1,
+      "primera_alerta_s": 0.513,
+      "lectura_a_201_ms": 5.5,
+      "primer_syn_a_201_s": 0.554,
+      "alerta_a_201_ms": 40.6
+    },
+    {
+      "i": 19,
+      "syn_enviados": 194,
+      "syn_llegaron": 28,
+      "pct_pasa": 14.4,
+      "primera_alerta_s": 0.446,
+      "lectura_a_201_ms": 6.3,
+      "primer_syn_a_201_s": 0.518,
+      "alerta_a_201_ms": 72.4
+    },
+    {
+      "i": 20,
+      "syn_enviados": 189,
+      "syn_llegaron": 24,
+      "pct_pasa": 12.7,
+      "primera_alerta_s": 0.442,
+      "lectura_a_201_ms": 6.4,
+      "primer_syn_a_201_s": 0.491,
+      "alerta_a_201_ms": 48.5
+    },
+    {
+      "i": 21,
+      "syn_enviados": 183,
+      "syn_llegaron": 15,
+      "pct_pasa": 8.2,
+      "primera_alerta_s": 0.375,
+      "lectura_a_201_ms": 5.7,
+      "primer_syn_a_201_s": 0.401,
+      "alerta_a_201_ms": 26.1
+    },
+    {
+      "i": 22,
+      "syn_enviados": 188,
+      "syn_llegaron": 22,
+      "pct_pasa": 11.7,
+      "primera_alerta_s": 0.432,
+      "lectura_a_201_ms": 5.6,
+      "primer_syn_a_201_s": 0.449,
+      "alerta_a_201_ms": 17.2
+    },
+    {
+      "i": 23,
+      "syn_enviados": 191,
+      "syn_llegaron": 23,
+      "pct_pasa": 12.0,
+      "primera_alerta_s": 0.415,
+      "lectura_a_201_ms": 6.5,
+      "primer_syn_a_201_s": 0.443,
+      "alerta_a_201_ms": 27.8
+    },
+    {
+      "i": 24,
+      "syn_enviados": 191,
+      "syn_llegaron": 25,
+      "pct_pasa": 13.1,
+      "primera_alerta_s": 0.503,
+      "lectura_a_201_ms": 6.2,
+      "primer_syn_a_201_s": 0.545,
+      "alerta_a_201_ms": 42.5
+    },
+    {
+      "i": 25,
+      "syn_enviados": 191,
+      "syn_llegaron": 24,
+      "pct_pasa": 12.6,
+      "primera_alerta_s": 0.408,
+      "lectura_a_201_ms": 6.6,
+      "primer_syn_a_201_s": 0.441,
+      "alerta_a_201_ms": 33.4
+    },
+    {
+      "i": 26,
+      "syn_enviados": 192,
+      "syn_llegaron": 26,
+      "pct_pasa": 13.5,
+      "primera_alerta_s": 0.442,
+      "lectura_a_201_ms": 5.3,
+      "primer_syn_a_201_s": 0.492,
+      "alerta_a_201_ms": 50.2
+    },
+    {
+      "i": 27,
+      "syn_enviados": 194,
+      "syn_llegaron": 27,
+      "pct_pasa": 13.9,
+      "primera_alerta_s": 0.437,
+      "lectura_a_201_ms": 6.3,
+      "primer_syn_a_201_s": 0.5,
+      "alerta_a_201_ms": 62.4
+    },
+    {
+      "i": 28,
+      "syn_enviados": 193,
+      "syn_llegaron": 27,
+      "pct_pasa": 14.0,
+      "primera_alerta_s": 0.456,
+      "lectura_a_201_ms": 5.3,
+      "primer_syn_a_201_s": 0.522,
+      "alerta_a_201_ms": 65.4
+    },
+    {
+      "i": 29,
+      "syn_enviados": 184,
+      "syn_llegaron": 16,
+      "pct_pasa": 8.7,
+      "primera_alerta_s": 0.327,
+      "lectura_a_201_ms": 6.1,
+      "primer_syn_a_201_s": 0.404,
+      "alerta_a_201_ms": 76.5
+    },
+    {
+      "i": 30,
+      "syn_enviados": 194,
+      "syn_llegaron": 26,
+      "pct_pasa": 13.4,
+      "primera_alerta_s": 0.386,
+      "lectura_a_201_ms": 6.3,
+      "primer_syn_a_201_s": 0.44,
+      "alerta_a_201_ms": 54.4
+    }
+  ]
+}

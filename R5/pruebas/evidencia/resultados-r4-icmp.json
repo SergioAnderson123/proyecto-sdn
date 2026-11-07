@@ -1,0 +1,13 @@
+{
+  "tipo": "icmp",
+  "segundos_hasta_el_drop": 0.22,
+  "n_alertas": 136,
+  "firmas": [
+    "LOCAL R4 Inundacion ICMP interna"
+  ],
+  "primera_alerta_s": 0.102,
+  "bloqueado_en": "of:0000000000000003",
+  "paquetes_capturados": 4,
+  "descartes_suricata": 0,
+  "lectura_a_201_ms": 13.8
+}

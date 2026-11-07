@@ -1,0 +1,72 @@
+﻿[
+    {
+        "duracion_s":  1.84,
+        "syn_enviados":  5001,
+        "syn_que_llegaron_al_servidor":  1175,
+        "pct_pasa":  23.5,
+        "bloqueado":  true
+    },
+    {
+        "duracion_s":  1.87,
+        "syn_enviados":  5001,
+        "syn_que_llegaron_al_servidor":  1129,
+        "pct_pasa":  22.6,
+        "bloqueado":  true
+    },
+    {
+        "duracion_s":  1.56,
+        "syn_enviados":  5000,
+        "syn_que_llegaron_al_servidor":  2046,
+        "pct_pasa":  40.9,
+        "bloqueado":  true
+    },
+    {
+        "duracion_s":  1.61,
+        "syn_enviados":  5000,
+        "syn_que_llegaron_al_servidor":  1819,
+        "pct_pasa":  36.4,
+        "bloqueado":  true
+    },
+    {
+        "duracion_s":  1.61,
+        "syn_enviados":  5000,
+        "syn_que_llegaron_al_servidor":  1664,
+        "pct_pasa":  33.3,
+        "bloqueado":  true
+    },
+    {
+        "duracion_s":  1.33,
+        "syn_enviados":  5000,
+        "syn_que_llegaron_al_servidor":  2554,
+        "pct_pasa":  51.1,
+        "bloqueado":  true
+    },
+    {
+        "duracion_s":  1.51,
+        "syn_enviados":  5000,
+        "syn_que_llegaron_al_servidor":  1995,
+        "pct_pasa":  39.9,
+        "bloqueado":  true
+    },
+    {
+        "duracion_s":  1.77,
+        "syn_enviados":  5000,
+        "syn_que_llegaron_al_servidor":  1314,
+        "pct_pasa":  26.3,
+        "bloqueado":  true
+    },
+    {
+        "duracion_s":  1.97,
+        "syn_enviados":  5001,
+        "syn_que_llegaron_al_servidor":  726,
+        "pct_pasa":  14.5,
+        "bloqueado":  true
+    },
+    {
+        "duracion_s":  1.44,
+        "syn_enviados":  5000,
+        "syn_que_llegaron_al_servidor":  2335,
+        "pct_pasa":  46.7,
+        "bloqueado":  true
+    }
+]

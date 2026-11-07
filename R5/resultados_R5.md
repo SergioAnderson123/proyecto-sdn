@@ -1,5 +1,7 @@
 # Resultados de R5 (laboratorio, 13-oct-2026)
 
+> **Documento de la primera medición.** Las mediciones vigentes (Docker con n = 30 el 31/10, los 10 escenarios y la corrida en VNRT) están en [`pruebas/RESULTADOS.md`](pruebas/RESULTADOS.md); la evidencia (JSON, capturas y pcap) y los scripts, en [`pruebas/`](pruebas/). Cifras de este archivo que cambiaron: la prioridad del DROP es 42000 (no 50000), el barrido en ráfaga no pasa al 100 % sino entre el 14 % y el 51 %, y el 4,8 % de la sección 4 salía de releer una captura vieja.
+
 Entorno: ONOS (imagen `onosproject/onos`, 3.0.0-SNAPSHOT) y Mininet en Docker; OVS en modo usuario; Suricata 8.0.7 en `hids` con ET Open (53 155 reglas) más `local.rules`; integrador M09 corriendo en Windows contra la REST de ONOS. Topología: s1 Core, s2 y s3 bordes; `hext` 10.0.1.10 (atacante), `hsrv` 10.0.0.10 (víctima), `hids` 10.0.0.99 (sensor). `HOME_NET = 10.0.0.0/24`.
 
 ## 1. Espejo selectivo (Bloque 1)
@@ -61,9 +63,14 @@ Crecimiento lineal: una entrada de TCAM por IP o prefijo bloqueado. La instalaci
 
 Suricata: en toda la sesión de pruebas (desde el arranque, 03:56 UTC) `capture.kernel_packets` = 80 719 y `capture.kernel_drops` = 8074, es decir **10.0 % de pérdida en la captura**. El contador es acumulado y mezcla escaneos, pings y el LLDP de ONOS, y el entorno (OVS en modo usuario sobre WSL2) es más lento que uno real. Aun con esa pérdida las detecciones se produjeron, porque el umbral solo necesita 20 SYN, pero el IDS no es fiable para reglas que dependan de ver cada paquete. Mejora posible: aumentar el buffer de captura de AF_PACKET (`ring-size`, `buffer-size`) y los hilos de Suricata. No se ejecutaron pruebas con `tcpreplay`; queda como trabajo futuro.
 
-## 7. Límites declarados
+## 7. VNRT (31/10/2026)
+
+Los 10 escenarios se corrieron en el slice real de VNRT, una sola vez cada uno (n = 1): escaneo con primera alerta a 0,82 s y primer SYN → DROP a 0,89 s (llegaron 27 de 559 SYN), alerta → 201 de ONOS en 70 ms, 4 de 4 atacantes simultáneos bloqueados en 1,33–1,77 s, sqlmap, C2 interno y flood bloqueados con 0 descartes de Suricata, R3 con 6,1 % de SYN que pasan y R4 UDP/ICMP bloqueados a 1,49 y 1,06 s. El falso positivo del NAT también ocurre en VNRT. Detalle y comparación con Docker: [`pruebas/RESULTADOS.md`](pruebas/RESULTADOS.md).
+
+## 8. Límites declarados
 
 - Un solo atacante y un solo tipo de ataque (escaneo SYN); no se midió tasa de falsos positivos con tráfico legítimo.
 - El feed de reputación (Bloque 5) y la reconciliación periódica (Bloque 6) son diseño, no están implementados.
 - La escalada de timeouts por reincidencia (Bloque 3) es diseño; el código usa un timeout fijo de 300 s.
 - OVS en modo usuario sobre Docker/WSL2: los tiempos absolutos serían menores con el datapath del kernel.
+- VNRT: una corrida por escenario; falta n = 30 y probar R1/R2 en VNRT.

@@ -1,0 +1,16 @@
+Bloqueos activos de R5: 1
+Espejo al IDS: entrante 200 paquetes, saliente 269 paquetes
+Flujos en el Core: 7
+
+IP bloqueada  switch   prioridad  paquetes  vida  timeout             
+------------  -------  ---------  --------  ----  --------------------
+10.0.1.100    s1 Core  42000      70        53 s  300 s de inactividad
+
+Últimas alertas accionables:
+hora          origen      destino    puerto  sev  firma                                          
+------------  ----------  ---------  ------  ---  -----------------------------------------------
+03:17:41.121  10.0.1.100  10.0.0.10  80      2    LOCAL Port scan SYN                            
+03:17:19.127  10.0.0.21   10.0.1.50  8080    1    LOCAL Prueba C2 interno (cabecera X-R5-TEST-C2)
+03:17:02.947  10.0.1.13   10.0.0.10  80      1    LOCAL Herramienta de escaneo web (User-Agent)  
+03:17:02.935  10.0.1.13   10.0.0.10  80      2    ET SCAN Sqlmap SQL Injection Scan              
+03:17:02.935  10.0.1.13   10.0.0.10  80      1    LOCAL Herramienta de escaneo web (User-Agent)  

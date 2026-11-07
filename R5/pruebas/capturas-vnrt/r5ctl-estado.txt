@@ -1,0 +1,16 @@
+﻿Bloqueos activos de R5: 1
+Espejo al IDS: interno 4883 paquetes, entrante 5424 paquetes, saliente 7426 paquetes
+Flujos en el Core: 7
+
+IP bloqueada  switch            prioridad  paquetes  vida  timeout             
+------------  ----------------  ---------  --------  ----  --------------------
+10.0.0.2      s2 borde (h1,h2)  42000      11        19 s  300 s de inactividad
+
+Últimas alertas accionables:
+hora          origen    destino     puerto  sev  firma                                          
+------------  --------  ----------  ------  ---  -----------------------------------------------
+04:27:29.850  10.0.0.2  10.0.0.120  8080    1    LOCAL Prueba C2 interno (cabecera X-R5-TEST-C2)
+04:27:29.850  10.0.0.2  10.0.0.120  8080    1    LOCAL Prueba C2 interno (cabecera X-R5-TEST-C2)
+04:26:43.955  10.0.0.3  10.0.0.1    0       1    LOCAL R4 Inundacion ICMP interna               
+04:26:43.955  10.0.0.3  10.0.0.1    0       1    LOCAL R4 Inundacion ICMP interna               
+04:26:43.955  10.0.0.3  10.0.0.1    0       1    LOCAL R4 Inundacion ICMP interna               

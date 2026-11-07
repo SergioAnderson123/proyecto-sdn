@@ -26,6 +26,7 @@ R2/   Restricción de recursos: tablas de rol, fallback MAB, portal cautivo y pa
   portal_cautivo/  panel_accesos/  tests/  diagramas/
 R5/   Seguridad perimetral: Suricata + integrador hacia ONOS
   codigo/  cli/  lab/  suricata/  tests/
+  pruebas/               scripts, evidencia (JSON, capturas, pcap) y resultados de Docker y VNRT
   deploy/ids/            despliegue en la VM IDS; deploy/prioridades.yaml es el mapa único de prioridades R1/R2/R5
 docs/   entregables y documentos del curso (no son código de un requerimiento)
 ```
@@ -60,7 +61,7 @@ docker compose -f R5/lab/docker/compose.yml up -d --build
 | EveBox ([jasonish/evebox](https://github.com/jasonish/evebox), MIT) | http://localhost:5636 | Consola de alertas de Suricata |
 | Panel de escenarios | http://localhost:8080 | Narración de cada ataque |
 
-Los ataques se lanzan con `pruebas-r5/correr_escenarios.ps1`. Las métricas salen de `R5/lab/docker/monitoring/exporter.py`; el tablero se regenera con `gen_dashboard.py`.
+Los ataques se lanzan con `R5/pruebas/correr_escenarios.ps1`. Las métricas salen de `R5/lab/docker/monitoring/exporter.py`; el tablero se regenera con `gen_dashboard.py`.
 
 ## Administrar R5 desde la terminal (CLI)
 

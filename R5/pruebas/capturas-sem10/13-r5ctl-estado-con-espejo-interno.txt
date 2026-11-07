@@ -1,0 +1,16 @@
+﻿Bloqueos activos de R5: 1
+Espejo al IDS: entrante 200 paquetes, interno 2350 paquetes, saliente 269 paquetes
+Flujos en el Core: 7
+
+IP bloqueada  switch  prioridad  paquetes  vida  timeout             
+------------  ------  ---------  --------  ----  --------------------
+10.0.0.21     s3      42000      4998      20 s  300 s de inactividad
+
+Últimas alertas accionables:
+hora          origen     destino    puerto  sev  firma                           
+------------  ---------  ---------  ------  ---  --------------------------------
+03:24:36.340  10.0.0.21  10.0.0.10  None    1    LOCAL R4 Inundacion ICMP interna
+03:24:36.340  10.0.0.21  10.0.0.10  None    1    LOCAL R4 Inundacion ICMP interna
+03:24:36.339  10.0.0.21  10.0.0.10  None    1    LOCAL R4 Inundacion ICMP interna
+03:24:36.339  10.0.0.21  10.0.0.10  None    1    LOCAL R4 Inundacion ICMP interna
+03:24:36.339  10.0.0.21  10.0.0.10  None    1    LOCAL R4 Inundacion ICMP interna
