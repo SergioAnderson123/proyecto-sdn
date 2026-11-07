@@ -1,0 +1,11 @@
+services:
+  policy_mapper:
+    command: ["hypercorn", "policy_mapper:app", "--bind", "0.0.0.0:5000", "--workers", "1", "--access-logfile", "-"]
+    networks:
+      sdn:
+        aliases:
+          - policy-mapper
+  onos:
+    environment:
+      MAB_MAPPER_URL: "http://policy-mapper:5000/api/mab-request"
+      R2_MAB_URL: "http://r2-mab-vm:5001"

@@ -12,6 +12,7 @@ from fastapi import FastAPI, Header, HTTPException
 import httpx
 from pydantic import BaseModel, Field
 import uvicorn
+from fastapi.responses import JSONResponse
 
 import eventos
 import policy_tables
@@ -26,7 +27,7 @@ ONOS_PORT = os.getenv("ONOS_PORT", "8181")
 ONOS_BASE_URL = f"http://{ONOS_HOST}:{ONOS_PORT}/onos/v1"
 ONOS_AAA_URL = f"http://{ONOS_HOST}:{ONOS_PORT}/onos/aaa/app/users"
 ONOS_AUTH = ("onos", "rocks")
-
+R2_MAB_URL = os.getenv("R2_MAB_URL", "http://r2-mab-vm:5001").rstrip("/")
 
 # -----------------------------------------------------------------------------
 # R2: TABLAS DE ROL (qué recursos alcanza cada rol) a partir de policy.yaml
@@ -686,6 +687,109 @@ async def logout_webhook(payload: RadiusPayload):
         f"\n[LOGOUT] Se recibió Stop para {identidad_onos}, pero no había sesión activa en memoria."
     )
     return {"status": "user_not_found"}
+
+
+import ldap3
+
+class MabRequest(BaseModel):
+    mac: str
+    deviceId: str
+    port: str
+
+@app.post("/api/mab-request")
+async def mab_request(datos: MabRequest):
+    mac = datos.mac.lower().strip()
+    dpid = datos.deviceId
+    port = str(datos.port)
+
+    try:
+        servidor = ldap3.Server("ldap", port=389, connect_timeout=5)
+        conexion = ldap3.Connection(
+            servidor,
+            user="cn=admin,dc=example,dc=org",
+            password="admin",
+            auto_bind=True,
+            receive_timeout=5,
+        )
+        try:
+            encontrado = conexion.search(
+                "ou=devices,dc=example,dc=org",
+                "(objectClass=inetOrgPerson)",
+                attributes=["uid", "description"],
+            )
+            if not encontrado and conexion.result.get("result") != 0:
+                raise RuntimeError(f"Consulta LDAP falló: {conexion.result}")
+            identidad = next(
+                (
+                    str(registro.uid)
+                    for registro in conexion.entries
+                    if str(registro.description).lower().strip() == mac
+                ),
+                None,
+            )
+        finally:
+            conexion.unbind()
+    except Exception as exc:
+        print(f"[MAB] LDAP no disponible: {exc}")
+        raise HTTPException(status_code=503, detail="Consulta LDAP fallida")
+
+    if identidad is None:
+        print(f"[MAB] MAC no registrada; delegando a R2 MAB VM: {mac}")
+        try:
+            async with httpx.AsyncClient(timeout=8) as cliente:
+                respuesta = await cliente.post(
+                    f"{R2_MAB_URL}/api/mab-request",
+                    json={
+                        "mac": mac,
+                        "deviceId": dpid,
+                        "port": port,
+                    },
+                )
+
+            return JSONResponse(
+                status_code=respuesta.status_code,
+                content=respuesta.json(),
+            )
+
+        except httpx.RequestError as exc:
+            print(f"[MAB] R2 MAB VM no disponible: {exc}")
+            raise HTTPException(
+                status_code=503,
+                detail="R2 MAB VM no disponible",
+            )
+
+    if session_store.is_spoofing(mac, dpid, port):
+        print(f"[MAB] Conflicto de ubicación para {mac} en {dpid}:{port}")
+        raise HTTPException(status_code=409, detail="MAC activa en otro puerto")
+
+    sesion = session_store.get_by_mac(mac)
+    if sesion is not None:
+        if sesion.rol != "IoT" or sesion.vlan != 30:
+            raise HTTPException(status_code=409, detail="MAC ya tiene una sesión de otro rol")
+        return {
+            "status": "FOUND", "mac": mac, "deviceId": dpid,
+            "port": port, "identity": identidad, "vlan": 30,
+            "session": "EXISTING", "flow_id": sesion.flow_id,
+        }
+
+    # Solo dispositivos IoT registrados en LDAP pueden obtener VLAN 30.
+    flow_id = await inyectar_flujo_tabla_0(dpid, port, mac, 30)
+    if flow_id is None:
+        raise HTTPException(status_code=502, detail="ONOS no confirmó el flujo VLAN 30")
+
+    session_store.register_session(
+        ActiveSession(
+            username=identidad, mac=mac, dpid=dpid, port=port,
+            vlan=30, rol="IoT", flow_id=flow_id,
+        )
+    )
+    print(f"[MAB] Autorizado IoT {mac} en VLAN 30; flujo={flow_id}")
+    return {
+        "status": "FOUND", "mac": mac, "deviceId": dpid,
+        "port": port, "identity": identidad, "vlan": 30,
+        "flow_id": flow_id,
+    }
+
 
 
 if __name__ == "__main__":
