@@ -328,9 +328,13 @@ async def candidatos_onos(username_externo: str) -> List[dict]:
 
   for sesion in reversed(sesiones_aaa):
     if isinstance(sesion, dict) and sesion.get("username") == username_externo:
-      subscriber_id = sesion.get("subscriberId", "")
+      # La ubicación real la da `connectPoint` ("of:<dpid>/<puerto>"): es donde ONOS recibió el EAPOL. El
+      # `subscriberId` es lo que respondió SADIS, y SADIS solo recibe el NOMBRE del puerto ("ens5", "s1-eth2"), que en
+      # una red con switches reales se repite entre switches; por eso solo se usa si ONOS no entrega `connectPoint`.
+      punto = str(sesion.get("connectPoint", "") or "")
+      subscriber_id = punto if "/" in punto else sesion.get("subscriberId", "")
       port = subscriber_id.split("/")[-1] if "/" in subscriber_id else "1"
-      dpid = subscriber_id.split("/")[0] if "/" in subscriber_id else "of:0000000000000001"
+      dpid = subscriber_id.rsplit("/", 1)[0] if "/" in subscriber_id else "of:0000000000000001"
       mac_onos = sesion.get("macAddress", "").strip().lower()
       estado = str(sesion.get("state", sesion.get("authState", ""))).upper()
 
@@ -566,7 +570,8 @@ async def _procesar_webhook(identidad_ldap: str, mac_esperada: str, mac_fisica: 
     ) or session_store.get_by_mac(mac_fisica)
 
     if sesion_activa:
-        if sesion_activa.dpid == dpid and str(sesion_activa.port) == str(port) and sesion_activa.mac == mac_fisica:
+        if (sesion_activa.dpid == dpid and str(sesion_activa.port) == str(port) and sesion_activa.mac == mac_fisica
+                and sesion_activa.username.lower() == identidad_ldap.lower()):
             # Es la MISMA sesión que ya está instalada (reintento o segunda llamada de la misma negociación que
             # ya ganó la resolución de ambigüedad), no un conflicto nuevo: se confirma sin volver a bloquear nada.
             print(f"  [=] {identidad_ldap} ya tiene esta misma sesión activa en {dpid}:{port}; se confirma sin reprocesar")

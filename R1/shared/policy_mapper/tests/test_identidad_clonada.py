@@ -80,6 +80,31 @@ def test_otros_usuarios_no_se_mezclan(monkeypatch):
     assert len(candidatos) == 1 and candidatos[0]["port"] == "2"
 
 
+# ---------- ubicación real: connectPoint (VNRT: SADIS solo ve el nombre del puerto, "ens5", repetido entre switches) ----------
+
+SW2 = "of:00001a749039894a"
+
+
+def test_usa_el_connect_point_y_no_el_subscriber_id_inventado_por_sadis(monkeypatch):
+    # Formato real de ONOS 2.7 (/onos/aaa/app/users): "entries", "authState", "connectPoint"
+    async def get_falso(self, url, auth=None, timeout=None):
+        return _RespuestaFalsa({"entries": [{
+            "connectPoint": f"{SW2}/2", "authState": "AUTHORIZED_STATE", "macAddress": "FA:16:3E:6B:69:BB",
+            "subscriberId": "of:0000000000000en5/1", "username": USUARIO}]})
+    monkeypatch.setattr(pm.httpx.AsyncClient, "get", get_falso)
+    pm._cache_aaa_tabla = None
+    pm._cache_aaa_hasta = 0.0
+    candidatos = asyncio.run(pm.candidatos_onos(USUARIO))
+    assert candidatos == [{"dpid": SW2, "port": "2", "mac_onos": "fa:16:3e:6b:69:bb",
+                           "username_onos": USUARIO, "state": "AUTHORIZED_STATE"}]
+
+
+def test_sin_connect_point_se_sigue_usando_el_subscriber_id(monkeypatch):
+    _onos_con([_entrada(f"{DPID}/3")], monkeypatch)
+    candidatos = asyncio.run(pm.candidatos_onos(USUARIO))
+    assert candidatos[0]["dpid"] == DPID and candidatos[0]["port"] == "3"
+
+
 # ---------- el webhook completo: admite al que coincide con LDAP, rechaza a los demás por su cuenta ----------
 
 HEADERS = {"X-Rol-LDAP": "docente", "X-MAC-LDAP": MAC, "X-DPID-LDAP": DPID, "X-Port-LDAP": "1"}
@@ -170,3 +195,13 @@ def test_una_mac_distinta_en_otro_puerto_sigue_siendo_conflicto_real(monkeypatch
     _onos_con([_entrada(f"{DPID}/3", estado="UNAUTHORIZED_STATE")], monkeypatch)   # ahora solo aparece el puerto 3
     r2 = cli.post("/webhook", json=_cuerpo(), headers=HEADERS)
     assert r2.status_code == 409 and bloqueados == [(DPID, "3", MAC, 600)]
+
+
+def test_otra_identidad_con_la_misma_mac_y_puerto_no_se_confirma_como_sesion_propia(monkeypatch, cliente):
+    from session_manager import ActiveSession
+    http, bloqueados = cliente
+    _onos_con([_entrada(f"{DPID}/1", username="otro@example.org")], monkeypatch)
+    session_store.register_session(ActiveSession(username=USUARIO, mac=MAC, dpid=DPID, port="1", vlan=10, rol="Docente"))
+    r = http.post("/webhook", json=_cuerpo("otro@example.org"), headers=HEADERS)
+    assert r.status_code == 409
+    assert bloqueados
