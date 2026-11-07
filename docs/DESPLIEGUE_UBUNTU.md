@@ -62,6 +62,24 @@ El portal cautivo (`R2/portal_cautivo/`) y el panel (`R2/panel_accesos/`) están
 
 ## 2. Switches (sw1..sw3)
 
+### Opción A: con Ansible (recomendada)
+
+El playbook está en `R1/deploy/switches/`. Se lanza desde el Controller o desde tu PC, con acceso SSH a los switches:
+
+```bash
+sudo apt-get install -y ansible
+cd R1/deploy/switches
+cp inventory.ini.example inventory.ini
+nano inventory.ini        # ansible_host/ansible_port y bridge de cada switch; controller_ip = IP del Controller vista desde los switches
+ansible -i inventory.ini switches -m ping
+ansible-playbook -i inventory.ini switches.yml                 # aplicar
+ansible-playbook -i inventory.ini switches.yml -e reset=true   # además borra los flujos anteriores
+```
+
+El playbook instala Open vSwitch si falta, pone fail-mode `secure` y `OpenFlow13`, apunta cada bridge a `tcp:<controller_ip>:6653` y espera a que el switch quede conectado (`is_connected=true`). Comprueba el nombre del bridge de cada switch con `sudo ovs-vsctl list-br`. `inventory.ini` no se versiona.
+
+### Opción B: a mano, en cada switch
+
 ```bash
 sudo ovs-vsctl set-fail-mode <br> secure
 sudo ovs-vsctl set bridge <br> protocols=OpenFlow13

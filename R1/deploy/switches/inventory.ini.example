@@ -1,0 +1,12 @@
+# Copiar a inventory.ini y ajustar. En VNRT los switches se alcanzan por el puerto redirigido de la IP publica.
+# `bridge` es el nombre del bridge OVS en cada switch (en VNRT coincide con el nombre del host: sw1, sw2, sw3).
+[switches]
+sw1 ansible_host=10.20.12.170 ansible_port=5801 bridge=sw1
+sw2 ansible_host=10.20.12.170 ansible_port=5802 bridge=sw2
+sw3 ansible_host=10.20.12.170 ansible_port=5803 bridge=sw3
+
+[switches:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=~/.ssh/id_rsa
+controller_ip=192.168.0.10      # IP de la VM Controller alcanzable DESDE los switches (red de gestion)
+controller_port=6653
