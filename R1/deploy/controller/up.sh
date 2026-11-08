@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 [ -f ../.env ] && { set -a; . ../.env; set +a; }
 docker compose up -d --build
-./init-onos.sh
+bash init-onos.sh
 echo
 echo "Contenedores:"; docker compose ps --format 'table {{.Name}}\t{{.Status}}'
 echo

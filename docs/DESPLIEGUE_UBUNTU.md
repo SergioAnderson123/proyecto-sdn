@@ -13,12 +13,27 @@ Topología de referencia: h1 y h2 cuelgan de sw2; h3 y h4, de sw3; sw1 es el cor
 
 ## 1. Preparar el Controller (una vez)
 
+Trabaja siempre con el **mismo usuario** (recomendado: `ubuntu`, no `root`): la configuración de `slice.py` (`~/slice.json`) y la llave SSH se guardan en la home del usuario que lo ejecuta, y los archivos que crean los scripts quedan a su nombre.
+
 ```bash
 sudo apt-get update && sudo apt-get install -y git curl wget ca-certificates
-curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker "$USER" && newgrp docker
-git clone <URL-del-repo> ~/proyecto-sdn && cd ~/proyecto-sdn/R1/deploy
+curl -fsSL https://get.docker.com | sudo sh                 # Docker Engine + plugin compose v2
+sudo systemctl enable --now docker                          # arranca el demonio (y en cada reinicio)
+sudo usermod -aG docker "$USER" && newgrp docker            # tu usuario puede usar Docker sin sudo
+docker ps                                                   # debe responder sin error (aunque la lista esté vacía)
+git clone <URL-del-repo> /home/ubuntu/proyecto-sdn          # en la home de ubuntu, no en /root
+sudo chown -R "$USER":"$USER" /home/ubuntu/proyecto-sdn     # el dueño correcto evita "Permission denied" al crear archivos
+cd /home/ubuntu/proyecto-sdn
+chmod +x R1/deploy/controller/*.sh R5/deploy/ids/up.sh      # los .sh pueden llegar sin permiso de ejecución (clonado desde Windows)
+cd R1/deploy && python3 slice.py
 ```
+Si `docker ps` dice `permission denied ... docker.sock`, tu usuario aún no está en el grupo `docker`: cierra la sesión SSH y vuelve a entrar (o usa `newgrp docker`). Si dice `Cannot connect to the Docker daemon`, el demonio no está iniciado: `sudo systemctl enable --now docker` y vuelve a probar con `docker ps`; si falta el comando, repite la instalación.
+
+Antes de levantar nada, comprueba el **espacio en disco**: las imágenes de Docker (ONOS ~1,2 GB, más FreeRADIUS, OpenLDAP y el Policy Mapper) piden **al menos 3 GB libres** (`df -h /`). Para liberar: `sudo apt-get clean && sudo apt-get autoremove -y --purge`, `sudo journalctl --vacuum-size=20M`, y `docker system prune -af --volumes` si hay imágenes viejas.
+
 ONOS necesita ~1-2 GB de RAM: no lo pongas junto al IDS en una VM de 2 vCPU / 2 GB. El Controller necesita internet (SADIS y AAA salen de Maven Central, y las imágenes de Docker).
+
+Si ya habías desplegado antes en esa VM y quieres empezar de cero: `docker rm -f $(docker ps -aq)` borra todos los contenedores, `docker system prune -af --volumes` borra además las imágenes y los volúmenes sin uso (se vuelven a descargar), y `docker network rm sdn` quita la red del proyecto.
 
 ## 2. Desplegar y validar (lo normal)
 
@@ -129,8 +144,12 @@ python3 -m pytest R1/shared/policy_mapper/tests R2/policy/tests R2/portal_cautiv
 
 | Síntoma | Causa | Solución |
 |---|---|---|
-| `Permission denied` al lanzar un `.sh` | El archivo perdió el bit de ejecución al clonar desde Windows | `bash <script>` o `chmod +x` |
-| `Cannot connect to the Docker daemon` | Docker no está instalado o parado | `sudo systemctl enable --now docker` (o repetir la sección 1) |
+| `Permission denied` al lanzar un `.sh` (`up.sh`, `init-onos.sh`) | El archivo perdió el bit de ejecución al clonar desde Windows, o el repo es de otro usuario (clonado como `root`) | `chmod +x R1/deploy/controller/*.sh R5/deploy/ids/up.sh` y `sudo chown -R $USER:$USER /home/ubuntu/proyecto-sdn` |
+| `permission denied ... /var/run/docker.sock` | Tu usuario no está en el grupo `docker` | `sudo usermod -aG docker $USER && newgrp docker` (o cerrar sesión y volver a entrar) |
+| `Cannot connect to the Docker daemon. Is the docker daemon running?` | Docker no está instalado o el demonio no está iniciado | `sudo systemctl enable --now docker`; comprobar con `docker ps` (si falta el comando, repetir la sección 1) |
+| `no space left on device` al levantar | Poco disco para las imágenes de Docker | Liberar espacio (sección 1) y repetir `python3 slice.py controller` |
+| `git pull` aborta: "Your local changes ... would be overwritten" | Editaste a mano un archivo versionado (p. ej. un `inventory.ini.example`) | `git stash && git pull` (el asistente genera los inventarios por su cuenta, no hace falta editarlos) |
+| `slice.py` vuelve a pedir los datos | Cambiaste de usuario (`root` ↔ `ubuntu`): `~/slice.json` es de cada uno | Trabajar siempre con el mismo usuario |
 | ONOS solo tiene `drivers` y `gui2` | `init-onos.sh` no llegó a ejecutarse | `python3 slice.py controller` lo repite si faltan apps |
 | `no such identity` / `Permission denied (publickey)` en Ansible | No se copió la llave | `python3 slice.py preparar` |
 | Los switches muestran "controladores" como `los`, `de`, `DESDE` | Comentario al final de `controller_ip` en un inventario INI (el `#` pasa a formar parte del valor) | Usa `python3 slice.py switches`, que genera el inventario; no escribas comentarios al final de una variable |
