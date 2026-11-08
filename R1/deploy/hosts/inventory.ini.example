@@ -10,5 +10,5 @@ h4 ansible_host=10.20.12.78 ansible_port=5814 iface=ens4 conf=wpa_support_01.con
 
 [hosts:vars]
 ansible_user=ubuntu
-ansible_ssh_private_key_file=/root/.ssh/id_ed25519
+ansible_ssh_private_key_file=~/.ssh/id_ed25519
 ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new

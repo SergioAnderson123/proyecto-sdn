@@ -7,7 +7,7 @@ sw3 ansible_host=10.20.12.170 ansible_port=5803 bridge=sw3
 
 [switches:vars]
 ansible_user=ubuntu
-ansible_ssh_private_key_file=~/.ssh/id_rsa
+ansible_ssh_private_key_file=~/.ssh/id_ed25519
 # IP de la VM Controller alcanzable DESDE los switches (red de gestion).
 # No escribir comentarios al final de una variable: en INI de Ansible pasan a formar parte del valor.
 controller_ip=192.168.0.10

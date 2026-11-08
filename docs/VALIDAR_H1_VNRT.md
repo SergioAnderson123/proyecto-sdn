@@ -154,6 +154,6 @@ Usuarios y roles del LDAP de pruebas: `profesor01/02` (VLAN 10), `alumno01/02/03
 El LDIF del repo ahora lleva los valores de VNRT para `profesor01`. Para el laboratorio de Mininet (`R1/compose.yml`, h1 con `00:00:00:00:00:11` en `of:0000000000000001`, puerto 1) hay que volver a poner esos tres valores en su bloque del LDIF.
 
 ## 8. Limitaciones y pendientes
-- Probado solo con h1 y `profesor01`; h2 a h4 no se han validado con este procedimiento.
+- Validado con los cuatro hosts (h1 a h4) con el playbook y `ldap-ubicacion.sh`: sesiones en VLAN 10, 20, 20 y 40, en sw2 (h1, h2) y sw3 (h3, h4).
 - Las tablas de rol de R2 usan los servicios `10.0.0.40/50/60` y `trusted` con los dpid de Mininet (`policy.yaml`). Para que el tráfico de un host autenticado salga de verdad hacen falta los dpid reales de sw1 y sw2, el puerto troncal marcado como de confianza y los servicios en hosts reales de VNRT.
 - El reescrito de EAPOL con `tc` es solo del entorno VNRT; pedir al personal de VNRT que permita `01:80:c2:00:00:03` lo haría innecesario.

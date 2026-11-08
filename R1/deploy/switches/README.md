@@ -4,7 +4,7 @@ Equivale a los `ovs-vsctl` manuales de `R1/deploy/README.md`, para sw1..sw3.
 
 ```bash
 sudo apt-get install -y ansible          # en la maquina desde la que lanzas el playbook (Controller o tu PC)
-cp inventory.ini.example inventory.ini   # ajustar IP/puertos, bridge y controller_ip
+cp inventory.ini.example inventory.ini   # ajustar IP/puertos, bridge y controller_ip (la llave por defecto es ~/.ssh/id_ed25519)
 ansible -i inventory.ini switches -m ping
 ansible-playbook -i inventory.ini switches.yml --ask-become-pass   # --ask-become-pass si sudo pide contraseña
 ```
