@@ -67,8 +67,8 @@ Para repetir la prueba desde cero: `python3 slice.py limpiar` y luego `python3 s
 | `preparar` | Instala Ansible, crea `~/.ssh/id_ed25519` y la copia con `ssh-copy-id` a cada switch y host |
 | `controller` | Rellena `R1/deploy/.env`, quita contenedores de otro despliegue con el mismo nombre, ejecuta `controller/up.sh` (ONOS, LDAP, Policy Mapper, RADIUS e `init-onos.sh`) y comprueba que las 7 apps de ONOS estén `ACTIVE`; si falta alguna, repite `init-onos.sh` |
 | `switches` | Genera el inventario y lanza el playbook `R1/deploy/switches/switches.yml`: instala Open vSwitch si falta, fail-mode `secure`, `OpenFlow13` y controlador `tcp:<CONTROLLER_IP>:6653`, y espera a que cada switch conecte |
-| `hosts` | Genera el inventario y lanza `R1/deploy/hosts/hosts.yml`: instala `wpasupplicant`, copia la CA, el certificado y el `.conf` del usuario, y deja los servicios `r1-eapol-bcast` y `r1-supplicant`. No arranca el suplicante |
-| `alta` | (1) Libera en LDAP la MAC, el switch y el puerto de los usuarios; (2) arranca los suplicantes; (3) espera a que ONOS vea las autenticaciones y **fija en LDAP lo que ONOS vio**; (4) los reautentica ya con la comprobación de MAC y ubicación activa |
+| `hosts` | Genera el inventario y lanza `R1/deploy/hosts/hosts.yml`: instala `wpasupplicant`, copia la CA y los certificados y `.conf` de **todos** los usuarios (para poder elegir identidad), y deja los servicios `r1-eapol-bcast` y `r1-agente` (el agente 802.1X con interfaz web, sección 3c). El agente queda **habilitado** (arranca con el host) pero este paso no lo arranca |
+| `alta` | (1) Libera en LDAP la MAC, el switch y el puerto de los usuarios; (2) arranca el agente de cada host, que se autentica solo con la identidad asignada; (3) espera a que ONOS vea las autenticaciones y **fija en LDAP lo que ONOS vio**; (4) los reautentica ya con la comprobación de MAC y ubicación activa |
 | `estado` / `limpiar` | Resumen del estado / borra sesiones y flujos de R2 (sin tocar los flujos base de ONOS) y reinstala las tablas de rol |
 
 Dos detalles de `alta`:
@@ -100,6 +100,27 @@ docker logs radius 2>&1 | grep -i "profesor01"                         # solo un
 Qué buscar: `Sent Access-Accept` o `Sent Access-Reject` (el resultado), `ERROR` con `TLS` (problemas de certificado) y las llamadas a `rest` (Policy Mapper) y `ldap`.
 
 Si `docker logs` dice `permission denied`, tu usuario no está en el grupo `docker` (sección 1); si dice `No such container`, el servicio aún no está arriba: `docker ps -a`.
+
+## 3c. Agente 802.1X con interfaz web (cómo se vería en una PC)
+
+En una PC real el suplicante lo lanza el sistema, no una persona: en Windows el servicio *Configuración automática de redes cableadas* y en Linux NetworkManager o `wpa_supplicant`, que autentican cuando el enlace sube (se conecta el cable) y, según el perfil, al arrancar o al iniciar sesión el usuario. El certificado no va en variables de entorno, sino en el almacén de certificados (Windows) o en el perfil de conexión (Linux).
+
+En los hosts de VNRT eso lo hace el **agente** (`R1/agente_802_1x/agente.py`, servicio `r1-agente`), instalado por `python3 slice.py hosts`:
+- **Arranque automático:** al arrancar el host (o al repetir `alta`), el agente se autentica solo con la identidad que asignaste a ese host en `slice.py`. Si la interfaz baja y sube (`sudo ip link set <iface> down && sudo ip link set <iface> up`), `wpa_supplicant` vuelve a autenticar.
+- **Interfaz web:** una página (identidad, Conectar y Desconectar, estado, VLAN, rol, switch y puerto, y el registro del suplicante) en el puerto 8080 del propio host, solo en `127.0.0.1`. Se ve desde tu PC con un túnel SSH; `python3 slice.py interfaz` imprime el de cada host (h1 en el puerto local 8081, h2 en el 8082...):
+  ```bash
+  ssh -L 8081:127.0.0.1:8080 -p <puerto-de-h1> ubuntu@<IP_PUBLICA>      # y abrir http://localhost:8081
+  ```
+- **Una sola instancia:** el agente es quien lanza `wpa_supplicant`, siempre uno a la vez (dos instancias cruzan el EAP). Si el suplicante se cae, lo vuelve a lanzar.
+- **Estado:** lo lee con `wpa_cli`; el rol, la VLAN, el switch y el puerto los consulta al Policy Mapper (`http://<CONTROLLER_IP>:5000/sessions`), y el motivo de un rechazo, a `/events`.
+
+**Guion de demo**
+1. `python3 slice.py alta` y abre la página de h1: *Autenticado, Docente, VLAN 10, sw2*.
+2. Baja y sube la interfaz de h1: se reautentica sola (la página pasa por *Autenticando* y vuelve a *Autenticado*).
+3. En la página de h1 elige `alumno01` y pulsa *Conectar*: el Policy Mapper lo **rechaza** (*MAC registrada distinta de la física*), porque cada identidad está atada a la MAC y al puerto de su equipo (*device binding*). Ese rechazo deja la MAC de h1 en lista negra **300 s**: durante ese tiempo h1 no podrá autenticarse ni con su identidad. Vuelve a elegir `profesor01` pasado ese tiempo, o ejecuta `python3 slice.py limpiar`.
+4. *Desconectar* equivale a quitar el cable: el suplicante envía el *logoff* y la sesión desaparece del Policy Mapper.
+
+**Qué no es idéntico a una PC real:** la interfaz es una página web, no una ventana del sistema (un escritorio real, como XFCE con RDP, cabe en disco: 139 MB el mínimo y 1,5 GB el completo, medido en h1; pero la RAM de h1, 448 MB disponibles, y su único vCPU no alcanzan: ver docs/Consideraciones_VM_VNRT.pptx); y el EAPOL sigue necesitando el `tc` de `r1-eapol-bcast`, que es una limitación de la red virtual de VNRT.
 
 ## 4. VM IDS (R5)
 
@@ -150,7 +171,7 @@ El portal cautivo (`R2/portal_cautivo/`) y el panel (`R2/panel_accesos/`) están
 ```bash
 cd ~/proyecto-sdn/R1/deploy/controller && docker compose down
 ```
-Para dejar un host sin nada: `ssh -p <puerto> ubuntu@<IP_PUBLICA> 'sudo systemctl disable --now r1-supplicant r1-eapol-bcast; sudo rm -f /etc/systemd/system/r1-*.service /usr/local/sbin/r1-eapol-bcast.sh; sudo systemctl daemon-reload; sudo tc qdisc del dev <iface> clsact; rm -rf ~/supp'`. No uses `ovs-ofctl del-flows` para limpiar flujos de ONOS: los reinstalaría o quedaría desincronizado.
+Para dejar un host sin nada: `ssh -p <puerto> ubuntu@<IP_PUBLICA> 'sudo systemctl disable --now r1-agente r1-eapol-bcast; sudo rm -f /etc/systemd/system/r1-*.service /usr/local/sbin/r1-eapol-bcast.sh; sudo systemctl daemon-reload; sudo tc qdisc del dev <iface> clsact; rm -rf ~/supp'`. No uses `ovs-ofctl del-flows` para limpiar flujos de ONOS: los reinstalaría o quedaría desincronizado.
 
 ## 9. Laboratorio de una sola máquina (Mininet, sin VM de switches)
 
@@ -163,7 +184,7 @@ Mininet usa los datos del LDIF original (h1 con `00:00:00:00:00:11` en `of:00000
 
 ```bash
 pip install -r R1/policy_mapper/requirements.txt pytest requests
-python3 -m pytest R1/shared/policy_mapper/tests R2/policy/tests R2/portal_cautivo/tests R2/mab_vm/test_mab_vm.py R5/tests R5/deploy/tests R1/deploy/test_slice.py -q
+python3 -m pytest R1/shared/policy_mapper/tests R2/policy/tests R2/portal_cautivo/tests R2/mab_vm/test_mab_vm.py R5/tests R5/deploy/tests R1/deploy/test_slice.py R1/agente_802_1x/test_agente.py -q
 ```
 
 ## 10. Problemas conocidos
@@ -183,7 +204,7 @@ python3 -m pytest R1/shared/policy_mapper/tests R2/policy/tests R2/portal_cautiv
 | `EAP-FAILURE` con `bad signature` | Varias instancias de `wpa_supplicant` a la vez | `sudo pkill wpa_supplicant` en el host y repetir `alta`; con la CA caducada también falla (sección 6) |
 | Rechazo "MAC no coincide" / "Puerto físico no asignado" (la MAC queda 300 s en lista negra) | LDAP no coincide con lo que ve ONOS | `python3 slice.py alta` (libera, aprende y fija) |
 | Flujo instalado en `of:0000000000000en5` | Versión vieja del Policy Mapper, que dedujo la ubicación del nombre del puerto | `git pull` y `docker restart policy_mapper` (ya usa `connectPoint`) |
-| `/sessions` vacío justo tras arrancar | El suplicante reintenta cada ~30 s | Esperar; luego `journalctl -u r1-supplicant` en el host y `docker logs policy_mapper` |
+| `/sessions` vacío justo tras arrancar | El suplicante reintenta cada ~30 s | Esperar; luego mirar la interfaz web del host (sección 3c), `journalctl -u r1-agente` y `docker logs policy_mapper` |
 | `tc` falla al instalar el filtro del host | Faltan `cls_flower` / `act_pedit` | `sudo apt-get install -y linux-modules-extra-$(uname -r)` en ese host |
 
 Otros avisos:
@@ -197,3 +218,4 @@ Otros avisos:
 
 - **Validado en el slice original, a mano y con el playbook y `ldap-ubicacion.sh`:** `profesor01` (VLAN 10) y `alumno01` (VLAN 20) en sw2; `alumno02` (VLAN 20) y `support01` (VLAN 40) en sw3.
 - **Sin probar todavía:** `slice.py` (solo con 7 pruebas unitarias en `R1/deploy/test_slice.py`: inventarios, tabla de usuarios y el asistente con respuestas simuladas; no se ha ejecutado contra las VM), los certificados regenerados contra FreeRADIUS real (se comprobó que las cadenas, las claves y los usos son correctos, pero no un EAP-TLS completo), esta guía en un slice limpio, las tablas de R2 con tráfico real y el IDS con este compose.
+- **Agente 802.1X (sección 3c):** probado solo con pruebas unitarias (`R1/agente_802_1x/test_agente.py`, 21 pruebas con un `wpa_supplicant` simulado y un servidor HTTP real en local) y viendo la página con datos simulados en un navegador. **No se ha ejecutado en un host de VNRT.** Lo que más depende de la VM real: que `wpa_cli status` devuelva `suppPortStatus` en el modo con cable, que el host alcance el Policy Mapper en el puerto 5000 de la red de gestión y que el EAPOL pase con el `tc`.

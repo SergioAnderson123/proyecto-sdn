@@ -6,9 +6,10 @@
     python3 slice.py preparar     instala Ansible y copia tu llave SSH a switches y hosts
     python3 slice.py controller   levanta ONOS, LDAP, Policy Mapper y RADIUS y comprueba las apps de ONOS
     python3 slice.py switches     conecta los switches al controlador (Ansible)
-    python3 slice.py hosts        prepara los hosts como suplicantes 802.1X (Ansible); no los arranca
+    python3 slice.py hosts        instala en los hosts el agente 802.1X con interfaz web (Ansible); no los arranca
     python3 slice.py alta         autentica los hosts y fija en LDAP la MAC, el switch y el puerto de cada usuario
     python3 slice.py estado       muestra apps, switches, sesiones, flujos y LDAP
+    python3 slice.py interfaz     muestra los tuneles SSH para abrir la interfaz web de cada host
     python3 slice.py limpiar      borra sesiones y flujos para repetir la prueba
     python3 slice.py todo         controller + switches + hosts + alta
 
@@ -218,8 +219,24 @@ def inventario_hosts(cfg):
         lineas.append(f"{h['nombre']} ansible_host={cfg['ip_publica']} ansible_port={h['puerto']} iface={cfg['iface']} "
                       f"conf={USUARIOS[h['usuario']]['conf']} cert={h['usuario']}@example.org.pem")
     lineas += ["", "[hosts:vars]", "ansible_user=ubuntu", "ansible_ssh_private_key_file=~/.ssh/id_ed25519",
-               "ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new", ""]
+               "ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new", f"controller_ip={cfg['controller_ip']}", ""]
     return "\n".join(lineas)
+
+
+def comandos_tunel(cfg):
+    """Un tunel SSH por host para abrir su agente 802.1X en el navegador: h1 en el puerto local 8081, h2 en el 8082..."""
+    return [(h["nombre"], 8080 + i, f"ssh -L {8080 + i}:127.0.0.1:8080 -p {h['puerto']} ubuntu@{cfg['ip_publica']}")
+            for i, h in enumerate(cfg["hosts"], 1)]
+
+
+def interfaz():
+    cfg = config_o_salir()
+    titulo("Interfaz web del agente 802.1X de cada host")
+    print("Cada host tiene una pagina de autenticacion (como el dialogo de red de una PC) en su puerto 8080 local.")
+    print("Para verla desde tu PC abre un tunel SSH y luego el navegador:\n")
+    for h, (nombre, local, cmd) in zip(cfg["hosts"], comandos_tunel(cfg)):
+        print(f"  {nombre} ({h['usuario']}):  {cmd}\n      -> http://localhost:{local}")
+    print("\nSe autentican solas al arrancar el host con la identidad asignada; desde la pagina puedes elegir otra.")
 
 
 _become_file = None
@@ -324,6 +341,7 @@ def hosts():
     archivo_sudo()
     ejecutar(["ansible", "-i", "inventory.ini", "hosts", "-m", "ping"], cwd=carpeta)
     playbook_hosts()
+    interfaz()
 
 
 def esperar_sesiones(n, maximo=120):
@@ -371,6 +389,7 @@ def alta():
     playbook_hosts("-e", "arrancar=true")
     esperar_sesiones(n)
     estado()
+    interfaz()
 
 
 def estado():
@@ -427,6 +446,7 @@ PASOS = {
     "hosts": ("Preparar los hosts como suplicantes", hosts),
     "alta": ("Autenticar los hosts y fijar su ubicacion en LDAP", alta),
     "estado": ("Ver el estado (apps, switches, sesiones, flujos, LDAP)", estado),
+    "interfaz": ("Ver como abrir la interfaz web de cada host (tuneles SSH)", interfaz),
     "limpiar": ("Borrar sesiones y flujos para repetir la prueba", limpiar),
     "todo": ("Todo: controller + switches + hosts + alta", todo),
 }

@@ -44,7 +44,23 @@ def test_inventario_de_hosts():
     inv = sd.inventario_hosts(CFG)
     assert "h1 ansible_host=1.2.3.4 ansible_port=7001 iface=ens9 conf=wpa_profe_01.conf cert=profesor01@example.org.pem" in inv
     assert "h2 ansible_host=1.2.3.4 ansible_port=7002 iface=ens9 conf=wpa_support_01.conf cert=support01@example.org.pem" in inv
+    assert "controller_ip=9.9.9.9" in inv    # el agente de cada host consulta al Policy Mapper del Controller
     assert "#" not in inv
+
+
+def test_tuneles_a_la_interfaz_web_de_cada_host():
+    assert sd.comandos_tunel(CFG) == [
+        ("h1", 8081, "ssh -L 8081:127.0.0.1:8080 -p 7001 ubuntu@1.2.3.4"),
+        ("h2", 8082, "ssh -L 8082:127.0.0.1:8080 -p 7002 ubuntu@1.2.3.4")]
+
+
+def test_el_playbook_de_hosts_instala_el_agente_y_no_deja_dos_suplicantes():
+    import yaml
+    play = yaml.safe_load((AQUI / "hosts" / "hosts.yml").read_text())[0]
+    nombres = " ".join(t["name"] for t in play["tasks"])
+    assert "agente" in nombres and "Quitar el servicio r1-supplicant" in nombres
+    assert {u["uid"] for u in play["vars"]["usuarios_todos"]} == set(sd.USUARIOS)
+    assert (AQUI.parent / "agente_802_1x" / "agente.py").is_file()
 
 
 def _respuestas(monkeypatch, lista):
