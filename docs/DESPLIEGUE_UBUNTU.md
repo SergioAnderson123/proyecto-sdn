@@ -75,6 +75,32 @@ Dos detalles de `alta`:
 - **Por qué se libera primero.** El LDIF del repo (`R1/shared/ldap/ldif/custom/estructura.ldif`) trae la MAC, el switch y el puerto de `profesor01` de otro slice. Con datos que no coinciden, el Policy Mapper rechaza y deja la MAC 300 s en lista negra. Mientras un usuario está "liberado" no se comprueba su MAC ni su ubicación: no lo dejes así en una prueba de seguridad (el segundo paso de `alta` ya la reactiva).
 - **Por qué existe `r1-eapol-bcast`.** La red virtual de VNRT descarta las tramas a `01:80:c2:00:00:03`, donde `wpa_supplicant` manda el EAPOL, antes de que lleguen al switch. Es una limitación de esa red, no del diseño. El servicio cambia el destino a broadcast al salir del host (`tc`), y ONOS lo captura igual porque filtra por `eth_type=0x888e`. Pedir al personal de VNRT que permita esa dirección lo haría innecesario.
 
+## 3b. Ver los logs de Policy Mapper y RADIUS
+
+Se ejecutan en el Controller. Los dos servicios corren en contenedores Docker. Para seguirlos a la vez, abre dos sesiones SSH.
+
+**Policy Mapper** (decide si se admite a cada usuario e instala su flujo de sesión):
+```bash
+docker logs policy_mapper --tail 50                                      # últimas 50 líneas
+docker logs -f --tail 20 policy_mapper                                   # en vivo (Ctrl+C para salir)
+docker logs policy_mapper 2>&1 | grep -E "APROBADO|RECHAZO|ALERTA"      # solo las decisiones
+```
+Qué buscar: `EVALUANDO POLÍTICA ZERO TRUST: <usuario>`, luego `APROBADO` con su VLAN o `RECHAZO` con el motivo (`MAC no coincide`, `Puerto físico no asignado`...), y `Flujo Prio 40001 inyectado` con el switch donde se instaló. También hay un registro por la API:
+```bash
+curl -s http://127.0.0.1:5000/events | python3 -m json.tool | tail -30
+curl -s http://127.0.0.1:5000/sessions | python3 -m json.tool           # sesiones activas
+```
+
+**RADIUS** (FreeRADIUS corre con `-X`, en modo depuración: es muy verboso, conviene filtrar):
+```bash
+docker logs radius --tail 50
+docker logs -f --tail 0 radius 2>&1 | grep --line-buffered -E "Access-Accept|Access-Reject|Login OK|Login incorrect|ERROR|Error"
+docker logs radius 2>&1 | grep -i "profesor01"                         # solo un usuario
+```
+Qué buscar: `Sent Access-Accept` o `Sent Access-Reject` (el resultado), `ERROR` con `TLS` (problemas de certificado) y las llamadas a `rest` (Policy Mapper) y `ldap`.
+
+Si `docker logs` dice `permission denied`, tu usuario no está en el grupo `docker` (sección 1); si dice `No such container`, el servicio aún no está arriba: `docker ps -a`.
+
 ## 4. VM IDS (R5)
 
 ```bash
@@ -150,7 +176,7 @@ python3 -m pytest R1/shared/policy_mapper/tests R2/policy/tests R2/portal_cautiv
 | `no space left on device` al levantar | Poco disco para las imágenes de Docker | Liberar espacio (sección 1) y repetir `python3 slice.py controller` |
 | `git pull` aborta: "Your local changes ... would be overwritten" | Editaste a mano un archivo versionado (p. ej. un `inventory.ini.example`) | `git stash && git pull` (el asistente genera los inventarios por su cuenta, no hace falta editarlos) |
 | `slice.py` vuelve a pedir los datos | Cambiaste de usuario (`root` ↔ `ubuntu`): `~/slice.json` es de cada uno | Trabajar siempre con el mismo usuario |
-| ONOS solo tiene `drivers` y `gui2` | `init-onos.sh` no llegó a ejecutarse | `python3 slice.py controller` lo repite si faltan apps |
+| ONOS solo tiene `drivers` y `gui2` (`apps -a -s`), SADIS y AAA `NO INSTALADA`, y los switches no conectan (`is_connected` en `false`) | `init-onos.sh` no terminó. Causa típica: sin salida a internet desde el Controller para descargar SADIS y AAA de `repo1.maven.org` (DNS, red o disco). Sin OpenFlow activo ONOS no escucha el 6653 | `cd ~/proyecto-sdn/R1/deploy/controller && bash init-onos.sh`: ahora activa OpenFlow primero y dice qué falló. Comprobar internet: `curl -I https://repo1.maven.org` y `df -h /`. `python3 slice.py controller` lo repite si faltan apps |
 | `no such identity` / `Permission denied (publickey)` en Ansible | No se copió la llave | `python3 slice.py preparar` |
 | Los switches muestran "controladores" como `los`, `de`, `DESDE` | Comentario al final de `controller_ip` en un inventario INI (el `#` pasa a formar parte del valor) | Usa `python3 slice.py switches`, que genera el inventario; no escribas comentarios al final de una variable |
 | `is_connected` en `false` en un switch | `CONTROLLER_IP` no es la IP del Controller vista desde los switches, o falta `org.onosproject.openflow` | `nc -zv <CONTROLLER_IP> 6653` desde el switch; `ss -tlnp \| grep 6653` en el Controller; `python3 slice.py estado` |

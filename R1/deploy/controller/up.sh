@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 [ -f ../.env ] && { set -a; . ../.env; set +a; }
 docker compose up -d --build
-bash init-onos.sh
+bash init-onos.sh || echo "[!] init-onos.sh termino con avisos: ONOS esta levantado pero incompleto (ver arriba)."
 echo
 echo "Contenedores:"; docker compose ps --format 'table {{.Name}}\t{{.Status}}'
 echo
