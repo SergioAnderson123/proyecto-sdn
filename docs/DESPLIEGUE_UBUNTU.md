@@ -144,6 +144,10 @@ docker compose exec integrador r5ctl estado      # también: bloqueos | alertas 
 
 `SURICATA_ET=1` descarga ET Open (~50 mil reglas, varios GB de RAM); por defecto solo `R5/suricata/local.rules`.
 
+## 3b. Hosts con 802.1X (R1/R2)
+
+Para autenticar hosts (h1 a h4) con `wpa_supplicant` y ver los flujos en su switch de acceso: [`VALIDAR_H1_VNRT.md`](VALIDAR_H1_VNRT.md). Playbook de hosts en `R1/deploy/hosts/` y script de LDAP en `R1/deploy/controller/ldap-ubicacion.sh`. Si `up.sh` falla a medias, ejecuta `bash R1/deploy/controller/init-onos.sh` (sin él ONOS solo tiene `drivers` y `gui2`).
+
 ## 4. Laboratorio de una sola máquina (sin VM de switches)
 
 ```bash

@@ -26,9 +26,11 @@ sn: Profesor
 cn: profesor01@example.org
 mail: profesor01@example.org
 userPassword: password123
-description: 00:00:00:00:00:11
-physicalDeliveryOfficeName: of:0000000000000001
-roomNumber: 1
+# VNRT: h1 (MAC de su interfaz de datos), switch sw2 y su puerto ens5. En el laboratorio de Mininet eran
+# 00:00:00:00:00:11, of:0000000000000001 y puerto 1 (ver docs/VALIDAR_H1_VNRT.md para volver a ellos).
+description: fa:16:3e:6b:69:bb
+physicalDeliveryOfficeName: of:00001a749039894a
+roomNumber: 2
 departmentNumber: 3
 
 dn: uid=profesor02,ou=users,dc=example,dc=org

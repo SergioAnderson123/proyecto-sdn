@@ -1,0 +1,14 @@
+# Copiar a inventory.ini y ajustar. Los hosts de VNRT se alcanzan por el puerto redirigido de la IP publica.
+# iface = interfaz de datos del host (la que va al switch; comprobar con `ip -br link`).
+# conf / cert = suplicante y certificado de R1/shared/mininet/supplicants (uno por usuario).
+# No escribir comentarios al final de una variable: en INI de Ansible pasan a formar parte del valor.
+[hosts]
+h1 ansible_host=10.20.12.78 ansible_port=5811 iface=ens4 conf=wpa_profe_01.conf cert=profesor01@example.org.pem
+h2 ansible_host=10.20.12.78 ansible_port=5812 iface=ens4 conf=wpa_alumno_01.conf cert=alumno01@example.org.pem
+h3 ansible_host=10.20.12.78 ansible_port=5813 iface=ens4 conf=wpa_alumno_02.conf cert=alumno02@example.org.pem
+h4 ansible_host=10.20.12.78 ansible_port=5814 iface=ens4 conf=wpa_support_01.conf cert=support01@example.org.pem
+
+[hosts:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=/root/.ssh/id_ed25519
+ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new
