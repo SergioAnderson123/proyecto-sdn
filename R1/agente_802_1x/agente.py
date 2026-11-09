@@ -151,7 +151,14 @@ class Agente:
     def _parar(self):
         proc, self.proc = self.proc, None
         if proc and proc.poll() is None:
-            proc.terminate()   # wpa_supplicant envia EAPOL-Logoff al cerrarse
+            # Avisa al autenticador de que el cliente se va: sin el EAPOL-Logoff, ONOS AAA conserva el estado AUTHORIZED
+            # y puede ignorar el siguiente EAPOL-Start (el cliente espera 60 s y falla). Un simple terminate() no lo envia.
+            try:
+                subprocess.run([WPA_CLI, "-p", CTRL, "-i", self.iface, "logoff"], capture_output=True, timeout=2)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            time.sleep(0.5)   # deja salir la trama antes de cerrar el proceso
+            proc.terminate()
             try:
                 proc.wait(5)
             except subprocess.TimeoutExpired:

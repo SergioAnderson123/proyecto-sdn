@@ -205,6 +205,7 @@ python3 -m pytest R1/shared/policy_mapper/tests R2/policy/tests R2/portal_cautiv
 | Rechazo "MAC no coincide" / "Puerto físico no asignado" (la MAC queda 300 s en lista negra) | LDAP no coincide con lo que ve ONOS | `python3 slice.py alta` (libera, aprende y fija) |
 | Flujo instalado en `of:0000000000000en5` | Versión vieja del Policy Mapper, que dedujo la ubicación del nombre del puerto | `git pull` y `docker restart policy_mapper` (ya usa `connectPoint`) |
 | `/sessions` vacío justo tras arrancar | El suplicante reintenta cada ~30 s | Esperar; luego mirar la interfaz web del host (sección 3c), `journalctl -u r1-agente` y `docker logs policy_mapper` |
+| La página del agente se queda en *Autenticando* y a los 60 s sale `EAP-FAILURE`; en `tcpdump -eni <iface> ether proto 0x888e` se ve el `EAPOL start` pero ninguna respuesta | ONOS AAA sigue dando al host por `AUTHORIZED` (`curl -u onos:rocks http://127.0.0.1:8181/onos/aaa/app/users`) porque el cliente anterior se fue sin enviar `EAPOL-Logoff`, y no contesta al `Start` nuevo | `python3 slice.py limpiar` (reinicia la app AAA y borra sesiones y listas negras) y reconectar. El agente ya envía el logoff (`wpa_cli logoff`) al desconectar o cambiar de identidad |
 | `tc` falla al instalar el filtro del host | Faltan `cls_flower` / `act_pedit` | `sudo apt-get install -y linux-modules-extra-$(uname -r)` en ese host |
 
 Otros avisos:

@@ -344,6 +344,16 @@ def hosts():
     interfaz()
 
 
+def reiniciar_aaa():
+    """Reinicia la app AAA de ONOS: borra sus maquinas de estado. Si un cliente se fue sin EAPOL-Logoff, ONOS lo sigue dando
+    por AUTHORIZED y puede ignorar su siguiente EAPOL-Start (el cliente espera 60 s y falla)."""
+    onos("DELETE", "/v1/applications/org.opencord.aaa/active")
+    time.sleep(3)
+    onos("POST", "/v1/applications/org.opencord.aaa/active")
+    time.sleep(3)
+    print("  App AAA de ONOS reiniciada (estado de autenticaciones limpio)")
+
+
 def esperar_sesiones(n, maximo=120):
     inicio = time.time()
     while time.time() - inicio < maximo:
@@ -375,6 +385,7 @@ def alta():
         print(f"  {u}")
     ejecutar(["docker", "restart", "policy_mapper"], capturar=True)
     time.sleep(5)
+    reiniciar_aaa()
     titulo("2/4 Arrancar los suplicantes")
     playbook_hosts("-e", "arrancar=true")
     titulo("3/4 Esperar a que ONOS vea las autenticaciones y fijar la ubicacion en LDAP")
@@ -385,6 +396,7 @@ def alta():
         print(f"  {linea or u + ': sin datos en ONOS'}")
     ejecutar(["docker", "restart", "policy_mapper"], capturar=True)
     time.sleep(5)
+    reiniciar_aaa()
     titulo("4/4 Autenticar otra vez, ahora con la comprobacion de MAC y ubicacion activa")
     playbook_hosts("-e", "arrancar=true")
     esperar_sesiones(n)
@@ -427,6 +439,7 @@ def limpiar():
     onos("DELETE", "/v1/flows/application/org.onosproject.rest")
     ejecutar(["docker", "restart", "policy_mapper"], capturar=True)
     time.sleep(5)
+    reiniciar_aaa()
     http("POST", MAPPER + "/policy/sync")
     print("Sesiones y flujos borrados; tablas de rol reinstaladas.")
 

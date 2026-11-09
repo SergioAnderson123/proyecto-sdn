@@ -65,6 +65,9 @@ def test_sesion_y_rechazo_del_policy_mapper():
     assert ag.ultimo_rechazo(MAC, [{"t": 5, "tipo": "conflicto", "mac": MAC}], desde=0)["tipo"] == "conflicto"
 
 
+LLAMADAS = []   # comandos que el agente ejecuta con subprocess.run (wpa_cli)
+
+
 class ProcFalso:
     instancias = []
 
@@ -89,9 +92,11 @@ class ProcFalso:
 def agente(monkeypatch, tmp_path):
     ProcFalso.instancias.clear()
     # solo el modulo del agente ve el subprocess simulado (el resto de Python sigue con el real)
+    LLAMADAS.clear()
+    monkeypatch.setattr(ag.time, "sleep", lambda s: None)
     monkeypatch.setattr(ag, "subprocess", types.SimpleNamespace(
         Popen=ProcFalso, PIPE=-1, STDOUT=-2, TimeoutExpired=subprocess.TimeoutExpired,
-        run=lambda *a, **k: types.SimpleNamespace(returncode=1, stdout="")))
+        run=lambda cmd, **k: (LLAMADAS.append(cmd), types.SimpleNamespace(returncode=1, stdout=""))[1]))
     monkeypatch.setattr(ag.os, "remove", lambda p: None)
     a = ag.Agente(iface="ens4", carpeta=SUPP, defecto="profesor01", mapper="http://mapper.invalido")
     monkeypatch.setattr(a, "mac", lambda: MAC)
@@ -113,6 +118,15 @@ def test_nunca_hay_dos_instancias_a_la_vez(agente):
     assert not primera.vivo and segunda.vivo     # la anterior se cierra antes de lanzar la nueva
     agente.desconectar()
     assert not segunda.vivo and agente.usuario is None and agente.deseado is None
+
+
+def test_al_cambiar_de_identidad_o_desconectar_envia_logoff_antes_de_cerrar(agente):
+    agente.conectar("profesor01")
+    assert not [c for c in LLAMADAS if "logoff" in c]
+    agente.conectar("alumno01")      # cambia de identidad: la anterior debe despedirse
+    agente.desconectar()
+    logoffs = [c for c in LLAMADAS if "logoff" in c]
+    assert len(logoffs) == 2 and logoffs[0][-1] == "logoff" and "-i" in logoffs[0]
 
 
 def test_usuario_desconocido_se_rechaza(agente):
