@@ -22,6 +22,7 @@ import base64
 import getpass
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -213,14 +214,31 @@ def inventario_switches(cfg):
     return "\n".join(lineas)
 
 
-def inventario_hosts(cfg):
+def token_agente():
+    """Clave compartida entre el Policy Mapper y el agente de cada host (POST /sessions/logout). Se genera una vez y se guarda
+    en R1/deploy/.env como AGENTE_TOKEN; el compose se la pasa al Policy Mapper y el playbook, al servicio del host."""
+    env = DEPLOY / ".env"
+    if not env.exists():
+        shutil.copy(DEPLOY / ".env.example", env)
+    for linea in env.read_text().splitlines():
+        if linea.startswith("AGENTE_TOKEN=") and linea.split("=", 1)[1].strip():
+            return linea.split("=", 1)[1].strip()
+    token = secrets.token_hex(16)
+    contenido = env.read_text()
+    env.write_text(contenido + ("" if contenido.endswith("\n") else "\n") + f"AGENTE_TOKEN={token}\n")
+    return token
+
+
+def inventario_hosts(cfg, token=""):
     lineas = ["[hosts]"]
     for h in cfg["hosts"]:
         lineas.append(f"{h['nombre']} ansible_host={cfg['ip_publica']} ansible_port={h['puerto']} iface={cfg['iface']} "
                       f"conf={USUARIOS[h['usuario']]['conf']} cert={h['usuario']}@example.org.pem")
     lineas += ["", "[hosts:vars]", "ansible_user=ubuntu", "ansible_ssh_private_key_file=~/.ssh/id_ed25519",
-               "ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new", f"controller_ip={cfg['controller_ip']}", ""]
-    return "\n".join(lineas)
+               "ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new", f"controller_ip={cfg['controller_ip']}"]
+    if token:
+        lineas.append(f"agente_token={token}")
+    return "\n".join(lineas + [""])
 
 
 def comandos_tunel(cfg):
@@ -308,6 +326,7 @@ def controller():
     lineas = [f"CONTROLLER_IP={cfg['controller_ip']}" if l.startswith("CONTROLLER_IP=") else l
               for l in env.read_text().splitlines()]
     env.write_text("\n".join(lineas) + "\n")
+    token_agente()   # AGENTE_TOKEN en .env: up.sh lo exporta y el compose se lo pasa al Policy Mapper
     contenedores_ajenos()
     ejecutar(["bash", "controller/up.sh"], cwd=DEPLOY)
     titulo("Apps de ONOS")
@@ -337,7 +356,7 @@ def hosts():
     cfg = config_o_salir()
     titulo("Hosts (suplicantes 802.1X)")
     carpeta = DEPLOY / "hosts"
-    (carpeta / "inventory.ini").write_text(inventario_hosts(cfg))
+    (carpeta / "inventory.ini").write_text(inventario_hosts(cfg, token_agente()))
     archivo_sudo()
     ejecutar(["ansible", "-i", "inventory.ini", "hosts", "-m", "ping"], cwd=carpeta)
     playbook_hosts()
@@ -376,8 +395,7 @@ def alta():
     n = len(cfg["hosts"])
     usuarios = [h["usuario"] for h in cfg["hosts"]]
     carpeta = DEPLOY / "hosts"
-    if not (carpeta / "inventory.ini").exists():
-        (carpeta / "inventory.ini").write_text(inventario_hosts(cfg))
+    (carpeta / "inventory.ini").write_text(inventario_hosts(cfg, token_agente()))   # siempre: lleva la clave y la config actual
     archivo_sudo()
     titulo("1/4 Liberar a los usuarios en LDAP (sin MAC/switch/puerto: la primera autenticacion pasa)")
     for u in usuarios:

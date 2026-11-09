@@ -10,8 +10,13 @@ root con systemd (unidad r1-agente.service) y escucha SOLO en 127.0.0.1; se ve d
 Solo usa la biblioteca estandar. Lanza `wpa_supplicant -D wired` con la configuracion del usuario elegido (una sola
 instancia a la vez: dos instancias cruzan la conversacion EAP) y lee su estado con `wpa_cli`.
 
+Cierre de sesion: ONOS AAA 2.7.0 procesa el EAPOL-Logoff pero no manda accounting a RADIUS, asi que el Policy Mapper no se
+entera. El agente le avisa por la red de gestion (POST /sessions/logout con la clave R1_TOKEN) al desconectar, al cambiar de
+identidad, al apagarse y cuando detecta que el enlace de la interfaz de datos cae (`ip link set <iface> down`).
+
 Variables de entorno: R1_IFACE (ens4), R1_DIR (carpeta con los wpa_*.conf y certs), R1_USUARIO (identidad por defecto,
-la que se conecta sola al arrancar), R1_MAPPER (URL del Policy Mapper), R1_PUERTO (8080).
+la que se conecta sola al arrancar), R1_MAPPER (URL del Policy Mapper), R1_TOKEN (clave compartida con el Policy Mapper),
+R1_PUERTO (8080).
 """
 import json
 import os
@@ -32,6 +37,7 @@ DIR = Path(os.environ.get("R1_DIR", "/home/ubuntu/supp"))
 DEFECTO = os.environ.get("R1_USUARIO", "")
 MAPPER = os.environ.get("R1_MAPPER", "http://192.168.0.10:5000").rstrip("/")
 PUERTO = int(os.environ.get("R1_PUERTO", "8080"))
+TOKEN = os.environ.get("R1_TOKEN", "")
 WPA_SUPPLICANT = os.environ.get("R1_WPA", "/usr/sbin/wpa_supplicant")
 WPA_CLI = os.environ.get("R1_WPA_CLI", "/usr/sbin/wpa_cli")
 CTRL = "/run/wpa_supplicant"
@@ -111,9 +117,22 @@ def http_json(url, timeout=3):
         return None
 
 
+def http_post_json(url, cuerpo, cabeceras=None, timeout=3):
+    """POST JSON; devuelve (codigo, texto) y nunca lanza: un Policy Mapper caido no debe romper al agente."""
+    req = urllib.request.Request(url, data=json.dumps(cuerpo).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", **(cabeceras or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+    except (urllib.error.URLError, OSError) as e:
+        return 0, str(e)
+
+
 class Agente:
-    def __init__(self, iface=IFACE, carpeta=DIR, defecto=DEFECTO, mapper=MAPPER):
-        self.iface, self.carpeta, self.defecto, self.mapper = iface, carpeta, defecto, mapper
+    def __init__(self, iface=IFACE, carpeta=DIR, defecto=DEFECTO, mapper=MAPPER, token=TOKEN):
+        self.iface, self.carpeta, self.defecto, self.mapper, self.token = iface, carpeta, defecto, mapper, token
         self.lock = threading.RLock()
         self.proc = None
         self.usuario = None      # identidad con la que corre wpa_supplicant ahora
@@ -148,8 +167,21 @@ class Agente:
         self.usuario, self.desde = uid, time.time()
         threading.Thread(target=self._leer_salida, args=(self.proc,), daemon=True).start()
 
-    def _parar(self):
+    def avisar_logout(self, motivo):
+        """Le dice al Policy Mapper que esta MAC ya no tiene sesion (ONOS AAA no manda accounting). Por la red de gestion."""
+        mac = self.mac()
+        if not self.token:
+            self.log.append(time.strftime("%H:%M:%S ") + "!! Sin R1_TOKEN: no se avisa al Policy Mapper del cierre de sesion")
+            return
+        if not mac:
+            return
+        codigo, texto = http_post_json(f"{self.mapper}/sessions/logout", {"mac": mac}, {"X-Agente-Token": self.token})
+        resultado = "sesion cerrada" if codigo == 200 and "cerrada" in texto else ("sin sesion activa" if codigo == 200 else f"HTTP {codigo}")
+        self.log.append(time.strftime("%H:%M:%S ") + f"== Policy Mapper avisado ({motivo}): {resultado}")
+
+    def _parar(self, motivo="desconexion"):
         proc, self.proc = self.proc, None
+        avisar = False
         if proc and proc.poll() is None:
             # Avisa al autenticador de que el cliente se va: sin el EAPOL-Logoff, ONOS AAA conserva el estado AUTHORIZED
             # y puede ignorar el siguiente EAPOL-Start (el cliente espera 60 s y falla). Un simple terminate() no lo envia.
@@ -159,6 +191,7 @@ class Agente:
                 pass
             time.sleep(0.5)   # deja salir la trama antes de cerrar el proceso
             proc.terminate()
+            avisar = True
             try:
                 proc.wait(5)
             except subprocess.TimeoutExpired:
@@ -166,12 +199,14 @@ class Agente:
         if proc:
             self.log.append(time.strftime("%H:%M:%S ") + "== Desconectado")
         self.usuario = None
+        if avisar:
+            self.avisar_logout(motivo)
 
     def conectar(self, uid):
         with self.lock:
             if uid not in self.usuarios():
                 raise ValueError(f"Usuario desconocido: {uid}")
-            self._parar()
+            self._parar("cambio de identidad")
             self.deseado = uid
             self._lanzar(uid)
 
@@ -190,6 +225,43 @@ class Agente:
                         self._lanzar(self.deseado)
                     except (ValueError, OSError) as e:
                         self.log.append(f"!! No pude relanzar el suplicante: {e}")
+
+    def operstate(self):
+        try:
+            return Path(f"/sys/class/net/{self.iface}/operstate").read_text().strip()
+        except OSError:
+            return "unknown"
+
+    def _wpa_cli_orden(self, orden):
+        try:
+            subprocess.run([WPA_CLI, "-p", CTRL, "-i", self.iface, orden], capture_output=True, timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    def revisar_enlace(self, estaba_arriba):
+        """Un paso del vigilante de enlace; devuelve si el enlace esta arriba ahora.
+
+        Al caer (`ip link set <iface> down`) no sale ningun EAPOL y el switch virtual de VNRT no ve el cambio: el agente avisa
+        al Policy Mapper por la red de gestion. Al volver, hace logoff y logon para que ONOS AAA (que sigue en AUTHORIZED
+        porque nadie le aviso) empiece una autenticacion limpia."""
+        arriba = self.operstate() in ("up", "unknown")
+        with self.lock:
+            activo = bool(self.deseado) and self.proc is not None and self.proc.poll() is None
+        if estaba_arriba and not arriba and activo:
+            self.log.append(time.strftime("%H:%M:%S ") + f"== Enlace caido en {self.iface}")
+            self.avisar_logout("enlace caido")
+        elif arriba and not estaba_arriba and activo:
+            self.log.append(time.strftime("%H:%M:%S ") + f"== Enlace recuperado en {self.iface}: nueva autenticacion")
+            self._wpa_cli_orden("logoff")
+            time.sleep(0.5)
+            self._wpa_cli_orden("logon")
+        return arriba
+
+    def vigilar_enlace(self):
+        arriba = True
+        while True:
+            time.sleep(2)
+            arriba = self.revisar_enlace(arriba)
 
     def _wpa_cli(self):
         try:
@@ -326,6 +398,7 @@ def main():
     elif agente.defecto:
         agente.log.append(f"!! La identidad por defecto '{agente.defecto}' no tiene configuracion en {agente.carpeta}")
     threading.Thread(target=agente.vigilar, daemon=True).start()
+    threading.Thread(target=agente.vigilar_enlace, daemon=True).start()
     servidor = ThreadingHTTPServer(("127.0.0.1", PUERTO), Manejador)
 
     def salir(*_):

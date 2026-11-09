@@ -118,7 +118,19 @@ En los hosts de VNRT eso lo hace el **agente** (`R1/agente_802_1x/agente.py`, se
 1. `python3 slice.py alta` y abre la página de h1: *Autenticado, Docente, VLAN 10, sw2*.
 2. Baja y sube la interfaz de h1: se reautentica sola (la página pasa por *Autenticando* y vuelve a *Autenticado*).
 3. En la página de h1 elige `alumno01` y pulsa *Conectar*: el Policy Mapper lo **rechaza** (*MAC registrada distinta de la física*), porque cada identidad está atada a la MAC y al puerto de su equipo (*device binding*). Ese rechazo deja la MAC de h1 en lista negra **300 s**: durante ese tiempo h1 no podrá autenticarse ni con su identidad. Vuelve a elegir `profesor01` pasado ese tiempo, o ejecuta `python3 slice.py limpiar`.
-4. *Desconectar* equivale a quitar el cable: el suplicante envía el *logoff* y la sesión desaparece del Policy Mapper.
+4. *Desconectar* equivale a cerrar la sesión: el suplicante envía el *logoff*, ONOS pasa el host a `IDLE` y el agente avisa al Policy Mapper, que borra la sesión y su flujo de sesión. Al volver a pulsar *Conectar*, el Policy Mapper lo aprueba desde cero.
+
+**Cierre de sesión: qué cubre y qué no.** ONOS AAA 2.7.0 procesa el `EAPOL-Logoff` (`AUTHORIZED → IDLE`, se ve en `docker logs onos` con `log:set DEBUG org.opencord.aaa`), pero **no envía `Accounting-Request` a RADIUS** (sus contadores no tienen accounting), así que `/webhook/stop` no se dispara solo. Por eso el agente avisa al Policy Mapper con `POST /sessions/logout` (por la red de gestión, con la clave `AGENTE_TOKEN` que `slice.py controller` genera en `R1/deploy/.env` y reparte al Policy Mapper y a los hosts). El endpoint borra la sesión 802.1X y su flujo, sin lista negra, y queda desactivado si no hay clave.
+
+| Situación | ¿Cierra la sesión? |
+|---|---|
+| *Desconectar* en la página, o cambiar de identidad | Sí |
+| Apagar o reiniciar el host, o parar `r1-agente` | Sí (el agente recibe SIGTERM y desconecta antes de salir) |
+| `ip link set <iface> down` (cable desconectado) | Sí: el agente vigila `operstate`, avisa por la red de gestión (la interfaz de datos no puede enviar nada) y, cuando el enlace vuelve, hace `logoff` y `logon` para reautenticar limpio |
+| Cerrar sesión de un usuario en un escritorio (XFCE) | **No todavía**: el agente es un servicio del sistema. Se resolverá con un gancho PAM que llame a su API local (`POST 127.0.0.1:8080/api/desconectar`) |
+| El host se cae sin apagado ordenado | **No**: nadie avisa. Haría falta un *heartbeat* con caducidad de la sesión |
+
+Para comprobarlo: pulsa *Desconectar* y mira, en el Controller, `docker logs policy_mapper --since 2m 2>&1 | grep LOGOUT`, `curl -s http://127.0.0.1:5000/sessions` (h1 ya no está) y `sudo ovs-ofctl -O OpenFlow13 dump-flows sw2 | grep 40001` (ya no está su flujo de sesión); la regla de EAPOL de `priority=50000` sigue, porque es por puerto.
 
 **Qué no es idéntico a una PC real:** la interfaz es una página web, no una ventana del sistema (un escritorio real, como XFCE con RDP, cabe en disco: 139 MB el mínimo y 1,5 GB el completo, medido en h1; pero la RAM de h1, 448 MB disponibles, y su único vCPU no alcanzan: ver docs/Consideraciones_VM_VNRT.pptx); y el EAPOL sigue necesitando el `tc` de `r1-eapol-bcast`, que es una limitación de la red virtual de VNRT.
 

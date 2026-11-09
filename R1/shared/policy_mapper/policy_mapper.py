@@ -5,6 +5,7 @@ Implementa validaciones criptográficas, anti-spoofing y programación de flujos
 """
 
 import asyncio
+import hmac
 import os
 import time
 from typing import List, Optional
@@ -101,6 +102,37 @@ async def revocar_sesion(r: Revocacion):
     eventos.registrar("revocado", sesion.username, mac, sesion.dpid, sesion.port,
                       f"Revocada por {r.motivo}; lista negra {r.segundos} s", sesion.rol)
     return {"status": "revocada", "usuario": sesion.username}
+
+
+# Clave compartida con el agente 802.1X de los hosts. Sin ella (vacia) el endpoint de cierre de sesion queda desactivado.
+AGENTE_TOKEN = os.getenv("AGENTE_TOKEN", "")
+
+
+class LogoutAgente(BaseModel):
+    mac: str
+
+
+@app.post("/sessions/logout")
+async def logout_del_agente(r: LogoutAgente, x_agente_token: str = Header(default="")):
+    """Cierre de sesion avisado por el agente del host (boton Desconectar, cambio de identidad, apagado o enlace caido).
+
+    ONOS AAA 2.7.0 procesa el EAPOL-Logoff (AUTHORIZED -> IDLE) pero NO envia Accounting-Request a RADIUS, asi que
+    /webhook/stop nunca se dispara y la sesion se quedaba para siempre. Aqui se borra la sesion 802.1X y su flujo 40001,
+    sin lista negra (distinto de /sessions/revoke). Va protegido con AGENTE_TOKEN: sin clave, cualquiera podria cerrar
+    la sesion de otro con solo conocer su MAC."""
+    if not AGENTE_TOKEN or not hmac.compare_digest(x_agente_token, AGENTE_TOKEN):
+        raise HTTPException(status_code=403, detail="Clave del agente invalida o endpoint desactivado")
+    mac = r.mac.lower().replace("-", ":")
+    sesion = session_store.get_by_mac(mac)
+    if not sesion:
+        return {"status": "sin_sesion"}
+    if sesion.metodo != "802.1X":
+        return {"status": "no_es_802_1x"}   # las sesiones del portal tienen su propio cierre
+    session_store.remove_session(mac)
+    await eliminar_flujo_onos(sesion.dpid, sesion.flow_id)
+    print(f"\n[<<< LOGOUT] Sesión de {sesion.username} ({mac}) cerrada por el agente; flujo {sesion.flow_id} eliminado de {sesion.dpid}")
+    eventos.registrar("logout", sesion.username, mac, sesion.dpid, sesion.port, "Logout avisado por el agente: flujo de sesión eliminado", sesion.rol)
+    return {"status": "cerrada", "usuario": sesion.username}
 
 
 class PortalLogin(BaseModel):

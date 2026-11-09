@@ -63,6 +63,20 @@ def test_el_playbook_de_hosts_instala_el_agente_y_no_deja_dos_suplicantes():
     assert (AQUI.parent / "agente_802_1x" / "agente.py").is_file()
 
 
+def test_el_token_del_agente_se_genera_una_vez_y_se_conserva(monkeypatch, tmp_path):
+    (tmp_path / ".env.example").write_text("CONTROLLER_IP=1.2.3.4\n")
+    monkeypatch.setattr(sd, "DEPLOY", tmp_path)
+    primero, segundo = sd.token_agente(), sd.token_agente()
+    assert primero == segundo and len(primero) == 32
+    env = (tmp_path / ".env").read_text()
+    assert f"AGENTE_TOKEN={primero}" in env and "CONTROLLER_IP=1.2.3.4" in env   # no pisa lo que ya habia
+
+
+def test_el_inventario_de_hosts_lleva_la_clave_solo_si_se_da():
+    assert "agente_token=abc123" in sd.inventario_hosts(CFG, "abc123")
+    assert "agente_token" not in sd.inventario_hosts(CFG)
+
+
 def _respuestas(monkeypatch, lista):
     it = iter(lista)
     monkeypatch.setattr("builtins.input", lambda _="": next(it))

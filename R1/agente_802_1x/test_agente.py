@@ -168,6 +168,86 @@ def test_vigilante_relanza_si_el_suplicante_se_cae(agente, monkeypatch):
     assert lanzados == ["profesor01"]
 
 
+# ---------------------------------------------------------------- aviso de cierre de sesion al Policy Mapper
+
+@pytest.fixture
+def avisos(monkeypatch):
+    """Registra los POST /sessions/logout del agente (sin red)."""
+    enviados = []
+    monkeypatch.setattr(ag, "http_post_json", lambda url, cuerpo, cabeceras=None, timeout=3:
+                        (enviados.append((url, cuerpo, cabeceras)), (200, '{"status":"cerrada"}'))[1])
+    return enviados
+
+
+@pytest.fixture
+def agente_con_clave(agente):
+    agente.token = "clave-compartida"
+    return agente
+
+
+def test_desconectar_avisa_al_policy_mapper_despues_del_logoff(agente_con_clave, avisos):
+    agente_con_clave.conectar("profesor01")
+    agente_con_clave.desconectar()
+    assert avisos == [("http://mapper.invalido/sessions/logout", {"mac": MAC}, {"X-Agente-Token": "clave-compartida"})]
+    assert any("logoff" in c for c in LLAMADAS)
+    assert any("Policy Mapper avisado (desconexion): sesion cerrada" in l for l in agente_con_clave.log)
+
+
+def test_cambiar_de_identidad_cierra_la_sesion_anterior(agente_con_clave, avisos):
+    agente_con_clave.conectar("profesor01")
+    agente_con_clave.conectar("alumno01")
+    assert len(avisos) == 1 and any("cambio de identidad" in l for l in agente_con_clave.log)
+
+
+def test_conectar_la_primera_vez_no_avisa_de_ningun_cierre(agente_con_clave, avisos):
+    agente_con_clave.conectar("profesor01")
+    assert avisos == []
+
+
+def test_sin_clave_no_avisa_pero_lo_deja_en_el_registro(agente, avisos):
+    agente.conectar("profesor01")
+    agente.desconectar()
+    assert avisos == [] and any("Sin R1_TOKEN" in l for l in agente.log)
+
+
+# ---------------------------------------------------------------- vigilante de enlace (ip link set <iface> down)
+
+def _enlace(agente, monkeypatch, estados):
+    it = iter(estados)
+    monkeypatch.setattr(agente, "operstate", lambda: next(it))
+
+
+def test_enlace_caido_avisa_al_policy_mapper_por_la_red_de_gestion(agente_con_clave, avisos, monkeypatch):
+    agente_con_clave.conectar("profesor01")
+    _enlace(agente_con_clave, monkeypatch, ["down"])
+    assert agente_con_clave.revisar_enlace(True) is False
+    assert len(avisos) == 1 and any("Enlace caido" in l for l in agente_con_clave.log)
+    assert agente_con_clave.proc is not None      # el suplicante sigue vivo: reautentica solo al volver el enlace
+
+
+def test_enlace_recuperado_hace_logoff_y_logon(agente_con_clave, avisos, monkeypatch):
+    agente_con_clave.conectar("profesor01")
+    LLAMADAS.clear()
+    _enlace(agente_con_clave, monkeypatch, ["up"])
+    assert agente_con_clave.revisar_enlace(False) is True
+    assert [c[-1] for c in LLAMADAS] == ["logoff", "logon"] and avisos == []
+
+
+def test_un_enlace_estable_no_hace_nada(agente_con_clave, avisos, monkeypatch):
+    agente_con_clave.conectar("profesor01")
+    LLAMADAS.clear()
+    _enlace(agente_con_clave, monkeypatch, ["up", "up"])
+    assert agente_con_clave.revisar_enlace(True) is True and agente_con_clave.revisar_enlace(True) is True
+    assert avisos == [] and not LLAMADAS
+
+
+def test_sin_conexion_deseada_el_enlace_no_dispara_avisos(agente_con_clave, avisos, monkeypatch):
+    _enlace(agente_con_clave, monkeypatch, ["down", "up"])
+    assert agente_con_clave.revisar_enlace(True) is False
+    assert agente_con_clave.revisar_enlace(False) is True
+    assert avisos == []
+
+
 # ---------------------------------------------------------------- API HTTP (sobre un servidor real en 127.0.0.1)
 
 @pytest.fixture
