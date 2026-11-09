@@ -370,6 +370,34 @@ def _candado_de(identidad_onos: str) -> asyncio.Lock:
   return candado
 
 
+P_EAPOL_PUERTO = 50000   # sobre la sesion (40001), la lista negra (45000) y la regla propia de ONOS AAA (40000)
+
+
+async def inyectar_eapol_en_puerto(client, dpid: str, port: str) -> None:
+    """Todo el EAPOL de un puerto con sesion sube al controlador (Prio 50000, mapa de R5/deploy/prioridades.yaml).
+
+    Sin esta regla, el flujo de sesion (40001: in_port + eth_src) captura TAMBIEN las tramas EAPOL del host ya autenticado y
+    las manda a la tabla de rol, que las descarta: el EAPOL-Logoff y el EAPOL-Start de una reautenticacion nunca llegan a ONOS
+    AAA (que instala su regla a 40000). El host espera 60 s y falla, y la sesion no se limpia al desconectarse."""
+    payload = {
+        "priority": P_EAPOL_PUERTO,
+        "timeout": 0,
+        "isPermanent": True,
+        "deviceId": dpid,
+        "tableId": 0,
+        "treatment": {"instructions": [{"type": "OUTPUT", "port": "CONTROLLER"}]},
+        "selector": {"criteria": [{"type": "IN_PORT", "port": int(port)}, {"type": "ETH_TYPE", "ethType": "0x888e"}]},
+    }
+    try:
+        resp = await client.post(f"{ONOS_BASE_URL}/flows/{dpid}", json=payload, auth=ONOS_AUTH, timeout=2.0)
+        if resp.status_code in [200, 201]:
+            print(f"  [TCAM] Regla EAPOL Prio {P_EAPOL_PUERTO} en {dpid}:{port} (el EAPOL del host llega siempre a ONOS)")
+        else:
+            print(f"  [TCAM ERROR] Regla EAPOL: ONOS respondio {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"  [TCAM ERROR] Regla EAPOL: {e}")
+
+
 async def inyectar_flujo_tabla_0(
     dpid: str, port: str, mac: str, vlan_id: int
 ) -> Optional[str]:
@@ -418,6 +446,7 @@ async def inyectar_flujo_tabla_0(
                 print(
                     f"  [TCAM] Flujo Prio 40001 inyectado exitosamente en {dpid}. Flow ID: {flow_id}"
                 )
+                await inyectar_eapol_en_puerto(client, dpid, port)
                 return flow_id
             print(f"  [TCAM ERROR] ONOS respondió {resp.status_code}: {resp.text}")
         except Exception as e:

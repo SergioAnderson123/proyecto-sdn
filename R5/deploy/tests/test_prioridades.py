@@ -66,6 +66,16 @@ def test_el_drop_de_r5_prevalece_sobre_sesion_y_espejo_y_cede_ante_r1(mapa):
     assert mapa["r1"]["drop_temporal"] > mapa["r5"]["drop"] > mapa["r5"]["espejo"]
 
 
+def test_el_eapol_de_un_puerto_con_sesion_gana_a_la_sesion_y_a_la_lista_negra(mapa):
+    # si el EAPOL quedara bajo la sesion (40001), el logoff y la reautenticacion de un host autenticado se descartarian
+    assert mapa["r1"]["eapol"] > mapa["r1"]["drop_temporal"] > mapa["r2"]["sesion"] > mapa["r1"]["base"]
+
+
+def test_el_policy_mapper_instala_el_eapol_a_la_prioridad_del_mapa(mapa):
+    m = re.search(r"P_EAPOL_PUERTO\s*=\s*(\d+)", leer("R1/shared/policy_mapper/policy_mapper.py"))
+    assert m and int(m.group(1)) == mapa["r1"]["eapol"]
+
+
 def test_r5_usa_solo_su_banda(mapa):
     assert all(41000 <= p <= 44999 for p in mapa["r5"].values())
 
