@@ -90,3 +90,22 @@ def test_las_prioridades_clave_son_distintas_entre_requerimientos(mapa):
     # 40001 se repite a propósito en R2 (sesión y confianza: no coinciden en el mismo switch con la misma selección)
     r1, r5 = set(mapa["r1"].values()), set(mapa["r5"].values())
     assert not (r1 & r5) and mapa["r2"]["sesion"] not in r1 | r5
+
+
+# ---- DHCP y cuarentena de R2 ----
+def test_dhcp_y_cuarentena_coinciden_con_el_mapa(mapa):
+    assert pt.PRIO_DHCP == mapa["r2"]["dhcp"] and pt.PRIO_CUARENTENA == mapa["r2"]["cuarentena"]
+    assert pt.tabla_cuarentena(pt.cargar_politica()) == mapa["r2"]["tabla_cuarentena"]
+
+
+def test_el_dhcp_gana_a_la_sesion_pero_cede_ante_la_lista_negra_y_el_drop_de_r5(mapa):
+    # bajo la sesion (40001) un host con sesion no podria renovar su IP: la tabla de su rol descarta el UDP 67
+    assert mapa["r2"]["dhcp"] > mapa["r2"]["sesion"] > mapa["r1"]["base"]
+    assert mapa["r1"]["drop_temporal"] > mapa["r5"]["drop"] > mapa["r2"]["dhcp"]     # un host bloqueado tampoco obtiene IP
+
+
+def test_la_cuarentena_es_lo_ultimo_de_la_tabla_0_y_su_tabla_es_nueva(mapa):
+    # solo recibe lo que ninguna otra regla de la tabla 0 quiso (incluida la trampa MAB, 20000)
+    assert 0 < mapa["r2"]["cuarentena"] < 20000 < mapa["r2"]["portal"]
+    usadas = set(mapa["r2"]["tablas"].values()) | {0, 30}
+    assert mapa["r2"]["tabla_cuarentena"] not in usadas

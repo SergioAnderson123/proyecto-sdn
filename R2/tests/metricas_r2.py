@@ -171,10 +171,9 @@ def sesiones():
 
 
 def cerrar_sesion(usuario, mac):
-    """Equivale al Accounting-Stop de RADIUS: el mapper borra la sesión y su flujo 40001."""
-    cuerpo = {"User-Name": {"type": "string", "value": [usuario]}, "Calling-Station-Id": {"type": "string", "value": [mac]}}
-    r = urllib.request.Request(MAPPER + "/webhook/stop", method="POST", data=json.dumps(cuerpo).encode(),
-                               headers={"Content-Type": "application/json"})
+    """Como el aviso del agente del host (POST /sessions/logout, requiere AGENTE_TOKEN): el mapper borra la sesión y su flujo 40001."""
+    r = urllib.request.Request(MAPPER + "/sessions/logout", method="POST", data=json.dumps({"mac": mac}).encode(),
+                               headers={"Content-Type": "application/json", "X-Agente-Token": os.environ.get("AGENTE_TOKEN", "")})
     urllib.request.urlopen(r, timeout=5).read()
 
 

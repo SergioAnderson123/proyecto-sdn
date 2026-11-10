@@ -1,7 +1,7 @@
 """POST /sessions/logout: el agente del host cierra su sesion 802.1X.
 
 ONOS AAA 2.7.0 pasa de AUTHORIZED a IDLE al recibir el EAPOL-Logoff pero no envia Accounting-Request a RADIUS (sus contadores no
-tienen accounting), asi que /webhook/stop nunca se llamaba y la sesion se quedaba en el Policy Mapper.
+tienen accounting): el aviso del agente es el unico cierre de una sesion 802.1X en el Policy Mapper.
 """
 import os
 import sys

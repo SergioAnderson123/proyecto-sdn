@@ -26,7 +26,8 @@ Estado inicial (Zero Trust en L2), flujos proactivos en Tabla 0:
 |---|---|---|
 | `dl_type=0x888e` (EAPOL) | CONTROLLER | 50000 |
 | LLDP (0x88cc), BDDP (0x8942), ARP (0x0806) | CONTROLLER | 40000 |
-| Todo IP/DHCP | DROP | 40000 |
+| Todo IP (salvo lo de abajo) | sin regla en la tabla 0 propia de R1: cae en la cuarentena de R2 (prioridad 1000, solo ARP y portal) | 1000 |
+| DHCP del cliente (UDP 68 → 67) | CONTROLLER (app DHCP de ONOS; regla de R2) | 40500 |
 
 Secuencia:
 1. Usuario -> OVS: EAPOL-Start.
@@ -68,14 +69,15 @@ Secuencia:
 1. Policy Mapper -> ONOS: `POST /onos/v1/flows/of:...0001` con Tabla 0, `match(in_port=1, MAC)`, `action(push_vlan=10, goto_table=10)`.
 2. ONOS -> OVS: `OFPT_FLOW_MOD` (TCP 6653); el switch confirma el flujo en TCAM; ONOS responde 201 con `flow_id`.
 3. Policy Mapper -> Session Manager: `asociar_flow_id(mac, flow_id)`; luego HTTP 200 a FreeRADIUS.
-4. FreeRADIUS emite Access-Accept (EAP-Success); ONOS entrega EAPOL-Success al usuario y se dispara DHCP.
-5. Plano de datos: DHCP Discover -> Tabla 0 (prio 40001: push_vlan 10, goto_table 10) -> Tabla 10 (prio 30000: `udp_dst=67` -> NORMAL).
+4. FreeRADIUS emite Access-Accept (EAP-Success); ONOS entrega EAPOL-Success al usuario. El host ya tenía IP: el DHCP corre desde que arranca, antes de autenticar, y el host estaba en la cuarentena (VLAN 99: solo ARP y portal).
+5. Plano de datos: el DHCP del cliente (UDP 68 → 67) va siempre al controlador por la regla de la tabla 0 de prioridad 40500, con o sin sesión; el resto del tráfico del usuario pasa por la tabla 0 (prio 40001: push_vlan 10, goto_table 10) -> Tabla 10 (prio 30000).
 
 ## Tablas del pipeline ([tablas.png](../R2/diagramas/tablas.png))
 
 | Tabla | Contenido |
 |---|---|
 | 0 (admisión, device binding, etiquetado) | EAPOL -> CONTROLLER; flujo por usuario (`in_port` + `eth_src`) con `push_vlan` + `goto_table`; table-miss -> DROP |
+| 99 (cuarentena, VLAN 99) | Hosts sin sesión: ARP y TCP al portal -> NORMAL; prio 0 -> DROP. El DHCP no pasa por aquí: se atiende en la tabla 0 |
 | 10 (Docente, VLAN 10) | Base: `udp_dst=53`, ARP, `udp_dst=67` -> NORMAL. Específicas: `ip_dst=192.168.10.0/24` (servidores de docencia) -> NORMAL; `ip_dst=0.0.0.0/0` -> NORMAL; prio 0 -> DROP (aislamiento intra-VLAN) |
 | 20 (Alumno, VLAN 20) | prio 0 DROP (bloqueo a VLAN 10 y servidores críticos); ARP/DHCP/DNS -> NORMAL; `ip_dst=192.168.20.0/24` (laboratorios) -> NORMAL |
 | 30 (IoT, VLAN 30) | Solo servidores autorizados (ver fallback MAB) |
@@ -107,12 +109,12 @@ Blacklist en hardware: prio 45000, DROP. Cuando falla la validación, Policy Map
 
 ## Desconexión y revocación ([Desauth.png](diagramas/Desauth.png))
 
-1. Detección: **A** (software) EAPOL-Logoff -> Packet-In a ONOS; **B** (hardware) `OFPT_PORT_STATUS` con `OFPPS_LINK_DOWN`.
-2. ONOS -> FreeRADIUS: Accounting-Request (UDP 1813), `Acct-Status-Type = Stop`, `Calling-Station-Id`.
-3. FreeRADIUS (`rlm_rest`) -> Policy Mapper: `POST /webhook/stop` con `{mac, status: stop}`.
+1. Detección (la que existe hoy): **A** el host envía `EAPOL-Logoff` (el agente lo pide con `wpa_cli logoff`): llega a ONOS por la regla de EAPOL del puerto (prioridad 50000) y ONOS AAA pasa el host a `IDLE`; **B** el agente del host detecta que su interfaz de datos cae (`operstate`) o que el host se apaga.
+2. **ONOS AAA 2.7.0 no envía `Accounting-Request`** (sus contadores no tienen accounting), así que no hay accounting-stop: el cierre lo avisa el agente.
+3. Agente -> Policy Mapper, por la red de gestión: `POST /sessions/logout` con `{mac}` y la cabecera `X-Agente-Token`. Si el equipo tenía un ascenso por el portal, se cierra también.
 4. Policy Mapper -> Session Manager: `obtener_sesion(mac)` devuelve `flow_id`, `dpid` y `vlan`.
 5. Policy Mapper -> ONOS: `DELETE /onos/v1/flows/{dpid}/{flow_id}`. ONOS -> OVS: `OFPFC_DELETE_STRICT` (Tabla 0, `in_port`, `eth_src`). Respuesta 204.
-6. `remover_sesion(mac)`: se liberan los índices `_sessions_by_mac` y `_mac_by_username`. HTTP 200 a FreeRADIUS y Accounting-Response a ONOS. Cualquier reconexión vuelve al Bloque 1.
+6. `remover_sesion(mac)`: se liberan los índices `_sessions_by_mac` y `_mac_by_username`. Respuesta 200 al agente. Cualquier reconexión vuelve al Bloque 1.
 
 ## Código principal
 

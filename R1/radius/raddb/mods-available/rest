@@ -205,14 +205,6 @@ rest {
 		method = 'post'
 		tls = ${..tls}
 	}
-	accounting {
-		uri = "http://policy_mapper:5000/webhook/stop"
-		method = 'post'
-		body = 'json'
-		tls {
-		skip_verify = yes
-		}
-	}
 	post-auth {
 		uri = "http://policy_mapper:5000/webhook"
 		method = 'post'

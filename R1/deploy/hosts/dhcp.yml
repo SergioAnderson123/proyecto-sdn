@@ -1,0 +1,92 @@
+# Cliente DHCP en la interfaz de datos de los hosts (con 802.1X y sin 802.1X; el servidor del portal tiene IP fija).
+#   ansible-playbook -i inventory.ini dhcp.yml --ask-become-pass
+# Lo lanza `python3 slice.py hosts` (o `slice.py dhcp`). Corre desde que arranca el host, ANTES de autenticar: el DHCP del cliente llega
+# al controlador por una regla de R2 (prioridad 40500) y la app DHCP de ONOS le da una IP del rango; un host sin sesion queda en la VLAN
+# de cuarentena (solo ARP y portal) y al autenticar conserva esa IP. Igual que una PC con la red configurada por DHCP.
+#
+# El script de dhclient SOLO pone o quita la direccion: no instala ruta por defecto ni DNS, porque la interfaz de datos no es la salida
+# del host (la del SSH es otra) y una ruta por defecto aqui lo dejaria sin acceso. Va en /etc/dhcp y los archivos se llaman dhclient-r1*
+# para que el perfil de AppArmor de dhclient los permita.
+- name: Cliente DHCP en la interfaz de datos
+  hosts: hosts:sin_802_1x
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Instalar el cliente DHCP
+      ansible.builtin.apt:
+        name: isc-dhcp-client
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Script de dhclient (solo la direccion)
+      register: dhcp_script
+      ansible.builtin.copy:
+        dest: /etc/dhcp/dhclient-r1-script
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          # R1: aplica la direccion que da la app DHCP de ONOS. Sin rutas ni DNS.
+          prefijo=0
+          for o in $(echo "$new_subnet_mask" | tr . ' '); do
+            case "$o" in
+              255) prefijo=$((prefijo + 8));; 254) prefijo=$((prefijo + 7));; 252) prefijo=$((prefijo + 6));; 248) prefijo=$((prefijo + 5));;
+              240) prefijo=$((prefijo + 4));; 224) prefijo=$((prefijo + 3));; 192) prefijo=$((prefijo + 2));; 128) prefijo=$((prefijo + 1));;
+            esac
+          done
+          case "$reason" in
+            BOUND|RENEW|REBIND|REBOOT)
+              if [ -n "$old_ip_address" ] && [ "$old_ip_address" != "$new_ip_address" ]; then
+                ip addr del "$old_ip_address/$prefijo" dev "$interface" 2>/dev/null
+              fi
+              ip addr replace "$new_ip_address/$prefijo" dev "$interface" ;;
+            EXPIRE|FAIL|RELEASE|STOP)
+              ip addr flush dev "$interface" ;;
+          esac
+          exit 0
+
+    - name: Configuracion de dhclient
+      register: dhcp_conf
+      ansible.builtin.copy:
+        dest: /etc/dhcp/dhclient-r1.conf
+        mode: "0644"
+        content: |
+          # R1: no se piden rutas ni DNS (ver dhclient-r1-script)
+          request subnet-mask, broadcast-address;
+          timeout 30;
+          retry 10;
+
+    - name: Servicio r1-dhcp (persiste tras reiniciar)
+      register: dhcp_unidad
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/r1-dhcp.service
+        content: |
+          [Unit]
+          Description=R1: cliente DHCP en {{ iface }} (VNRT)
+          Wants=r1-eapol-bcast.service
+          After=network-online.target r1-eapol-bcast.service
+          [Service]
+          ExecStartPre=/bin/sh -c 'ip link set {{ iface }} up'
+          ExecStart=/usr/sbin/dhclient -d -4 -v -cf /etc/dhcp/dhclient-r1.conf -sf /etc/dhcp/dhclient-r1-script -pf /run/dhclient-r1.pid -lf /var/lib/dhcp/dhclient-r1.leases {{ iface }}
+          ExecStopPost=/bin/sh -c 'ip addr flush dev {{ iface }}'
+          Restart=always
+          RestartSec=5
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Arrancar el cliente DHCP (se reinicia solo si cambio el script, la configuracion o la unidad)
+      ansible.builtin.systemd:
+        name: r1-dhcp
+        daemon_reload: true
+        enabled: true
+        state: "{{ 'restarted' if (dhcp_script.changed or dhcp_conf.changed or dhcp_unidad.changed) else 'started' }}"
+
+    - name: Direccion de la interfaz de datos (puede tardar unos segundos en llegar)
+      ansible.builtin.shell: "for i in 1 2 3 4 5 6; do ip -4 -o addr show dev {{ iface }} | grep -q inet && break; sleep 3; done; ip -4 -o addr show dev {{ iface }}"
+      register: direccion
+      changed_when: false
+      failed_when: false
+
+    - name: Resumen
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ direccion.stdout | default('sin IP todavia (revisa: journalctl -u r1-dhcp)') | trim or 'sin IP todavia (revisa: journalctl -u r1-dhcp)' }}"

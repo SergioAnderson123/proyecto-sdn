@@ -28,11 +28,31 @@ PRIO_CONFIANZA = 40001  # sobre el ARP/EAPOL->controlador de R1 (40000)
 PRIO_PORTAL_ARP = 40002      # ARP de quien no tiene sesión: R1 lo manda solo al controlador (40000) y sin resolver no hay TCP hacia el portal
 PRIO_PORTAL_RETORNO = 40002  # reescritura de la respuesta del portal: sobre el flujo de confianza de la troncal (40001)
 PRIO_PORTAL = 35000          # tráfico al portal y desvío del HTTP; bajo la sesión (40001): con sesión nunca se desvía
+PRIO_DHCP = 40500            # DHCP del cliente (UDP 68 -> 67) al controlador: sobre la sesión (40001), si no la tabla de rol lo descarta; bajo la lista negra
+PRIO_CUARENTENA = 1000       # todo lo que no tiene sesión ni otra regla: a la tabla de cuarentena (solo ARP y portal)
+TABLA_CUARENTENA = 99        # tabla/VLAN de cuarentena si policy.yaml no dice otra
+
+
+def _fusionar(base: dict, extra: dict) -> dict:
+    """Pone `extra` sobre `base`: un diccionario se mezcla clave por clave (un nivel), el resto se reemplaza."""
+    for clave, valor in extra.items():
+        if isinstance(valor, dict) and isinstance(base.get(clave), dict):
+            base[clave] = {**base[clave], **valor}
+        else:
+            base[clave] = valor
+    return base
 
 
 def cargar_politica(ruta: Optional[str] = None) -> dict:
-    with open(ruta or POLICY_PATH, encoding="utf8") as f:
+    """policy.yaml más, si existe junto a él, policy.local.yaml: lo propio de un despliegue (por ejemplo los puertos de confianza y el
+    portal de un slice de VNRT, que genera `slice.py portal`). El archivo local no se versiona y pisa lo del policy.yaml del repositorio."""
+    ruta = ruta or POLICY_PATH
+    with open(ruta, encoding="utf8") as f:
         p = yaml.safe_load(f) or {}
+    local = os.path.splitext(ruta)[0] + ".local.yaml"
+    if os.path.isfile(local):
+        with open(local, encoding="utf8") as f:
+            _fusionar(p, yaml.safe_load(f) or {})
     for clave in ("roles", "services", "trusted", "rules"):
         p.setdefault(clave, {} if clave != "rules" else [])
     return p
@@ -51,6 +71,33 @@ def duracion_sesion_portal(politica: dict, rol: str) -> int:
     """Segundos que dura una sesión del portal para un rol (`portal.duracion_s`; 8 h si no se configura)."""
     d = politica.get("portal", {}).get("duracion_s", {})
     return int(d.get(rol, d.get("default", 28800)))
+
+
+def rol_de_vlan(politica: dict, vlan) -> Optional[str]:
+    """Clave del rol cuya tabla es `vlan` (la VLAN de una sesión es la tabla de su rol), o None."""
+    for rol, d in politica.get("roles", {}).items():
+        if int(d.get("tabla", -1)) == int(vlan):
+            return rol
+    return None
+
+
+def roles_de_ascenso(politica: dict, rol_base: Optional[str]) -> List[str]:
+    """Roles a los que se puede subir por el portal desde una sesión 802.1X con `rol_base` (`ascenso` en policy.yaml)."""
+    return list((politica.get("ascenso") or {}).get(rol_base, []) or [])
+
+
+def puede_ascender(politica: dict, rol_base: Optional[str], rol_destino: Optional[str]) -> bool:
+    return bool(rol_base and rol_destino) and rol_destino in roles_de_ascenso(politica, rol_base)
+
+
+def ascenso_exige_ubicacion(politica: dict) -> bool:
+    return bool(politica.get("ascenso_exigir_ubicacion", True))
+
+
+def tabla_cuarentena(politica: dict) -> Optional[int]:
+    """Tabla (= VLAN) de cuarentena (`cuarentena.tabla` en policy.yaml); None si no hay sección `cuarentena`: sin cuarentena."""
+    c = politica.get("cuarentena")
+    return None if c is None else int((c or {}).get("tabla", TABLA_CUARENTENA))
 
 
 def servicios_permitidos(politica: dict, rol_matriz: str) -> Dict[str, bool]:
@@ -118,6 +165,39 @@ def flujos_confianza(politica: dict, dpid: str) -> List[dict]:
     return [_base(dpid, 0, PRIO_CONFIANZA, [{"type": "IN_PORT", "port": int(p)}], salida) for p in t]
 
 
+def flujos_dhcp(dpid: str) -> List[dict]:
+    """El DHCP del cliente (UDP 68 -> 67) va al controlador, donde lo atiende la app DHCP de ONOS (que responde por el mismo puerto).
+
+    Va en la tabla 0 sobre el flujo de sesión: sin esta regla, un host con sesión mandaría su DHCP a la tabla de su rol, que lo descarta
+    (ni ONOS lo vería: la regla propia de la app es de prioridad 40000, bajo la sesión). Sin sesión también llega, así que un host en
+    cuarentena obtiene IP. No lleva VLAN: la app copia la VLAN de la petición en su respuesta y el host no habla 802.1Q."""
+    return [_base(dpid, 0, PRIO_DHCP, [
+        {"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "IP_PROTO", "protocol": 17},
+        {"type": "UDP_SRC", "udpPort": 68}, {"type": "UDP_DST", "udpPort": 67}], [{"type": "OUTPUT", "port": "CONTROLLER"}])]
+
+
+def flujos_cuarentena(politica: dict, dpid: str) -> List[dict]:
+    """Cuarentena (vacía si policy.yaml no tiene `cuarentena`): lo que llega a la tabla 0 sin sesión ni otra regla recibe la VLAN de
+    cuarentena y pasa a su tabla, que solo deja ARP y TCP al portal cautivo (el DHCP ya se atendió en la tabla 0). Es el estado de un
+    invitado antes de iniciar sesión; al iniciarla, el flujo de sesión (40001) lo saca de aquí hacia la tabla de su rol."""
+    tabla = tabla_cuarentena(politica)
+    if tabla is None:
+        return []
+    vlan = {"type": "VLAN_VID", "vlanId": tabla}
+    flujos = [_base(dpid, 0, PRIO_CUARENTENA, [], [
+        {"type": "L2MODIFICATION", "subtype": "VLAN_PUSH", "ethernetType": "0x8100"},
+        {"type": "L2MODIFICATION", "subtype": "VLAN_ID", "vlanId": tabla},
+        {"type": "TABLE", "tableId": tabla}]),
+        _base(dpid, tabla, PRIO_ROL, [vlan, {"type": "ETH_TYPE", "ethType": "0x0806"}], _SALIDA)]
+    portal = politica.get("portal")
+    if portal:
+        flujos.append(_base(dpid, tabla, PRIO_ROL, [
+            vlan, {"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "IP_PROTO", "protocol": 6},
+            {"type": "IPV4_DST", "ip": f"{portal['ip']}/32"}, {"type": "TCP_DST", "tcpPort": int(portal["puerto"])}], _SALIDA))
+    flujos.append(_base(dpid, tabla, 0, [], []))   # sin instrucciones = DROP explícito
+    return flujos
+
+
 def flujos_portal(politica: dict, dpid: str) -> List[dict]:
     """Flujos del portal cautivo en un switch de acceso (vacío si no figura en `portal.switches`).
 
@@ -159,6 +239,7 @@ def flujos_dispositivo(politica: dict, dpid: str) -> List[dict]:
     """Todo lo que R2 instala en un switch. Los de confianza total no llevan tablas de rol (no tienen usuarios)."""
     flujos = flujos_confianza(politica, dpid) + flujos_portal(politica, dpid)
     if politica["trusted"].get(dpid) != "all":
+        flujos += flujos_dhcp(dpid) + flujos_cuarentena(politica, dpid)
         for rol, datos in politica["roles"].items():
             flujos += flujos_tabla_rol(politica, dpid, rol, int(datos["tabla"]))
     return flujos

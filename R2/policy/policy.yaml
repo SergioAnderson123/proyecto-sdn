@@ -9,6 +9,24 @@ roles:
   soporte: {matriz: administrator, tabla: 40}   # soporte TI (grupo LDAP soporteTI); la tabla 30 queda reservada a IoT/MAB
   invitado: {matriz: guest, tabla: 50}          # invitados y equipos sin 802.1X: entran por el portal cautivo con usuario y contraseña
 
+# Ascenso por el portal cautivo: un equipo autenticado por 802.1X con el rol {base} puede subir al rol {destino} cuando una persona
+# entra en el portal con SU usuario y contraseña de LDAP (grupo con ese rol), desde el mismo equipo (misma MAC) y en la ubicación que
+# ONOS AAA tiene para esa MAC (switch y puerto de su sesión). Al cerrar sesión en el portal o vencer el plazo (portal.duracion_s) el
+# equipo vuelve al rol base; si el equipo vuelve a autenticar por 802.1X o se desconecta, el ascenso se anula. Sin esta tabla, una MAC
+# con sesión no puede usar el portal (409).
+ascenso:
+  alumno: [docente]
+# La ubicación se lee de la tabla AAA de ONOS (/onos/aaa/app/users, entradas AUTHORIZED): allí figura todo equipo con sesión 802.1X.
+# true: rechazar el ascenso si ONOS AAA no tiene a la MAC autorizada; false: comparar solo cuando la tiene.
+ascenso_exigir_ubicacion: true
+
+# Cuarentena: todo host SIN sesión (un invitado antes de iniciar sesión, un IoT antes del MAB, un equipo que aún no autentica) recibe la
+# VLAN 99 y su tabla solo deja pasar ARP y TCP al portal cautivo. El DHCP no pasa por la tabla: la regla de la tabla 0 (prioridad 40500)
+# lo manda al controlador, donde lo atiende la app DHCP de ONOS (rango y tiempos: R1/deploy/.env.example). Al iniciar sesión (802.1X, portal
+# o MAB) el flujo de sesión saca al host de la cuarentena. Quitar esta sección desactiva la cuarentena.
+cuarentena:
+  tabla: 99
+
 # Portal cautivo (usuario y contraseña validados contra LDAP): para invitados y dispositivos que no hablan 802.1X.
 # El portal es un servidor web con IP en el plano de datos. Un usuario SIN sesión solo puede alcanzar al portal; su tráfico HTTP hacia
 # los destinos de `desvios` se reescribe hacia el portal (que responde con una redirección al formulario) y la respuesta se reescribe
@@ -22,7 +40,7 @@ portal:
     - {ip: 10.0.0.40, mac: "00:00:00:00:00:44", tcp: 8003, puerto_portal: 8083}
   grupos: {profesor: docente, alumno: alumno, soporteTI: soporte, invitado: invitado}   # grupo LDAP -> rol
   # Duración máxima de una sesión del portal (s), por rol; al vencer se borra el flujo y hay que volver a entrar.
-  # Las de 802.1X no vencen: terminan con el Accounting-Stop del switch.
+  # Las de 802.1X no vencen: terminan cuando el agente del host avisa del cierre (POST /sessions/logout).
   duracion_s: {invitado: 1800, default: 28800}
 
 # Catálogo de recursos: IP y puerto TCP de cada servicio (topología topo_baseR2.py: h4 = servicios de alumnos, h5 = de profesores).

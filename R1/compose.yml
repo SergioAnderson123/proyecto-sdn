@@ -71,6 +71,7 @@ services:
       - ONOS_PORT=8181
       - AAA_CACHE_TTL_S=${AAA_CACHE_TTL_S:-0.05}
       - AGENTE_TOKEN=${AGENTE_TOKEN:-}        # clave del agente 802.1X de los hosts (la genera slice.py)
+      - PORTAL_TOKEN=${PORTAL_TOKEN:-}        # clave del servidor del portal cautivo (la genera slice.py)
       - PYTHONPATH=/app:/r2_policy            # policy_tables, portal_auth y policy.yaml viven en R2/policy
     ports:
       - "5000:5000"

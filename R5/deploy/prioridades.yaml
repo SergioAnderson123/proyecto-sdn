@@ -3,7 +3,7 @@
 r1:
   eapol: 50000          # EAPOL de un puerto con sesión -> controlador (Policy Mapper); sin esto la sesión (40001) se traga el logoff. ONOS AAA instala su propia regla a 40000
   drop_temporal: 45000  # lista negra por suplantación (Policy Mapper)
-  base: 40000           # LLDP, BDDP, ARP, DHCP al controlador
+  base: 40000           # LLDP, BDDP, ARP y el DHCP de la app de ONOS al controlador (bajo la sesión: por eso R2 pone su propia regla de DHCP)
 r5:                     # banda 41000-44999 (LLSD SEM-09)
   drop: 42000           # DROP por IP de origen (integrador M09)
   espejo: 41000         # copia al IDS en el Core; debe quedar sobre la sesión y los puertos de confianza de R2
@@ -15,3 +15,6 @@ r2:
   portal_arp: 40002     # portal cautivo: ARP de quien no tiene sesión (R1 solo lo manda al controlador)
   portal_retorno: 40002 # portal cautivo: reescribe la respuesta del portal al destino original (sobre la confianza de la troncal)
   portal: 35000         # portal cautivo: tráfico al portal y desvío del HTTP; bajo la sesión, así que con sesión nunca se desvía
+  dhcp: 40500           # DHCP del cliente (UDP 68 -> 67) al controlador, con o sin sesión; sobre la sesión (40001) y bajo la lista negra (45000) y el DROP de R5 (42000)
+  cuarentena: 1000      # sin sesión ni otra regla: push de la VLAN de cuarentena y salto a su tabla (solo ARP y portal)
+  tabla_cuarentena: 99  # tabla/VLAN de cuarentena (policy.yaml: cuarentena.tabla)

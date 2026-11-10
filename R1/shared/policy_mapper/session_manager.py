@@ -19,6 +19,7 @@ class ActiveSession:
     flow_id: Optional[str] = None
     metodo: str = "802.1X"       # "802.1X" (RADIUS) o "Portal" (usuario y contraseña)
     expira: Optional[float] = None   # instante (time.time()) en que vence; None = no vence
+    base: Optional["ActiveSession"] = None   # ascenso por el portal: la sesion 802.1X del equipo que esta reemplaza (se restaura al cerrar o vencer)
 
 
 class SessionManager:

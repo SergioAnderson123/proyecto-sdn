@@ -7,6 +7,7 @@ Uso (dentro del contenedor mininet):  python3 /root/shared-r2/admision_concurren
 Por defecto 5 repeticiones y niveles de concurrencia 1, 2, 3 y 5.
 """
 import json
+import os
 import subprocess
 import sys
 import time
@@ -45,9 +46,8 @@ def sesiones():
 
 
 def cerrar(usuario, mac):
-    cuerpo = {"User-Name": {"type": "string", "value": [usuario]}, "Calling-Station-Id": {"type": "string", "value": [mac.replace(":", "-")]}}
-    r = urllib.request.Request(MAPPER + "/webhook/stop", method="POST", data=json.dumps(cuerpo).encode(),
-                               headers={"Content-Type": "application/json"})
+    r = urllib.request.Request(MAPPER + "/sessions/logout", method="POST", data=json.dumps({"mac": mac}).encode(),
+                               headers={"Content-Type": "application/json", "X-Agente-Token": os.environ.get("AGENTE_TOKEN", "")})
     try:
         urllib.request.urlopen(r, timeout=5).read()
     except Exception:

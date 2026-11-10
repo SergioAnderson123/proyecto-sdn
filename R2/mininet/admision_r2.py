@@ -1,13 +1,15 @@
 """Mide la admisión REAL de usuarios en R2, desde DENTRO del contenedor mininet (sin la sobrecarga de `docker exec`).
 
-Por cada rol (docente h1, alumno h2, soporte h3) repite N veces: cierra la sesión (webhook /webhook/stop, equivale al
-Accounting-Stop de RADIUS), mata y vuelve a lanzar wpa_supplicant y mide con un reloj monotónico:
+Por cada rol (docente h1, alumno h2, soporte h3) repite N veces: cierra la sesión (POST /sessions/logout, el mismo aviso que
+envía el agente del host; requiere AGENTE_TOKEN en el entorno de este script y del Policy Mapper), mata y vuelve a lanzar
+wpa_supplicant y mide con un reloj monotónico:
   - sesión : hasta que el Policy Mapper registra la sesión (EAP-TLS + RADIUS + LDAP + webhook + flujo 40001)
   - acceso : hasta que el primer servicio permitido responde 200 (incluye ARP y el flujo en el switch)
 
 Uso (dentro del contenedor):  python3 /root/shared-r2/admision_r2.py [N] [rol ...]     (por defecto N=10 y los tres roles)
 """
 import json
+import os
 import subprocess
 import sys
 import time
@@ -32,9 +34,8 @@ def sesiones():
 
 
 def cerrar(usuario, mac_radius):
-    cuerpo = {"User-Name": {"type": "string", "value": [usuario]}, "Calling-Station-Id": {"type": "string", "value": [mac_radius]}}
-    r = urllib.request.Request(MAPPER + "/webhook/stop", method="POST", data=json.dumps(cuerpo).encode(),
-                               headers={"Content-Type": "application/json"})
+    r = urllib.request.Request(MAPPER + "/sessions/logout", method="POST", data=json.dumps({"mac": mac_radius}).encode(),
+                               headers={"Content-Type": "application/json", "X-Agente-Token": os.environ.get("AGENTE_TOKEN", "")})
     urllib.request.urlopen(r, timeout=5).read()
 
 

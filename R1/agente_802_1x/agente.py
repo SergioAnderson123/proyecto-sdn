@@ -139,6 +139,18 @@ class Agente:
         self.deseado = None      # identidad que debe estar conectada (el vigilante la relanza si se cae)
         self.desde = 0.0
         self.log = deque(maxlen=60)
+        self._cache = {}         # ruta del Policy Mapper -> (instante, respuesta)
+
+    def consultar_mapper(self, ruta, ttl=5.0):
+        """GET al Policy Mapper con una cache corta: la pagina consulta el estado cada 2 s (y puede haber varias abiertas) y
+        no hace falta preguntarle al Policy Mapper por cada una. Las respuestas vacias o con error no se guardan."""
+        guardado = self._cache.get(ruta)
+        if guardado and time.monotonic() - guardado[0] < ttl:
+            return guardado[1]
+        respuesta = http_json(f"{self.mapper}{ruta}")
+        if respuesta is not None:
+            self._cache[ruta] = (time.monotonic(), respuesta)
+        return respuesta
 
     def usuarios(self):
         return descubrir_usuarios(self.carpeta)
@@ -282,14 +294,16 @@ class Agente:
                 "usuarios": [{"id": u, "rol": rol_de(u)[0], "vlan": rol_de(u)[1]} for u in self.usuarios()],
                 "defecto": self.defecto, "mensaje": "", "sesion": None, "log": list(self.log)[-25:]}
         if estado == "autenticado":
-            sesion = sesion_de(mac, http_json(f"{self.mapper}/sessions")) if mac else None
+            sesion = sesion_de(mac, self.consultar_mapper("/sessions")) if mac else None
+            if not sesion:
+                self._cache.pop("/sessions", None)   # recien autenticado: que la siguiente consulta no use datos viejos
             if sesion:
                 resp["sesion"] = sesion
                 resp["mensaje"] = f"Acceso concedido como {rol} (VLAN {sesion.get('vlan', vlan)})"
             else:
                 resp["mensaje"] = "Autenticado por 802.1X; sin datos del Policy Mapper"
         elif estado == "rechazado":
-            ev = ultimo_rechazo(mac, http_json(f"{self.mapper}/events"), desde) if mac else None
+            ev = ultimo_rechazo(mac, self.consultar_mapper("/events", ttl=2.0), desde) if mac else None
             resp["mensaje"] = ev.get("detalle", "Acceso denegado") if ev else "El servidor rechazo la autenticacion"
         elif estado == "autenticando":
             resp["mensaje"] = "Negociando EAP-TLS con el servidor..."

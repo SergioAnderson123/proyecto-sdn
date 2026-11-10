@@ -1,0 +1,106 @@
+# Portal cautivo en un host de VNRT, con IP FIJA en la interfaz de datos (el resto de los hosts toma la suya por DHCP: dhcp.yml).
+#   ansible-playbook -i inventory.ini portal.yml --ask-become-pass
+# Lo lanza `python3 slice.py portal` con el inventario que genera `slice.py` (grupos hosts, portal y sin_802_1x).
+#
+# Por que en un host y no en el Controller: el portal toma la MAC del cliente de su tabla ARP (nunca del cliente), asi que debe estar en el
+# mismo dominio de difusion que los clientes, y el Controller solo tiene la red de gestion. Su puerto del switch debe ser de CONFIANZA
+# en R2 (lo hace `slice.py portal` con R2/policy/policy.local.yaml): su trafico no pasa por una sesion 802.1X.
+- name: IP fija del host del portal (fuera del rango DHCP)
+  hosts: portal
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Servicio r1-ip-datos (persiste tras reiniciar)
+      register: ip_unidad
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/r1-ip-datos.service
+        content: |
+          [Unit]
+          Description=R1: IP de datos {{ ip_datos }}/24 en {{ iface }} (VNRT)
+          After=network-online.target r1-eapol-bcast.service
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/sh -c 'ip link set {{ iface }} up && ip addr replace {{ ip_datos }}/24 dev {{ iface }}'
+          ExecStop=/bin/sh -c 'ip addr del {{ ip_datos }}/24 dev {{ iface }}'
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Activar la IP de datos
+      ansible.builtin.systemd:
+        name: r1-ip-datos
+        daemon_reload: true
+        enabled: true
+        state: "{{ 'restarted' if ip_unidad.changed else 'started' }}"
+
+- name: Servidor del portal cautivo
+  hosts: portal
+  become: true
+  gather_facts: false
+  vars:
+    origen: "{{ playbook_dir }}/../../../R2/portal_cautivo"
+    destino: /opt/portal
+    mapper_url: "http://{{ controller_ip | default('192.168.0.10') }}:5000"
+  tasks:
+    - name: Instalar arping (anuncia la IP del portal para que ONOS lo ubique)
+      ansible.builtin.apt:
+        name: iputils-arping
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Carpeta del portal
+      ansible.builtin.file:
+        path: "{{ destino }}/static"
+        state: directory
+        mode: "0755"
+
+    - name: Copiar el servidor del portal
+      register: portal_codigo
+      ansible.builtin.copy:
+        src: "{{ origen }}/server.py"
+        dest: "{{ destino }}/server.py"
+        mode: "0644"
+
+    - name: Copiar el CSS del portal
+      ansible.builtin.copy:
+        src: "{{ origen }}/static/"
+        dest: "{{ destino }}/static/"
+        mode: "0644"
+
+    - name: Servicio r1-portal
+      register: portal_unidad
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/r1-portal.service
+        mode: "0600"   # lleva la clave PORTAL_TOKEN
+        content: |
+          [Unit]
+          Description=R1/R2: portal cautivo en {{ portal_ip }}:{{ portal_puerto }}
+          After=network-online.target r1-ip-datos.service
+          Wants=r1-ip-datos.service
+          [Service]
+          Environment=MAPPER_URL={{ mapper_url }}
+          Environment=PORTAL_TOKEN={{ portal_token | default('') }}
+          Environment=PORTAL_IP={{ portal_ip }}
+          Environment=PORTAL_PUERTOS={{ portal_puerto }}
+          ExecStart=/usr/bin/python3 {{ destino }}/server.py
+          Restart=always
+          RestartSec=3
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Arrancar el portal (se reinicia solo si cambio su codigo o su unidad)
+      ansible.builtin.systemd:
+        name: r1-portal
+        daemon_reload: true
+        enabled: true
+        state: "{{ 'restarted' if (portal_codigo.changed or portal_unidad.changed) else 'started' }}"
+
+    - name: Anunciar la IP del portal (ARP gratuito)
+      ansible.builtin.command: "arping -U -c 3 -I {{ iface }} {{ ip_datos }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Resumen
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: portal en http://{{ ip_datos }}:{{ portal_puerto }} (solo en la red de datos); el Policy Mapper esta en {{ mapper_url }}"

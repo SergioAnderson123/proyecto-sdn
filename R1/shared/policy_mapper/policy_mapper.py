@@ -62,6 +62,9 @@ async def _expirar_sesiones_portal() -> None:
         await asyncio.sleep(10)
         try:
             for s in session_store.vencidas(time.time()):
+                if s.base is not None:
+                    await _restaurar_base(s, "vencida por tiempo")
+                    continue
                 session_store.remove_session(s.mac)
                 await eliminar_flujo_onos(s.dpid, s.flow_id)
                 print(f"\n[PORTAL] Sesión de {s.username} ({s.mac}) vencida; flujo eliminado")
@@ -116,18 +119,18 @@ class LogoutAgente(BaseModel):
 async def logout_del_agente(r: LogoutAgente, x_agente_token: str = Header(default="")):
     """Cierre de sesion avisado por el agente del host (boton Desconectar, cambio de identidad, apagado o enlace caido).
 
-    ONOS AAA 2.7.0 procesa el EAPOL-Logoff (AUTHORIZED -> IDLE) pero NO envia Accounting-Request a RADIUS, asi que
-    /webhook/stop nunca se dispara y la sesion se quedaba para siempre. Aqui se borra la sesion 802.1X y su flujo 40001,
-    sin lista negra (distinto de /sessions/revoke). Va protegido con AGENTE_TOKEN: sin clave, cualquiera podria cerrar
-    la sesion de otro con solo conocer su MAC."""
+    ONOS AAA 2.7.0 procesa el EAPOL-Logoff (AUTHORIZED -> IDLE) pero NO envia Accounting-Request a RADIUS, asi que este
+    aviso es el unico cierre de una sesion 802.1X. Se borra la sesion y su flujo 40001, sin lista negra (distinto de
+    /sessions/revoke); si el equipo tenia un ascenso por el portal, se borra tambien (no queda ninguna sesion para esa MAC).
+    Va protegido con AGENTE_TOKEN: sin clave, cualquiera podria cerrar la sesion de otro con solo conocer su MAC."""
     if not AGENTE_TOKEN or not hmac.compare_digest(x_agente_token, AGENTE_TOKEN):
         raise HTTPException(status_code=403, detail="Clave del agente invalida o endpoint desactivado")
     mac = r.mac.lower().replace("-", ":")
     sesion = session_store.get_by_mac(mac)
     if not sesion:
         return {"status": "sin_sesion"}
-    if sesion.metodo != "802.1X":
-        return {"status": "no_es_802_1x"}   # las sesiones del portal tienen su propio cierre
+    if sesion.metodo != "802.1X" and sesion.base is None:
+        return {"status": "no_es_802_1x"}   # las sesiones del portal tienen su propio cierre; un ascenso se cierra con el equipo
     session_store.remove_session(mac)
     await eliminar_flujo_onos(sesion.dpid, sesion.flow_id)
     print(f"\n[<<< LOGOUT] Sesión de {sesion.username} ({mac}) cerrada por el agente; flujo {sesion.flow_id} eliminado de {sesion.dpid}")
@@ -149,6 +152,46 @@ def _verificar_portal(token: str) -> None:
         raise HTTPException(status_code=403, detail="Portal no autorizado")
 
 
+async def _validar_ascenso(ses_mac, ses_usuario, rol_destino: str, mac: str) -> Optional[str]:
+    """None si el usuario del portal puede subir la sesión de este equipo; si no, el motivo del rechazo (409).
+
+    Condiciones, todas a la vez: la MAC tiene una sesión 802.1X sin ascenso previo; el rol base de esa sesión puede subir al rol del
+    usuario (`ascenso` en policy.yaml); el usuario no tiene otra sesión; y la ubicación coincide con la de la sesión (la MAC ya
+    coincide: es la de la sesión). La ubicación sale de la tabla AAA de ONOS; si ONOS no tiene al equipo autorizado se rechaza, salvo que
+    `ascenso_exigir_ubicacion` sea false en policy.yaml (entonces solo se compara cuando ONOS la tiene)."""
+    if ses_usuario is not None:
+        return "Ya existe una sesión activa para este usuario o equipo"
+    if ses_mac is None or ses_mac.metodo != "802.1X" or ses_mac.base is not None or ses_mac.mac != mac:
+        return "Ya existe una sesión activa para este usuario o equipo"
+    rol_base = policy_tables.rol_de_vlan(POLITICA, ses_mac.vlan)
+    if not policy_tables.puede_ascender(POLITICA, rol_base, rol_destino):
+        return "Este equipo no admite subir de rol con su usuario"
+    # La ubicación se lee de la tabla AAA de ONOS (donde ONOS recibió el EAPOL de esa MAC), no de su tabla de hosts, a la que un host con
+    # sesión 802.1X casi nunca llega: se compara con la que el Session Manager guardó al admitir la sesión.
+    ubicaciones = await ubicaciones_aaa(mac)
+    if ubicaciones and (ses_mac.dpid, str(ses_mac.port)) not in ubicaciones:
+        return "La ubicación del equipo no coincide con la de su sesión"
+    if not ubicaciones and policy_tables.ascenso_exige_ubicacion(POLITICA):
+        return "ONOS no tiene al equipo autenticado en este puerto; reintente o autentique de nuevo"
+    return None
+
+
+async def _restaurar_base(ses: ActiveSession, motivo: str) -> None:
+    """Termina un ascenso: borra el flujo del rol alto y reinstala el de la sesión 802.1X que reemplazó."""
+    base = ses.base
+    session_store.remove_session(ses.mac)
+    await eliminar_flujo_onos(ses.dpid, ses.flow_id)
+    flow_id = await inyectar_flujo_tabla_0(base.dpid, base.port, base.mac, base.vlan)
+    if not flow_id:
+        print(f"  [ASCENSO ERROR] No se pudo restaurar el rol {base.rol} de {base.mac}; el equipo debe autenticar de nuevo")
+        eventos.registrar("logout", ses.username, ses.mac, ses.dpid, ses.port, f"Ascenso {motivo}; no se pudo restaurar {base.rol}", ses.rol)
+        return
+    base.flow_id = flow_id
+    session_store.register_session(base)
+    print(f"\n[PORTAL] Ascenso de {ses.username} ({ses.mac}) {motivo}; el equipo vuelve a {base.rol}")
+    eventos.registrar("logout", ses.username, ses.mac, ses.dpid, ses.port, f"Portal: sesión {ses.rol} {motivo}; el equipo vuelve a {base.rol}", ses.rol)
+
+
 @app.post("/portal/login")
 async def portal_login(p: PortalLogin, x_portal_token: str = Header(default="")):
     """Portal cautivo: valida usuario y contraseña contra LDAP e instala la sesión (mismo flujo 40001 que 802.1X).
@@ -165,26 +208,47 @@ async def portal_login(p: PortalLogin, x_portal_token: str = Header(default=""))
     if not info:
         eventos.registrar("rechazado", p.usuario, mac, detalle="Portal: grupo LDAP sin rol de acceso")
         raise HTTPException(status_code=403, detail="Su grupo no tiene acceso")
-    if session_store.get_by_mac(mac) or session_store.get_by_username(p.usuario):
-        eventos.registrar("conflicto", p.usuario, mac, detalle="Portal: usuario o MAC con sesión activa", rol=rol)
-        raise HTTPException(status_code=409, detail="Ya existe una sesión activa para este usuario o equipo")
-    ubic = await portal_auth.ubicar_host(mac, ONOS_BASE_URL, ONOS_AUTH)
-    if not ubic:
-        eventos.registrar("rechazado", p.usuario, mac, detalle="Portal: ONOS no conoce al equipo", rol=rol)
-        raise HTTPException(status_code=409, detail="No se pudo ubicar el equipo en la red; reintente")
-    dpid, port = ubic
+    base = None
+    ses_mac = session_store.get_by_mac(mac)
+    ses_usuario = session_store.get_by_username(p.usuario)
+    if ses_mac or ses_usuario:
+        # ASCENSO: la MAC tiene una sesion 802.1X de un rol base y el usuario tiene un rol al que ese rol puede subir. Cualquier otra
+        # combinacion sigue siendo el conflicto de siempre (409): no se relaja nada de la deteccion de suplantacion.
+        motivo = await _validar_ascenso(ses_mac, ses_usuario, rol, mac)
+        if motivo:
+            eventos.registrar("conflicto", p.usuario, mac, detalle=f"Portal: {motivo}", rol=rol)
+            raise HTTPException(status_code=409, detail=motivo)
+        base = ses_mac
+        dpid, port = base.dpid, base.port      # la ubicacion es la de la sesion 802.1X, ya verificada contra LDAP
+    else:
+        ubic = await portal_auth.ubicar_host(mac, ONOS_BASE_URL, ONOS_AUTH)
+        if not ubic:
+            eventos.registrar("rechazado", p.usuario, mac, detalle="Portal: ONOS no conoce al equipo", rol=rol)
+            raise HTTPException(status_code=409, detail="No se pudo ubicar el equipo en la red; reintente")
+        dpid, port = ubic
     vlan = int(info["tabla"])
     if await policy_tables.faltantes(POLITICA, [dpid], ONOS_BASE_URL, ONOS_AUTH):
         await policy_tables.sincronizar(POLITICA, [dpid], ONOS_BASE_URL, ONOS_AUTH)
+    if base is not None:
+        # el flujo del rol base y el nuevo tienen el mismo match (in_port + eth_src, 40001): primero se quita el base
+        session_store.remove_session(mac)
+        await eliminar_flujo_onos(base.dpid, base.flow_id)
     flow_id = await inyectar_flujo_tabla_0(dpid, port, mac, vlan)
     if not flow_id:
+        if base is not None:     # no se pudo subir: el equipo conserva su rol base
+            base.flow_id = await inyectar_flujo_tabla_0(base.dpid, base.port, base.mac, base.vlan)
+            session_store.register_session(base)
         raise HTTPException(status_code=502, detail="No se pudo instalar la sesión en el switch")
     nombre = rol.capitalize()
     session_store.register_session(ActiveSession(username=p.usuario, mac=mac, dpid=dpid, port=port, vlan=vlan,
-                                                 rol=nombre, flow_id=flow_id, metodo="Portal",
+                                                 rol=nombre, flow_id=flow_id, metodo="Portal", base=base,
                                                  expira=time.time() + policy_tables.duracion_sesion_portal(POLITICA, rol)))
-    print(f"  [V] PORTAL: {p.usuario} ({rol}) en {dpid}:{port} -> tabla {vlan}")
-    eventos.registrar("admitido", p.usuario, mac, dpid, port, f"Portal cautivo: tabla {vlan}", nombre, vlan)
+    if base is not None:
+        print(f"  [V] ASCENSO: {p.usuario} sube {base.username} ({base.rol}) a {nombre} en {dpid}:{port} -> tabla {base.vlan} -> {vlan}")
+        eventos.registrar("admitido", p.usuario, mac, dpid, port, f"Ascenso por el portal: {base.rol} -> {nombre} (tabla {base.vlan} -> {vlan})", nombre, vlan)
+    else:
+        print(f"  [V] PORTAL: {p.usuario} ({rol}) en {dpid}:{port} -> tabla {vlan}")
+        eventos.registrar("admitido", p.usuario, mac, dpid, port, f"Portal cautivo: tabla {vlan}", nombre, vlan)
     return {"status": "ok", "usuario": p.usuario, "rol": nombre, "tabla": vlan}
 
 
@@ -200,6 +264,9 @@ async def portal_logout(p: PortalLogout, x_portal_token: str = Header(default=""
     ses = session_store.get_by_mac(mac)
     if not ses or ses.metodo != "Portal":
         return {"status": "sin_sesion"}
+    if ses.base is not None:      # un ascenso: el equipo vuelve a su rol base
+        await _restaurar_base(ses, "cerrada por el usuario")
+        return {"status": "cerrada", "vuelve_a": ses.base.rol}
     session_store.remove_session(mac)
     await eliminar_flujo_onos(ses.dpid, ses.flow_id)
     eventos.registrar("logout", ses.username, mac, ses.dpid, ses.port, "Portal: sesión cerrada por el usuario", ses.rol)
@@ -210,7 +277,13 @@ async def portal_logout(p: PortalLogout, x_portal_token: str = Header(default=""
 async def portal_estado(mac: str):
     """Sesión (si hay) de una MAC; el portal lo usa para mostrar «ya inició sesión»."""
     ses = session_store.get_by_mac(mac.lower().replace("-", ":"))
-    return {"sesion": None if not ses else {"usuario": ses.username, "rol": ses.rol, "metodo": ses.metodo}}
+    if not ses:
+        return {"sesion": None}
+    ascenso_a = []
+    if ses.metodo == "802.1X" and ses.base is None:     # roles a los que una persona puede subir este equipo desde el portal
+        ascenso_a = policy_tables.roles_de_ascenso(POLITICA, policy_tables.rol_de_vlan(POLITICA, ses.vlan))
+    return {"sesion": {"usuario": ses.username, "rol": ses.rol, "metodo": ses.metodo, "ascenso_a": ascenso_a,
+                       "base": None if not ses.base else {"usuario": ses.base.username, "rol": ses.base.rol}}}
 
 
 @app.post("/policy/sync")
@@ -260,6 +333,7 @@ async def ver_sesiones():
                 "flow_id": ses.flow_id,
                 "metodo": ses.metodo,
                 "expira": ses.expira,
+                "base": ses.base.username if ses.base else None,   # ascenso por el portal: sesion 802.1X del equipo que reemplaza
             }
             for mac, ses in session_store._sessions_by_mac.items()
         },
@@ -386,6 +460,29 @@ async def candidatos_onos(username_externo: str) -> List[dict]:
           por_ubicacion[clave] = info
 
   return list(por_ubicacion.values())
+
+
+async def ubicaciones_aaa(mac: str) -> List[tuple]:
+  """(dpid, puerto) de cada entrada AUTORIZADA de la tabla AAA de ONOS para esa MAC (lista vacía si ONOS no la tiene autorizada).
+
+  Es la fuente de la ubicación para el ascenso por el portal: un equipo con sesión 802.1X siempre figura ahí. Una entrada que no está
+  AUTHORIZED (IDLE tras un EAPOL-Logoff, UNAUTHORIZED, pendiente) no cuenta: el equipo ya no está autenticado para ONOS."""
+  ubicaciones: List[tuple] = []
+  for entrada in await _tabla_aaa():
+    if not isinstance(entrada, dict) or str(entrada.get("macAddress", "")).strip().lower() != mac:
+      continue
+    estado = str(entrada.get("state", entrada.get("authState", ""))).upper()
+    if "AUTHORIZED" not in estado or "UNAUTHORIZED" in estado:
+      continue
+    punto = str(entrada.get("connectPoint", "") or "")
+    if "/" not in punto:
+      punto = str(entrada.get("subscriberId", "") or "")
+    if "/" not in punto:
+      continue
+    dpid, puerto = punto.rsplit("/", 1)
+    if (dpid, puerto) not in ubicaciones:
+      ubicaciones.append((dpid, puerto))
+  return ubicaciones
 
 
 _candados_por_usuario: dict = {}   # identidad_onos -> asyncio.Lock
@@ -630,6 +727,19 @@ async def _procesar_webhook(identidad_ldap: str, mac_esperada: str, mac_fisica: 
         identidad_ldap
     ) or session_store.get_by_mac(mac_fisica)
 
+    # Un ascenso por el portal reemplaza la sesion del equipo por la de una persona. Si el PROPIO equipo (misma identidad, MAC, switch y
+    # puerto que la sesion base) vuelve a autenticar, no es una suplantacion: se anula el ascenso y se sigue como un equipo sin sesion.
+    # Cualquier otra identidad en esa MAC sigue cayendo en el conflicto de abajo.
+    if sesion_activa is not None and sesion_activa.base is not None:
+        b = sesion_activa.base
+        if (b.username.lower() == identidad_ldap.lower() and b.mac == mac_fisica
+                and b.dpid == dpid and str(b.port) == str(port)):
+            session_store.remove_session(sesion_activa.mac)
+            await eliminar_flujo_onos(sesion_activa.dpid, sesion_activa.flow_id)
+            eventos.registrar("logout", sesion_activa.username, mac_fisica, dpid, port,
+                              f"El equipo reautenticó por 802.1X: se anula el ascenso a {sesion_activa.rol}", sesion_activa.rol)
+            sesion_activa = None
+
     if sesion_activa:
         if (sesion_activa.dpid == dpid and str(sesion_activa.port) == str(port) and sesion_activa.mac == mac_fisica
                 and sesion_activa.username.lower() == identidad_ldap.lower()):
@@ -720,41 +830,6 @@ async def _procesar_webhook(identidad_ldap: str, mac_esperada: str, mac_fisica: 
 # -----------------------------------------------------------------------------
 # WEBHOOK DE DESCONEXIÓN / LOGOUT (Cascade Revocation)
 # -----------------------------------------------------------------------------
-@app.post("/webhook/stop")
-async def logout_webhook(payload: RadiusPayload):
-    """Maneja eventos de desconexión (Accounting-Stop) purgando flujos en OVS."""
-    identidad_onos = payload.usuario_externo.value[0]
-
-    # 1. Intentar buscar la MAC desde el paquete RADIUS (Calling-Station-Id)
-    mac = None
-    if payload.mac_fisica and payload.mac_fisica.value:
-        # Normalizar formato si viene como 00-00-00-00-00-11 -> 00:00:00:00:00:11
-        mac = payload.mac_fisica.value[0].replace("-", ":").lower()
-
-    # 2. Si no vino en el paquete, buscar en el SessionManager por nombre de usuario
-    if not mac:
-        for m, ses in list(session_store._sessions_by_mac.items()):
-            if ses.username == identidad_onos:
-                mac = m
-                break
-
-    # 3. Remover sesión y eliminar regla OpenFlow 40001 del switch OVS
-    if mac:
-        sesion = session_store.remove_session(mac)
-        if sesion and sesion.flow_id:
-            await eliminar_flujo_onos(sesion.dpid, sesion.flow_id)
-            print(
-                f"\n[<<< LOGOUT] Sesión revocada y flujo {sesion.flow_id} eliminado de OVS para {sesion.username} ({mac})"
-            )
-            eventos.registrar("logout", sesion.username, mac, sesion.dpid, sesion.port, "Accounting-Stop: flujo de sesión eliminado", sesion.rol)
-            return {"status": "session_terminated"}
-
-    print(
-        f"\n[LOGOUT] Se recibió Stop para {identidad_onos}, pero no había sesión activa en memoria."
-    )
-    return {"status": "user_not_found"}
-
-
 import ldap3
 
 class MabRequest(BaseModel):

@@ -17,7 +17,11 @@ objectClass: organizationalUnit
 ou: devices
 
 # --------------------------------- Usuarios --------------------------------- #
-# Profesores
+# Profesores: cuentas PERSONALES. Entran por el portal cautivo y, con su propio usuario y contrasena, suben de Alumno a Docente un
+# equipo que ya esta autenticado por 802.1X como Alumno (tabla `ascenso` de R2/policy/policy.yaml). Por eso NO llevan MAC, switch ni
+# puerto (description, physicalDeliveryOfficeName, roomNumber): se mueven entre equipos y el atado al equipo lo lleva el certificado
+# del equipo (rol Alumno). Si se prueba su certificado por 802.1X en un host, `ldap-ubicacion.sh fijar profesor01` le pone esos tres
+# datos desde lo que ve ONOS (y `liberar` los quita). El rol JP (hibrido) no se usa: quien ejerce de JP entra con una cuenta de profesor.
 
 dn: uid=profesor01,ou=users,dc=example,dc=org
 objectClass: inetOrgPerson
@@ -26,11 +30,6 @@ sn: Profesor
 cn: profesor01@example.org
 mail: profesor01@example.org
 userPassword: password123
-# VNRT: h1 (MAC de su interfaz de datos), switch sw2 y su puerto ens5. En el laboratorio de Mininet eran
-# 00:00:00:00:00:11, of:0000000000000001 y puerto 1 (ver docs/VALIDAR_H1_VNRT.md para volver a ellos).
-description: fa:16:3e:6b:69:bb
-physicalDeliveryOfficeName: of:00001a749039894a
-roomNumber: 2
 departmentNumber: 3
 
 dn: uid=profesor02,ou=users,dc=example,dc=org
@@ -40,12 +39,10 @@ sn: Profesor
 cn: profesor02@example.org
 mail: profesor02@example.org
 userPassword: password123
-description: 00:00:00:00:00:12
-physicalDeliveryOfficeName: of:0000000000000001
-roomNumber: 1
 departmentNumber: 3
 
-# Alumnos
+# Alumnos. En la prueba hacen de IDENTIDAD DEL EQUIPO con rol Alumno (en el campus serian PC1-V303-Alumno, etc.): cada uno se ata a la MAC,
+# el switch y el puerto de su equipo (valores de Mininet; en VNRT los fija `ldap-ubicacion.sh fijar`).
 
 dn: uid=alumno01,ou=users,dc=example,dc=org
 objectClass: inetOrgPerson

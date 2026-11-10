@@ -74,6 +74,21 @@ curl -s -u "$AUTH" -X POST -H "Content-Type: application/json" "$ONOS_URL/networ
     "radiusMac": "00:00:00:00:00:01",
     "vlanId": "-1"}}}}'
 
+# DHCP: la app org.onosproject.dhcp es un servidor DHCP dentro de ONOS con UN solo rango para todos los hosts (la separacion entre
+# alumnos, invitados, etc. la hacen las VLAN/tablas de R2, no la subred). Valores por defecto y su significado: R1/deploy/.env.example.
+DHCP_SERVIDOR_IP="${DHCP_SERVIDOR_IP:-10.0.0.2}"; DHCP_SERVIDOR_MAC="${DHCP_SERVIDOR_MAC:-02:00:00:00:00:02}"
+DHCP_MASCARA="${DHCP_MASCARA:-255.255.255.0}"; DHCP_BROADCAST="${DHCP_BROADCAST:-10.0.0.255}"
+DHCP_ROUTER="${DHCP_ROUTER:-10.0.0.1}"; DHCP_DNS="${DHCP_DNS:-8.8.8.8}"
+DHCP_INICIO="${DHCP_INICIO:-10.0.0.100}"; DHCP_FIN="${DHCP_FIN:-10.0.0.199}"
+DHCP_LEASE="${DHCP_LEASE:-3600}"; DHCP_RENEW="${DHCP_RENEW:-1800}"; DHCP_REBIND="${DHCP_REBIND:-3150}"; DHCP_PURGA_MIN="${DHCP_PURGA_MIN:-2}"
+echo "[*] Configurando la app DHCP de ONOS (rango $DHCP_INICIO - $DHCP_FIN, concesion de $DHCP_LEASE s)..."
+curl -s -u "$AUTH" -X POST -H "Content-Type: application/json" "$ONOS_URL/network/configuration" -d "{
+  \"apps\": {\"org.onosproject.dhcp\": {\"dhcp\": {
+    \"ip\": \"$DHCP_SERVIDOR_IP\", \"mac\": \"$DHCP_SERVIDOR_MAC\", \"subnet\": \"$DHCP_MASCARA\", \"broadcast\": \"$DHCP_BROADCAST\",
+    \"router\": \"$DHCP_ROUTER\", \"domain\": \"$DHCP_DNS\", \"startip\": \"$DHCP_INICIO\", \"endip\": \"$DHCP_FIN\",
+    \"lease\": \"$DHCP_LEASE\", \"renew\": \"$DHCP_RENEW\", \"rebind\": \"$DHCP_REBIND\", \"delay\": \"$DHCP_PURGA_MIN\"}}}}"
+echo
+
 # La app AAA puede haber arrancado ANTES de recibir esta configuración y fallar con "Remote RADIUS Server: null" (NPE en activate):
 # se reinicia para que lea la configuración recién inyectada.
 curl -s -u "$AUTH" -X DELETE "$ONOS_URL/applications/org.opencord.aaa/active" >/dev/null
@@ -82,7 +97,7 @@ curl -s -u "$AUTH" -X POST "$ONOS_URL/applications/org.opencord.aaa/active" >/de
 
 echo
 echo "[*] Estado final:"
-for app in org.onosproject.openflow org.opencord.sadis org.opencord.aaa; do
+for app in org.onosproject.openflow org.opencord.sadis org.opencord.aaa org.onosproject.dhcp; do
   if activa "$app"; then echo "    $app: ACTIVE"; else echo "    [!] $app: NO ACTIVA"; FALLOS=1; fi
 done
 if [ "$FALLOS" = "0" ]; then echo "[+] ONOS configurado."; else echo "[X] ONOS quedo incompleto: revisa los avisos [!] de arriba y vuelve a ejecutar este script."; exit 1; fi

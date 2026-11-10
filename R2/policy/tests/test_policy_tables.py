@@ -72,7 +72,7 @@ def test_switch_de_acceso_lleva_puerto_de_confianza_y_las_tablas_de_rol(pol):
     f = pt.flujos_dispositivo(pol, S1)
     confianza = pt.flujos_confianza(pol, S1)
     assert len(confianza) == 1 and confianza[0]["selector"]["criteria"] == [{"type": "IN_PORT", "port": 4}]
-    assert {x["tableId"] for x in f} == {0, 10, 20, 40, 50}
+    assert {x["tableId"] for x in f} == {0, 10, 20, 40, 50, 99}      # 99 = cuarentena
 
 
 def test_switch_desconocido_no_recibe_nada(pol):
@@ -191,3 +191,78 @@ def test_solo_vencen_las_sesiones_con_plazo_cumplido():
     m.register_session(ActiveSession("b", "00:00:00:00:00:02", "d", "2", 20, "Alumno"))                 # 802.1X: no vence
     m.register_session(ActiveSession("c", "00:00:00:00:00:03", "d", "3", 50, "Invitado", expira=900.0, metodo="Portal"))
     assert [s.username for s in m.vencidas(500.0)] == ["a"]
+
+
+# --- policy.local.yaml: lo propio de un despliegue (puertos de confianza y portal de un slice) se mezcla con policy.yaml
+
+def test_la_politica_local_se_mezcla_con_la_del_repositorio(tmp_path):
+    base = tmp_path / "policy.yaml"
+    base.write_text('roles: {docente: {matriz: professor, tabla: 10}}\n'
+                    'trusted: {"of:0000000000000001": [4], "of:0000000000000002": all}\n'
+                    'portal: {ip: 10.0.0.60, puerto: 8080, switches: ["of:0000000000000001"], desvios: [{ip: 10.0.0.40}]}\n')
+    (tmp_path / "policy.local.yaml").write_text('trusted: {"of:00001a749039894a": [1, 3]}\n'
+                                                'portal: {switches: ["of:00001a749039894a"], desvios: []}\n')
+    p = pt.cargar_politica(str(base))
+    assert p["trusted"]["of:00001a749039894a"] == [1, 3]                 # se suma el switch del slice
+    assert p["trusted"]["of:0000000000000001"] == [4]                    # y lo del repositorio se conserva
+    assert p["portal"]["switches"] == ["of:00001a749039894a"] and p["portal"]["desvios"] == []
+    assert p["portal"]["ip"] == "10.0.0.60"                              # lo que el archivo local no menciona no se toca
+
+
+def test_sin_politica_local_no_cambia_nada(tmp_path):
+    base = tmp_path / "policy.yaml"
+    base.write_text('trusted: {"of:0000000000000001": [4]}\n')
+    assert pt.cargar_politica(str(base))["trusted"] == {"of:0000000000000001": [4]}
+
+
+# --- DHCP y cuarentena
+
+def _por_tabla(flujos, tabla):
+    return [f for f in flujos if f["tableId"] == tabla]
+
+
+def test_el_dhcp_del_cliente_va_al_controlador_sobre_la_sesion(pol):
+    [f] = pt.flujos_dhcp(S1)
+    crit = {c["type"]: c for c in f["selector"]["criteria"]}
+    assert f["tableId"] == 0 and f["priority"] == pt.PRIO_DHCP > pt.PRIO_SESION
+    assert crit["IP_PROTO"]["protocol"] == 17 and crit["UDP_SRC"]["udpPort"] == 68 and crit["UDP_DST"]["udpPort"] == 67
+    assert f["treatment"]["instructions"] == [{"type": "OUTPUT", "port": "CONTROLLER"}]       # sin VLAN: la app copia la de la peticion
+
+
+def test_un_switch_de_acceso_lleva_el_dhcp_y_la_cuarentena_pero_el_core_no(pol):
+    acceso = pt.flujos_dispositivo(pol, "of:00000000000000aa")
+    assert any(f["priority"] == pt.PRIO_DHCP for f in acceso) and any(f["priority"] == pt.PRIO_CUARENTENA for f in acceso)
+    assert pt.flujos_dispositivo(pol, S2) == pt.flujos_confianza(pol, S2)       # confianza total (Core): ni tablas ni DHCP ni cuarentena
+
+
+def test_lo_que_no_tiene_sesion_va_a_la_cuarentena_y_solo_alcanza_arp_y_el_portal(pol):
+    t = pt.tabla_cuarentena(pol)
+    assert t == 99 and t not in {d["tabla"] for d in pol["roles"].values()}
+    f = pt.flujos_cuarentena(pol, S1)
+    entrada = [x for x in f if x["tableId"] == 0]
+    assert len(entrada) == 1 and entrada[0]["priority"] == pt.PRIO_CUARENTENA and entrada[0]["selector"]["criteria"] == []
+    assert [i.get("vlanId") or i.get("tableId") for i in entrada[0]["treatment"]["instructions"] if i["type"] != "L2MODIFICATION" or i["subtype"] == "VLAN_ID"] == [t, t]
+    en_tabla = _por_tabla(f, t)
+    assert destinos(en_tabla) == set()                                          # ningun servicio de los roles
+    portal = [x for x in en_tabla if any(c["type"] == "IPV4_DST" and c["ip"] == "10.0.0.60/32" for c in x["selector"]["criteria"])]
+    assert len(portal) == 1 and any(c["type"] == "TCP_DST" and c["tcpPort"] == 8080 for c in portal[0]["selector"]["criteria"])
+    assert any(c["type"] == "ETH_TYPE" and c["ethType"] == "0x0806" for x in en_tabla for c in x["selector"]["criteria"])    # ARP
+    assert [x for x in en_tabla if x["priority"] == 0][0]["treatment"]["instructions"] == []                             # y el resto, DROP
+
+
+def test_cada_flujo_de_la_cuarentena_que_saca_la_vlan_la_tiene_en_el_match(pol):
+    # OVS rechaza pop_vlan si el match no garantiza que el paquete lleva etiqueta
+    for x in _por_tabla(pt.flujos_cuarentena(pol, S1), 99):
+        if any(i.get("subtype") == "VLAN_POP" for i in x["treatment"]["instructions"]):
+            assert {"type": "VLAN_VID", "vlanId": 99} in x["selector"]["criteria"]
+
+
+def test_sin_la_seccion_cuarentena_no_hay_cuarentena(pol):
+    sin = {k: v for k, v in pol.items() if k != "cuarentena"}
+    assert pt.tabla_cuarentena(sin) is None and pt.flujos_cuarentena(sin, S1) == []
+    assert not any(f["priority"] == pt.PRIO_CUARENTENA for f in pt.flujos_dispositivo(sin, S1))
+
+
+def test_una_tabla_de_cuarentena_distinta_se_respeta(pol):
+    otra = {**pol, "cuarentena": {"tabla": 77}}
+    assert pt.tabla_cuarentena(otra) == 77 and {f["tableId"] for f in pt.flujos_cuarentena(otra, S1)} == {0, 77}

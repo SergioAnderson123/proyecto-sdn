@@ -144,6 +144,32 @@ def test_estado_autenticado_con_los_datos_del_policy_mapper(agente, monkeypatch)
     assert {u["id"] for u in e["usuarios"]} >= {"profesor01", "support01"} and e["mac"] == MAC
 
 
+def test_la_pagina_no_satura_al_policy_mapper_con_una_consulta_por_cada_refresco(agente, monkeypatch):
+    agente.conectar("profesor01")
+    monkeypatch.setattr(agente, "_wpa_cli", lambda: {"suppPortStatus": "Authorized"})
+    llamadas = []
+    sesiones = {"sessions": {MAC: {"vlan": 10, "rol": "Docente", "dpid": "of:1", "port": "2"}}}
+    monkeypatch.setattr(ag, "http_json", lambda url, timeout=3: (llamadas.append(url), sesiones)[1])
+    reloj = [1000.0]
+    monkeypatch.setattr(ag.time, "monotonic", lambda: reloj[0])
+    for _ in range(5):                       # cinco refrescos de la pagina en menos de 5 s
+        assert agente.estado()["sesion"]["vlan"] == 10
+        reloj[0] += 1.0
+    assert len(llamadas) == 1
+    reloj[0] += 10.0                         # pasado el tiempo de la cache, vuelve a preguntar
+    agente.estado()
+    assert len(llamadas) == 2
+
+
+def test_si_el_policy_mapper_no_tiene_aun_la_sesion_no_se_guarda_esa_respuesta(agente, monkeypatch):
+    agente.conectar("profesor01")
+    monkeypatch.setattr(agente, "_wpa_cli", lambda: {"suppPortStatus": "Authorized"})
+    respuestas = iter([{"sessions": {}}, {"sessions": {MAC: {"vlan": 10, "rol": "Docente"}}}])
+    monkeypatch.setattr(ag, "http_json", lambda url, timeout=3: next(respuestas))
+    assert agente.estado()["sesion"] is None            # todavia no esta
+    assert agente.estado()["sesion"]["vlan"] == 10      # a la siguiente ya la ve, sin esperar a que caduque la cache
+
+
 def test_estado_rechazado_muestra_el_motivo_del_policy_mapper(agente, monkeypatch):
     agente.conectar("alumno01")
     monkeypatch.setattr(agente, "_wpa_cli", lambda: {"Supplicant PAE state": "HELD"})

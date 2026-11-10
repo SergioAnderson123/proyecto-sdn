@@ -81,7 +81,7 @@ def pagina(titulo, cuerpo):
 <div class="text-center mb-4"><span class="avatar avatar-lg bg-primary-lt">{LOGO}</span>
 <h1 class="h2 mt-3 mb-0">Acceso a la red del campus</h1><div class="text-secondary">Portal cautivo</div></div>
 {cuerpo}
-<div class="text-center text-secondary small mt-3">Si su equipo usa 802.1X no necesita este portal.</div>
+<div class="text-center text-secondary small mt-3">Si su equipo usa 802.1X no necesita este portal, salvo para subir de rol (docentes).</div>
 </div></div></body></html>"""
 
 
@@ -95,11 +95,36 @@ def formulario(destino, error=""):
 <div class="form-footer"><button class="btn btn-primary w-100" type="submit">Conectarse</button></div></div></form>""")
 
 
+def ascenso_disponible(sesion):
+    """Roles a los que una persona puede subir este equipo desde el portal (la sesión es 802.1X del equipo y la política lo permite)."""
+    return [r for r in (sesion.get("ascenso_a") or [])]
+
+
+def pagina_ascenso(sesion, destino, error=""):
+    """Equipo con sesión 802.1X que admite subir de rol: formulario para que una persona entre con su propio usuario."""
+    roles = ", ".join(r.capitalize() for r in ascenso_disponible(sesion))
+    aviso = f'<div class="alert alert-danger" role="alert">{html.escape(error)}</div>' if error else ""
+    return pagina("Equipo conectado", f"""<div class="card card-md"><div class="card-body">
+<div class="text-center"><span class="badge bg-green-lt mb-3">Equipo conectado</span>
+<h2 class="card-title">{html.escape(sesion['usuario'])}</h2>
+<p class="text-secondary mb-3">Rol del equipo: <strong>{html.escape(sesion['rol'])}</strong> · método: {html.escape(sesion['metodo'])}</p></div>
+{aviso}<form method="post" action="/login" autocomplete="off">
+<input type="hidden" name="destino" value="{html.escape(destino)}">
+<p class="text-secondary small mb-2">¿Es usted {html.escape(roles)}? Entre con su usuario personal para subir de rol en este equipo.</p>
+<div class="mb-3"><label class="form-label">Usuario</label><input class="form-control" name="usuario" required></div>
+<div class="mb-3"><label class="form-label">Contraseña</label><input class="form-control" type="password" name="clave" required></div>
+<button class="btn btn-primary w-100" type="submit">Subir de rol</button></form>
+<a class="btn btn-outline-secondary w-100 mt-2" href="{html.escape(destino)}">Continuar como {html.escape(sesion['rol'])}</a></div></div>""")
+
+
 def sesion_activa(sesion, destino):
+    base = sesion.get("base")
+    vuelve = (f'<p class="text-secondary small">Al cerrar sesión, el equipo vuelve al rol <strong>{html.escape(base["rol"])}</strong>.</p>'
+              if base else "")
     return pagina("Sesión activa", f"""<div class="card card-md"><div class="card-body text-center">
 <span class="badge bg-green-lt mb-3">Conectado</span><h2 class="card-title">Hola, {html.escape(sesion['usuario'])}</h2>
 <p class="text-secondary mb-1">Rol: <strong>{html.escape(sesion['rol'])}</strong> · método: {html.escape(sesion['metodo'])}</p>
-<p class="text-secondary">Ya puede usar los recursos que su rol permite.</p>
+<p class="text-secondary">Ya puede usar los recursos que su rol permite.</p>{vuelve}
 <a class="btn btn-primary w-100 mb-2" href="{html.escape(destino)}">Continuar</a>
 <form method="post" action="/logout"><button class="btn btn-outline-secondary w-100" type="submit">Cerrar sesión</button></form></div></div>""")
 
@@ -139,6 +164,8 @@ class Manejador(BaseHTTPRequestHandler):
         if mac:
             _, r = llamar_mapper("/portal/estado?mac=" + urllib.parse.quote(mac))
             if r.get("sesion"):
+                if ascenso_disponible(r["sesion"]):
+                    return self._enviar(200, pagina_ascenso(r["sesion"], destino))
                 return self._enviar(200, sesion_activa(r["sesion"], destino))
         self._enviar(200, formulario(destino))
 
@@ -158,8 +185,11 @@ class Manejador(BaseHTTPRequestHandler):
         codigo, r = llamar_mapper("/portal/login", {"usuario": campos.get("usuario", ""), "clave": campos.get("clave", ""), "mac": mac})
         if codigo == 200:
             return self._enviar(200, sesion_activa({"usuario": r["usuario"], "rol": r["rol"], "metodo": "Portal"}, destino))
-        mensaje = r.get("detail") if codigo else "El servicio de acceso no responde; intente más tarde."
-        self._enviar(401 if codigo == 401 else 200, formulario(destino, mensaje or "No se pudo iniciar sesión."))
+        mensaje = (r.get("detail") if codigo else "El servicio de acceso no responde; intente más tarde.") or "No se pudo iniciar sesión."
+        _, estado = llamar_mapper("/portal/estado?mac=" + urllib.parse.quote(mac))
+        if (estado.get("sesion") or {}).get("ascenso_a"):       # equipo con sesión 802.1X: se vuelve a ofrecer subir de rol
+            return self._enviar(401 if codigo == 401 else 200, pagina_ascenso(estado["sesion"], destino, mensaje))
+        self._enviar(401 if codigo == 401 else 200, formulario(destino, mensaje))
 
     def log_message(self, fmt, *a):
         print(f"[portal] {self.client_address[0]}:{self.server.server_address[1]} {fmt % a}", flush=True)

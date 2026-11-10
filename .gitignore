@@ -5,3 +5,6 @@ state.json
 
 # archivos de bloqueo de Office
 ~$*
+
+# politica propia de un despliegue (la genera slice.py portal)
+R2/policy/policy.local.yaml

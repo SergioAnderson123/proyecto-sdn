@@ -1,14 +1,21 @@
 # Copiar a inventory.ini y ajustar. Los hosts de VNRT se alcanzan por el puerto redirigido de la IP publica.
 # iface = interfaz de datos del host (la que va al switch; comprobar con `ip -br link`).
-# conf / cert = suplicante y certificado de R1/shared/mininet/supplicants (uno por usuario).
+# conf / cert = suplicante y certificado de R1/shared/mininet/supplicants (la identidad de EQUIPO de ese host: alumno01..03).
+# ip_datos = IP de la interfaz de datos (para llegar al portal). Lo normal es no escribir este archivo: `python3 slice.py hosts` lo genera.
 # No escribir comentarios al final de una variable: en INI de Ansible pasan a formar parte del valor.
 [hosts]
-h1 ansible_host=10.20.12.78 ansible_port=5811 iface=ens4 conf=wpa_profe_01.conf cert=profesor01@example.org.pem
-h2 ansible_host=10.20.12.78 ansible_port=5812 iface=ens4 conf=wpa_alumno_01.conf cert=alumno01@example.org.pem
-h3 ansible_host=10.20.12.78 ansible_port=5813 iface=ens4 conf=wpa_alumno_02.conf cert=alumno02@example.org.pem
-h4 ansible_host=10.20.12.78 ansible_port=5814 iface=ens4 conf=wpa_support_01.conf cert=support01@example.org.pem
+h1 ansible_host=10.20.12.78 ansible_port=5811 iface=ens4 conf=wpa_alumno_01.conf cert=alumno01@example.org.pem ip_datos=10.0.0.11
+h2 ansible_host=10.20.12.78 ansible_port=5812 iface=ens4 conf=wpa_alumno_02.conf cert=alumno02@example.org.pem ip_datos=10.0.0.12
+h3 ansible_host=10.20.12.78 ansible_port=5813 iface=ens4 conf=wpa_alumno_03.conf cert=alumno03@example.org.pem ip_datos=10.0.0.13
 
-[hosts:vars]
+# host del portal cautivo (sin 802.1X); su IP es la de portal.ip en R2/policy/policy.yaml
+[portal]
+h4 ansible_host=10.20.12.78 ansible_port=5814 iface=ens4 ip_datos=10.0.0.60
+
+# invitados e IoT: sin agente ni certificado
+[sin_802_1x]
+
+[all:vars]
 ansible_user=ubuntu
 ansible_ssh_private_key_file=~/.ssh/id_ed25519
 ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new
