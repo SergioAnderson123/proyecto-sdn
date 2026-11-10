@@ -14,7 +14,7 @@ import topologia  # noqa: E402
 
 EJEMPLO = os.path.join(RAIZ, "deploy", "topologia.example.yaml")
 TOPO = topologia.cargar(EJEMPLO)
-# puertos que ONOS dice tener en cada core (nombre -> número); el LAG (ens6, ens7) y la gestión (ens3) existen pero no son entradas
+# puertos que ONOS dice tener en cada core (nombre -> número); el LAG, el segmento de control (ens3) y los puertos de espejo existen pero no son entradas
 DISP = {nombre: n for n, nombre in enumerate(["ens3", "ens5", "ens6", "ens7", "ens8", "ens9", "ens10", "ens11", "ens12"], 1)}
 PUERTOS = {c["device"]: dict(DISP) for c in TOPO["cores"]}
 
@@ -31,7 +31,7 @@ def test_numero_de_reglas_es_cores_por_entradas_por_prefijos():
     reglas = espejo.reglas_topologia(TOPO, PUERTOS)
     prefijos = len(espejo.prefijos_ipv4(TOPO))
     assert prefijos == 2                                         # campus + red externa
-    assert len(reglas) == 2 * 4 * prefijos
+    assert len(reglas) == sum(len(c["entradas"]) for c in TOPO["cores"]) * prefijos     # gateway, servidores y SU acceso, por core
 
 
 def test_las_reglas_cubren_los_dos_cores():
@@ -41,10 +41,13 @@ def test_las_reglas_cubren_los_dos_cores():
 
 def test_no_se_espeja_la_troncal_entre_cores_ni_la_gestion():
     reglas = espejo.reglas_topologia(TOPO, PUERTOS)
-    permitidos = {str(DISP[n]) for c in TOPO["cores"] for n in c["entradas"]}
-    prohibidos = {str(DISP["ens6"]), str(DISP["ens7"]), str(DISP["ens3"])}      # LAG entre cores y gestión
+    por_device = {c["device"]: c for c in TOPO["cores"]}
     for r in reglas:
+        core = por_device[r["deviceId"]]
         in_port = next(c["port"] for c in r["selector"]["criteria"] if c["type"] == "IN_PORT")
+        permitidos = {str(DISP[n]) for n in core["entradas"]}
+        # segmento de control (ens3), puertos de espejo y de gestión del sensor: nunca son entrada
+        prohibidos = {str(DISP["ens3"])} | {str(DISP[e["puerto"]]) for e in core["espejo"].values()}
         assert in_port in permitidos and in_port not in prohibidos
 
 

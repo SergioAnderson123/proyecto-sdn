@@ -1,7 +1,8 @@
 """Topología de R5 en el slice de 14 VM (informe previo del Lab 6): lectura y validación de `topologia.yaml`.
 
-Un solo archivo describe lo que cambia de un slice a otro: los nodos del clúster ONOS y los Policy Mapper, las redes del campus, los
-dos cores con sus puertos de entrada y de espejo, y la MAC de la NIC de cada sensor que recibe la copia. Lo leen:
+Un solo archivo describe lo que cambia de un slice a otro: los nodos del clúster ONOS y los Policy Mapper, las redes del campus
+(incluido el segmento de control in-band, que R5 nunca bloquea), los dos cores con sus puertos de entrada y de espejo, y la MAC de la
+NIC de cada sensor que recibe la copia. El espejo vive solo en los cores: los accesos no llevan sensor ni SPAN. Lo leen:
   - `lab/espejo.py`           instala el espejo selectivo en los cores
   - `codigo/integrador.py`    toma de aquí los cores donde bloquear, los nodos ONOS y los Policy Mapper
   - `cli/r5ctl.py`            nombres de los switches y estado del espejo por core
@@ -73,6 +74,14 @@ def validar(d):
     res["home"] = _redes(redes.get("home"), "redes.home", obligatorio=True)
     res["externa"] = _redes(redes.get("externa"), "redes.externa")
     res["lista_blanca"] = _redes(redes.get("lista_blanca"), "redes.lista_blanca")
+    # Segmento de control in-band (ONOS <-> cores): si un DROP de R5 lo alcanzara, los switches perderían su canal OpenFlow.
+    res["control"] = _redes(redes.get("control"), "redes.control")
+    for ctl in res["control"]:
+        for otra in res["home"] + res["externa"]:
+            if ipaddress.ip_network(ctl).overlaps(ipaddress.ip_network(otra)):
+                raise TopologiaInvalida(f"redes.control: {ctl} se solapa con {otra} (el control no puede ser parte del campus ni de la red externa)")
+        if ctl not in res["lista_blanca"]:
+            res["lista_blanca"].append(ctl)
     res["sensores"] = _lista_str(d.get("sensores"), "sensores", obligatorio=True)
 
     cores, vistos = [], set()

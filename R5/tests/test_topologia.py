@@ -98,3 +98,33 @@ def test_aplicar_entorno_rellena_lo_que_falta_y_no_pisa_lo_definido(monkeypatch)
 def test_aplicar_entorno_sin_topologia_no_hace_nada(monkeypatch):
     monkeypatch.delenv("TOPOLOGIA", raising=False)
     assert topologia.aplicar_entorno() is None
+
+
+def test_el_segmento_de_control_entra_a_la_lista_blanca_y_no_se_solapa_con_el_campus():
+    topo = topologia.cargar(EJEMPLO)
+    assert topo["control"] == ["192.168.100.0/24"]
+    assert "192.168.100.0/24" in topo["lista_blanca"]              # un DROP de R5 nunca debe cortar el canal OpenFlow
+    assert all(u.split("//")[1].startswith("192.168.100.") for u in topo["onos_urls"] + topo["mapper_urls"])
+
+
+@pytest.mark.parametrize("red", ["10.0.0.0/16", "10.0.0.128/25", "203.0.113.0/24"])
+def test_rechaza_un_segmento_de_control_que_se_solapa_con_home_o_externa(red):
+    d = copy.deepcopy(base())
+    d["redes"]["control"] = [red]
+    with pytest.raises(topologia.TopologiaInvalida, match="redes.control"):
+        topologia.validar(d)
+
+
+def test_el_control_es_opcional_y_no_duplica_la_lista_blanca():
+    d = copy.deepcopy(base())
+    d["redes"]["lista_blanca"].append("192.168.100.0/24")
+    assert topologia.validar(d)["lista_blanca"].count("192.168.100.0/24") == 1
+    del d["redes"]["control"]
+    assert topologia.validar(d)["control"] == []
+
+
+def test_cada_acceso_tiene_un_solo_uplink_y_ningun_core_espeja_accesos():
+    """Árbol jerárquico (sin casi full-mesh): las entradas de cada core son gateway, servidores y SU acceso; nunca el del otro core."""
+    c1, c2 = topologia.cargar(EJEMPLO)["cores"]
+    assert len(c1["entradas"]) == len(c2["entradas"]) == 3
+    assert not set(c1["entradas"]) & {e["puerto"] for e in c1["espejo"].values()}

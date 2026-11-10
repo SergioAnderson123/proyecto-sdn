@@ -11,6 +11,35 @@ Todo se lanza desde la **VM Controller** con un asistente en Python, `R1/deploy/
 
 Topología de referencia: h1 y h2 cuelgan de sw2; h3 y h4, de sw3; sw1 es el core y no recibe flujos de sesión.
 
+> **Esta guía describe el slice ya validado en VNRT** (un Controller, `sw1..sw3`, `h1..h4`), donde ONOS y los hosts hablan por la red de gestión del slice. La topología objetivo de 14 VM es la **v4** ([`topologia-v4-14vms.drawio`](topologia-v4-14vms.drawio)), con los cambios pedidos por el profesor: **control in-band** (los 3 ONOS en un segmento multipunto unido a los dos cores; los accesos llegan a ONOS por su uplink), **un solo uplink por acceso** (sin casi full-mesh) y **sensores IDS solo en los cores** (sin SPAN en accesos). Su despliegue y lo que falta validar están en [`R5/deploy/README.md`](../R5/deploy/README.md). **Pendiente de R1/R2 con el control in-band:** hoy el agente 802.1X y el portal consultan al Policy Mapper (puerto 5000) por la red de gestión; en la v4 ese tráfico tendría que cruzar el plano de datos y R2 debe permitirlo antes de que el host tenga sesión (cuarentena: solo ARP y portal).
+
+## 0. Netplan en TODAS las VM: desactivar IPv6 en cada interfaz (indicación del JP)
+
+Si la topología tiene o puede tener un **bucle** de capa 2, el JP pidió agregar estos tres parámetros en **todas las interfaces de todas las VM** (hosts, switches, sensores, controladores, gateway y servidores), en el archivo de netplan (`/etc/netplan/*.yaml`):
+
+```yaml
+network:
+  version: 2
+  ethernets:
+    ens3:
+      addresses: [192.168.0.24/24]
+      routes:
+        - to: default
+          via: 192.168.0.1
+      nameservers:
+        addresses: [8.8.8.8]
+      dhcp6: false          # sin DHCPv6
+      accept-ra: false      # ignora los anuncios de router (RA)
+      link-local: []        # sin dirección IPv6 link-local
+    ens4:                   # interfaz de datos o de espejo, sin IP: lleva igualmente los tres parámetros
+      dhcp4: false
+      dhcp6: false
+      accept-ra: false
+      link-local: []
+```
+
+Aplicar con `sudo netplan apply` y comprobar con `ip -6 addr show` (no debe aparecer ninguna `fe80::`). Es una medida de configuración del sistema operativo: no sustituye a resolver el lazo (ver `R5/deploy/README.md` §8). En los sensores, `R5/deploy/ids/up.sh` ya deja sus NIC de espejo sin IPv6; el netplan lo hace permanente tras un reinicio.
+
 ## 1. Preparar el Controller (una vez)
 
 Trabaja siempre con el **mismo usuario** (recomendado: `ubuntu`, no `root`): la configuración de `slice.py` (`~/slice.json`) y la llave SSH se guardan en la home del usuario que lo ejecuta, y los archivos que crean los scripts quedan a su nombre.

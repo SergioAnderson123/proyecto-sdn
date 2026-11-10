@@ -2,6 +2,8 @@
 
 Fuente: [`Flujos_R5.pdf`](Flujos_R5.pdf). Código: [`codigo/integrador.py`](codigo/integrador.py), [`lab/`](lab/), [`suricata/`](suricata/). Resultados: [`resultados_R5.md`](resultados_R5.md).
 
+> Este documento describe el lazo con **un Core y un IDS** (laboratorio y VNRT del 31/10). Para la topología de 14 VM (v4: dos cores, dos sensores con espejo cruzado, control in-band y sin espejo en accesos) ver [`deploy/README.md`](deploy/README.md).
+
 **Idea:** el Core espeja selectivamente el tráfico Norte-Sur hacia Suricata (IDS fuera de banda). Cuando Suricata alerta, el integrador M09 lee `eve.json` y pide a ONOS un DROP en el plano de datos. `HOME_NET = 10.0.0.0/24`.
 
 ## Bloque 1: espejado selectivo (regla permanente en el Core)

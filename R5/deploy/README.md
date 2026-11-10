@@ -1,6 +1,6 @@
 # Despliegue de R5 en el slice de 14 VM (dos sensores IDS)
 
-Adaptado a la topología del **informe previo del Lab 6** (`docs/`, figura 1). La VM Controller (R1/R2) se despliega aparte: ver [`R1/deploy/`](../../R1/deploy/README.md) y [`docs/DESPLIEGUE_UBUNTU.md`](../../docs/DESPLIEGUE_UBUNTU.md).
+Adaptado a la topología **v4** ([`docs/topologia-v4-14vms.drawio`](../../docs/topologia-v4-14vms.drawio)), que parte de la del informe previo del Lab 6 e incorpora los comentarios del profesor: control in-band, un solo uplink por acceso y sensores únicamente en los cores. La VM Controller (R1/R2) se despliega aparte: ver [`R1/deploy/`](../../R1/deploy/README.md) y [`docs/DESPLIEGUE_UBUNTU.md`](../../docs/DESPLIEGUE_UBUNTU.md).
 
 ## 1. Qué cambió respecto al slice anterior
 
@@ -12,6 +12,9 @@ Adaptado a la topología del **informe previo del Lab 6** (`docs/`, figura 1). L
 | Espejo por `ipv4_dst`/`ipv4_src` en el Core | Un paquete puede cruzar los dos cores | Espejo al **ingresar** (por puerto de entrada), sin copiar la troncal entre cores: una copia por paquete |
 | Atacante = alias IP en h4 | `vm-atacante` real detrás del gateway NAT | `redes.externa` en `topologia.yaml` |
 | `PUERTO_IDS`, `PUERTO_UPLINK`, `IDS_MAC`, `CORE_DEVICE` en el `.env` | Varios switches, puertos y MAC | Van en `topologia.yaml`, por **nombre de interfaz** (el número de puerto se resuelve contra ONOS) |
+| Red de gestión y control **fuera de banda** (192.168.100.0/24 en todas las VM) | Control **in-band**: un segmento multipunto une los 3 ONOS con `sw-core-1` y `sw-core-2`; los accesos llegan a ONOS por su uplink al core | La subred va en `redes.control` y entra sola a la lista blanca: un DROP de R5 nunca corta el canal OpenFlow |
+| Cada acceso con 2 uplinks (casi full-mesh con los cores) | Un uplink por acceso: `sw-acc1` al core-1, `sw-acc2` al core-2 (árbol jerárquico, sin lazos L2 entre accesos y cores) | `entradas` de cada core: gateway, servidores y **su** acceso |
+| Espejo también en los accesos (este-oeste) y SPAN cruzado entre accesos | **Sin SPAN ni sensor en los accesos**: un IDS por acceso no escala (20 accesos = 20 IDS) | El espejo vive solo en los cores (sección 4) |
 
 El laboratorio de Docker y el modo de un solo Core siguen funcionando sin cambios: si no se define `TOPOLOGIA`, `espejo.py`, el integrador y `r5ctl` usan las variables de entorno de siempre.
 
@@ -25,35 +28,37 @@ El laboratorio de Docker y el modo de un solo Core siguen funcionando sin cambio
 | `nodo-sec-1`, `nodo-sec-2` | Suricata + integrador M09 + `r5ctl`; reciben el mismo espejo | `R5/deploy/ids/` |
 | `vm-atacante` | Origen de los ataques externos | `R5/pruebas/` |
 
-Cada sensor tiene `ens3` (gestión) y una NIC de espejo por switch que le copia tráfico. En R5 se usan las de los **cores**; las de los accesos quedan sin usar hasta resolver el punto 4.
+Cada sensor tiene `ens3` (gestión in-band, a un puerto de datos de su core) y **una NIC de espejo por core** (espejo cruzado: cada sensor ve ambos cores). No hay NIC de espejo hacia los accesos.
 
 ```
- vm-atacante -- gateway(NAT) --+-- sw-core-1 ==LAG== sw-core-2 --+-- servidores
-                               |      |  \   espejo   /  |      |
-                               |      |   nodo-sec-1/2   |      |
-                               +------+-- sw-acc1/2 ------+------+-- h1, h2 (+ netns h3, h4)
+ vm-atacante -- gateway (NAT solo de salida) --+-- sw-core-1 ==LAG== sw-core-2 --+-- servidores
+                                               |      |  \                /  |
+                                               |      |   espejo cruzado   |
+                                               |      |   nodo-sec-1/2     |
+                                            sw-acc1   |                  sw-acc2
+                                          (un uplink) |                (un uplink)
+                                          h1, netns   |                h2, netns
+ Clúster ONOS (nodo-ctrl-1/2/3) == segmento de control in-band (multipunto) == sw-core-1 y sw-core-2
 ```
 
 ## 3. Decisiones de diseño
 
-1. **Espejo al ingresar.** Por cada core, por cada puerto de `entradas` (gateway, servidores, accesos) y por cada prefijo (`redes.home` y `redes.externa`), una regla `in_port + ipv4_src` a prioridad 41000 que reenvía con `NORMAL` y copia a los dos sensores. Como cada paquete entra a la red por un solo puerto de entrada, se copia una sola vez aunque ECMP lo reparta; un paquete que cruce los dos cores entra al segundo por la troncal (LAG), que no está en `entradas`. Por eso el espejo es **selectivo por subred**: solo IPv4 de las redes declaradas.
+1. **Espejo al ingresar.** Por cada core, por cada puerto de `entradas` (gateway, servidores y el acceso que cuelga de ese core) y por cada prefijo (`redes.home` y `redes.externa`), una regla `in_port + ipv4_src` a prioridad 41000 que reenvía con `NORMAL` y copia a los dos sensores. Como cada paquete entra a la red por un solo puerto de entrada, se copia una sola vez aunque ECMP lo reparta; un paquete que cruce los dos cores entra al segundo por la troncal (LAG), que no está en `entradas`. Por eso el espejo es **selectivo por subred**: solo IPv4 de las redes declaradas.
 2. **Los dos sensores ven todo.** Cada sensor recibe la copia de ambos cores, así que cada uno ve ambos sentidos de un flujo aunque ECMP los reparta, y si uno cae el otro mantiene la cobertura. A cambio, cada alerta se detecta dos veces y los dos integradores piden el mismo DROP: ONOS lo trata como una sola regla (mismo `appId`, switch, selector y prioridad), que solo se refresca.
 3. **MAC por NIC.** La red virtual solo entrega a una VM las tramas dirigidas a la MAC de la NIC. El espejo reescribe `eth_dst` de cada copia con la MAC de la NIC del sensor que le toca (`mac` en `topologia.yaml`); el reenvío normal sale primero y con la MAC original.
 4. **DROP.** Atacante externo: en **todos** los cores. Host interno: en el acceso donde ONOS lo ubica (`GET /hosts`), y además se pide al Policy Mapper (primario o réplica) revocar su sesión. Prioridad 42000: gana a la sesión de R2 (40001) y queda bajo el DROP temporal de R1 (45000). Mapa completo: [`prioridades.yaml`](prioridades.yaml).
 5. **Clúster.** `ONOS_URL` y `MAPPER_URL` admiten varios nodos: se usa el primero que responda y se recuerda cuál fue. Un 4xx no cambia de nodo (es una respuesta válida de ONOS); un fallo de red o un 5xx sí.
 6. **NIC del sensor.** `up.sh` las deja en modo promiscuo, sin IPv6 y sin GRO/LRO, para que el sensor no transmita nada hacia los cores y Suricata no vea paquetes unidos que no existieron.
+7. **Control in-band.** ONOS (y el Policy Mapper) están en el segmento de control, alcanzable por los switches a través de los cores. Tres consecuencias: (a) `redes.control` se agrega a la lista blanca del integrador, porque un DROP que alcanzara a un controlador cortaría el canal OpenFlow de los switches; (b) el segmento no forma parte de `HOME_NET` ni se espeja (Raft y OpenFlow no deben generar alertas en Suricata); (c) los sensores llegan a ONOS por su `ens3`, conectado a un puerto de datos de su core (`entradas` no lo incluye).
 
-## 4. Decisión pendiente: espejo en los accesos
+## 4. Decisión tomada: sin espejo en los accesos
 
-El informe previo dice que los accesos también espejan (tráfico este-oeste). **No está implementado**, y no es un detalle: el espejo de R5 reenvía con `NORMAL` a prioridad 41000, que es mayor que el flujo de sesión de R2 (40001). En un acceso, esa regla capturaría el paquete antes que las tablas de rol y **se saltaría la política de R2**. Opciones:
+El informe previo preveía espejo también en los accesos. El profesor lo descartó, con dos argumentos que además coinciden con lo técnico:
 
-| Opción | Qué implica | Riesgo |
-|---|---|---|
-| **A. Solo cores (lo implementado)** | Todo el tráfico entre VM distintas y con los servidores cruza un core, así que se ve igual. No se ve (a) lo que R2 descarta en el acceso antes de llegar al core, ni (b) el tráfico entre h1 y sus netns (no sale de la VM) | Ninguno para R2. Un escaneo contra un recurso que el rol no puede alcanzar nunca llega al core |
-| **B. Mirror nativo de OVS en los accesos** (`ovs-vsctl set bridge <br> mirrors=...`, `select-src-port` en los puertos de los hosts) | Copia antes del pipeline OpenFlow, sin tocar R2 | No reescribe la MAC destino: en VNRT la copia no llegaría al sensor (ver 3.3). Habría que probarlo |
-| **C. Que R2 incluya el espejo en sus flujos** (grupo `ALL` con la copia dentro de las reglas de sesión y de confianza) | Espejo correcto y sin saltarse tablas | Cambia `R2/policy/policy_tables.py` y su prueba de prioridades |
+- **No escala.** Un sensor por conexión con un acceso significa 20 IDS si hay 20 accesos; un SPAN cruzado entre accesos es inviable en un campus. Los sensores van donde se agrega el tráfico: en los **cores**.
+- **Chocaría con R2.** El espejo de R5 reenvía con `NORMAL` a prioridad 41000, mayor que el flujo de sesión de R2 (40001). En un acceso, esa regla capturaría el paquete antes que las tablas de rol y **se saltaría la política de R2**.
 
-Recomendación: A para el piloto y dejar escrito en el informe que el este-oeste previo al core queda fuera; probar B en el slice si hay tiempo.
+Cobertura resultante: todo el tráfico entre VM distintas y con los servidores cruza un core y se ve allí. **No se ve** (a) lo que R2 descarta en el acceso antes de llegar al core ni (b) el tráfico local de un acceso (por ejemplo, entre h1 y sus netns). Queda declarado como limitación del piloto.
 
 ## 5. Archivos
 
@@ -81,9 +86,9 @@ Lo que hay que rellenar y de dónde sale:
 
 | Dato | Cómo se obtiene |
 |---|---|
-| IP de los nodos ONOS y Policy Mapper | Red de gestión `192.168.100.0/24` |
+| IP de los nodos ONOS y Policy Mapper | Segmento de control in-band `192.168.100.0/24` (`redes.control`) |
 | `device` y nombres de interfaz de cada core | `sudo apt-get install -y python3-requests && ONOS_URL=http://<IP-ONOS>:8181/onos/v1 ONOS_PASS=rocks python3 ../lab/espejo.py --descubrir` (lista cada switch con `puerto N  nombre`). Si ONOS no entrega nombres de puerto, se pueden escribir los **números** en `topologia.yaml` |
-| `entradas` | Interfaces del core hacia gateway, servidores, `sw-acc1` y `sw-acc2`. **No** la troncal entre cores ni las de espejo |
+| `entradas` | Interfaces del core hacia gateway, servidores y **su** acceso (`sw-acc1` en el core-1, `sw-acc2` en el core-2). **No** la troncal entre cores, el segmento de control, las de espejo ni la de gestión del sensor |
 | MAC de cada NIC del sensor | `bash ids/macs.sh` en `nodo-sec-1` y en `nodo-sec-2` |
 | Qué NIC del sensor está cableada a qué core | Ver **Identificar los enlaces** |
 
@@ -141,7 +146,11 @@ docker compose down                                                       # apag
 Todo esto se probó con **pruebas unitarias y `docker compose config`**; **no se ha ejecutado en las VM del slice**:
 
 - **Nombres de puerto.** Se asume que ONOS entrega `portName` en las anotaciones de cada puerto (`GET /devices/{id}/ports`). Si no, usar números en `topologia.yaml`.
-- **Reenvío de los cores con `NORMAL`.** El espejo reenvía con `NORMAL`, igual que R2 en sus puertos de confianza. Con los lazos entre cores y accesos y sin STP (el informe previo lo señala como pendiente), `NORMAL` puede crear tormentas de broadcast; si los cores reenvían de otra forma (grupos ECMP de ONOS), `NORMAL` cambiaría cómo se reenvía el tráfico espejado. Hay que resolver el lazo antes de instalar el espejo.
+- **Reenvío de los cores con `NORMAL`.** El espejo reenvía con `NORMAL`, igual que R2 en sus puertos de confianza. Con un uplink por acceso ya no hay lazos entre accesos y cores; el lazo posible es **el LAG entre cores más el segmento de control** si este es un medio compartido que une a ambos cores. Hay que comprobar en VNRT qué tipo de enlace entrega el slice y, si hace falta, mantener el segmento en un puerto/VLAN que los cores no reenvíen hacia el resto.
+- **IPv6 en las interfaces.** Por indicación del JP, **todas** las interfaces de todas las VM llevan en netplan `dhcp6: false`, `accept-ra: false` y `link-local: []` (receta en [`docs/DESPLIEGUE_UBUNTU.md`](../../docs/DESPLIEGUE_UBUNTU.md) §0). Reduce el ruido IPv6 si hubiera un lazo, pero no lo elimina.
+- **Arranque del control in-band.** Los switches de acceso deben alcanzar a ONOS a través de los cores **antes** de tener flujos instalados (modo `in-band` de OVS con IP en el puente, o un flujo base que ONOS no pise). R2 y R5 deben dejar pasar el segmento de control (y 6653/8181 solo hacia los switches), y los hosts de `10.0.0.0/24` no deben alcanzar a los controladores. **No se ha probado.**
+- **`ens3` del slice.** En VNRT cada VM sigue teniendo la NIC de administración del slice (SSH); es acceso del slice, **no** canal de control, y el informe debe decirlo así.
+- **Acceso aislado si cae su core.** Con un solo uplink, la caída de `sw-core-1` deja sin red a `sw-acc1`. Es la limitación aceptada del árbol; en un campus real se resolvería con MLAG o STP. El escenario 10 (caída de un core) se redefine: afecta al acceso que cuelga de él.
 - **Red externa.** El informe previo no define la subred entre `vm-atacante` y el gateway. Se **propone** `203.0.113.0/24` (rango de documentación) en `redes.externa`; el gateway debe enrutar sin NAT hacia dentro (solo enmascara la salida del campus), para que los cores vean la IP real del atacante.
 - **Servidor DHCP.** `10.0.0.250` (app DHCP de ONOS, R1/R2) está en la lista blanca; si el slice usa otra IP, cambiarla en `redes.lista_blanca`.
 - **Recursos.** El informe previo prevé 2 vCPU y 4 GB por sensor con las reglas locales, y 4 vCPU y 8 GB con ET Open (`SURICATA_ET=1`). Con dos copias del tráfico de ambos cores, cada sensor recibe todo el tráfico espejado: medir CPU de Suricata y de los cores bajo ataque.
