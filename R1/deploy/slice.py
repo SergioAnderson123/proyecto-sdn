@@ -15,7 +15,7 @@
     python3 slice.py limpiar      borra sesiones y flujos para repetir la prueba
     python3 slice.py todo         controller + switches + hosts + portal (si hay host de portal) + alta
 
-Solo usa la biblioteca estandar. Cada host es una identidad de EQUIPO con certificado (alumno01..03, ver USUARIOS) o un host sin 802.1X
+Solo usa la biblioteca estandar. Cada host es una identidad de EQUIPO con certificado (alumno01..03 y support01, ver USUARIOS) o un host sin 802.1X
 (portal, invitado, iot; ver TIPOS). Los profesores no llevan certificado en las PC: suben el equipo a Docente desde el portal.
 """
 import argparse
@@ -45,20 +45,22 @@ SSH_OPTS = ["-o", "StrictHostKeyChecking=accept-new"]
 APPS = ["org.onosproject.openflow", "org.opencord.sadis", "org.opencord.aaa", "org.onosproject.dhcp",
         "org.onosproject.acl", "org.onosproject.vpls", "org.onosproject.flowanalyzer"]
 
-# Identidades 802.1X de los EQUIPOS (rol Alumno) con su suplicante (R1/shared/mininet/supplicants): son las unicas que lleva cada PC.
-# `clave` es la contrasena de la clave privada. Los profesores NO llevan certificado en las PC: entran por el portal con su cuenta
-# personal de LDAP y suben el equipo de Alumno a Docente (docs/CERTIFICADOS_Y_ESCALABILIDAD.md, seccion 6).
+# Identidades 802.1X de los EQUIPOS con su suplicante (R1/shared/mininet/supplicants). `clave` es la contrasena de la clave privada.
+#  - alumno01..03: PC de aula (rol Alumno). Los certificados de alumno se copian a todos los hosts con 802.1X.
+#  - support01: equipo de TI (rol Soporte): el certificado de administrador va SOLO al host al que se asigna, nunca a las PC de aula.
+# Los profesores NO llevan certificado en las PC: entran por el portal con su cuenta personal de LDAP y suben el equipo de Alumno a
+# Docente (docs/CERTIFICADOS_Y_ESCALABILIDAD.md, seccion 6).
 USUARIOS = {
     "alumno01": {"rol": "Alumno", "vlan": 20, "conf": "wpa_alumno_01.conf", "clave": "student_password"},
     "alumno02": {"rol": "Alumno", "vlan": 20, "conf": "wpa_alumno_02.conf", "clave": "student_password"},
     "alumno03": {"rol": "Alumno", "vlan": 20, "conf": "wpa_alumno_03.conf", "clave": "student_password"},
+    "support01": {"rol": "Soporte (Administrador)", "vlan": 40, "conf": "wpa_support_01.conf", "clave": "support_password"},
 }
-# Cuentas con certificado que NO se instalan por defecto en las PC: solo para probar otro rol por 802.1X en un host concreto
+# Cuentas con certificado que NO se instalan por defecto en las PC: solo para probar el rol Docente por 802.1X en un host concreto
 # (hay que escribir el nombre; el playbook copia a ese host solo su certificado y quita los de versiones anteriores).
 USUARIOS_PRUEBA = {
     "profesor01": {"rol": "Docente", "vlan": 10, "conf": "wpa_profe_01.conf", "clave": "professor_password"},
     "profesor02": {"rol": "Docente", "vlan": 10, "conf": "wpa_profe_02.conf", "clave": "professor_password"},
-    "support01": {"rol": "Soporte (Administrador)", "vlan": 40, "conf": "wpa_support_01.conf", "clave": "support_password"},
 }
 # Red de datos del slice (la de la interfaz que va al switch). Los hosts toman su IP por DHCP (app DHCP de ONOS, rango en
 # R1/deploy/.env.example); solo el portal tiene IP fija, la de portal.ip en R2/policy/policy.yaml (fuera del rango DHCP).

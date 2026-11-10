@@ -38,7 +38,9 @@ def test_los_usuarios_existen_en_ldap():
 
 def test_por_defecto_solo_hay_identidades_de_equipo_con_rol_alumno():
     """Los profesores no llevan certificado en las PC: suben el equipo desde el portal con su cuenta personal."""
-    assert set(sd.USUARIOS) == {"alumno01", "alumno02", "alumno03"} and all(d["rol"] == "Alumno" for d in sd.USUARIOS.values())
+    assert set(sd.USUARIOS) == {"alumno01", "alumno02", "alumno03", "support01"}      # equipos de aula y el equipo de TI
+    assert [u for u, d in sd.USUARIOS.items() if d["rol"] != "Alumno"] == ["support01"]
+    assert set(sd.USUARIOS_PRUEBA) == {"profesor01", "profesor02"}
     assert set(sd.opciones()) == set(sd.USUARIOS) | {"portal", "invitado", "iot"}
     assert not set(sd.USUARIOS_PRUEBA) & set(sd.opciones())            # solo se asignan escribiendo el nombre
     for usuario, d in sd.USUARIOS_PRUEBA.items():                       # y siguen teniendo certificado y suplicante
@@ -94,7 +96,9 @@ def test_el_playbook_de_hosts_instala_el_agente_y_no_deja_dos_suplicantes():
     play = yaml.safe_load((AQUI / "hosts" / "hosts.yml").read_text())[0]
     nombres = " ".join(t["name"] for t in play["tasks"])
     assert "agente" in nombres and "Quitar el servicio r1-supplicant" in nombres
-    assert {u["uid"] for u in play["vars"]["usuarios_todos"]} == set(sd.USUARIOS)      # solo las identidades de equipo
+    todos = {u["uid"] for u in play["vars"]["usuarios_todos"]}
+    assert todos == {u for u, d in sd.USUARIOS.items() if d["rol"] == "Alumno"}         # a todas las PC solo los de alumno
+    assert "support01" not in todos and not todos & set(sd.USUARIOS_PRUEBA)             # el de administrador va solo al host de TI
     assert "Quitar los certificados que no son de este host" in nombres                  # y limpia los de profesor de versiones anteriores
     assert (AQUI.parent / "agente_802_1x" / "agente.py").is_file()
 
@@ -193,7 +197,7 @@ def test_asistente_de_configuracion(monkeypatch, tmp_path):
         "3",           # 3 hosts
         "", "1",       # h1: puerto por defecto, usuario 1 (alumno01)
         "5822", "alumno03",   # h2: puerto, usuario por nombre
-        "", "6",       # h3: puerto por defecto, tipo 6 (iot)
+        "", "7",       # h3: puerto por defecto, tipo 7 (iot)
         "",            # guardar: si
     ])
     cfg = sd.config()
@@ -213,9 +217,18 @@ def test_por_defecto_los_hosts_son_alumnos_y_un_portal(monkeypatch, tmp_path):
 
 def test_una_cuenta_de_prueba_solo_se_asigna_escribiendo_su_nombre(monkeypatch, tmp_path):
     monkeypatch.setattr(sd, "CONFIG", tmp_path / "slice.json")
-    _respuestas(monkeypatch, ["1.1.1.1", "2.2.2.2", "1", "", "ens4", "1", "", "support01", "n"])
-    assert sd.config()["hosts"][0]["usuario"] == "support01"
-    assert sd.usa_802_1x({"usuario": "support01"}) and not sd.usa_802_1x({"usuario": "portal"})
+    _respuestas(monkeypatch, ["1.1.1.1", "2.2.2.2", "1", "", "ens4", "1", "", "profesor01", "n"])
+    assert sd.config()["hosts"][0]["usuario"] == "profesor01"
+    assert sd.usa_802_1x({"usuario": "profesor01"}) and not sd.usa_802_1x({"usuario": "portal"})
+
+
+def test_el_administrador_se_elige_como_cualquier_equipo_y_su_certificado_va_solo_a_su_host(monkeypatch, tmp_path):
+    monkeypatch.setattr(sd, "CONFIG", tmp_path / "slice.json")
+    _respuestas(monkeypatch, ["1.1.1.1", "2.2.2.2", "1", "", "ens4", "2", "", "1", "", "4", "n"])     # h2 = opcion 4
+    cfg = sd.config()
+    assert [h["usuario"] for h in cfg["hosts"]] == ["alumno01", "support01"]
+    inv = sd.inventario_hosts(cfg)
+    assert "conf=wpa_alumno_01.conf" in inv and "conf=wpa_support_01.conf cert=support01@example.org.pem" in inv
 
 
 def test_elegir_usuario_rechaza_lo_que_no_es_de_la_lista(monkeypatch, capsys):

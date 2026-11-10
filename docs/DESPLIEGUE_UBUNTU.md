@@ -241,13 +241,16 @@ El `deviceId` de sw1 sale de `python3 slice.py estado` (sección "Switches"). `u
 | 1 | `alumno01` | Equipo, rol Alumno | 20 | `wpa_alumno_01.conf` | `student_password` |
 | 2 | `alumno02` | Equipo, rol Alumno | 20 | `wpa_alumno_02.conf` | `student_password` |
 | 3 | `alumno03` | Equipo, rol Alumno | 20 | `wpa_alumno_03.conf` | `student_password` |
-| 4 | `portal` | Servidor del portal cautivo (sin 802.1X) | puerto de confianza | - | - |
-| 5 | `invitado` | Equipo de invitado: entra por el portal con `guest01` (sin 802.1X) | 50 | - | - |
-| 6 | `iot` | Dispositivo IoT, se identifica por su MAC (MAB, sin 802.1X) | 30 | - | - |
+| 4 | `support01` | Equipo de TI, rol Soporte (Administrador) | 40 | `wpa_support_01.conf` | `support_password` |
+| 5 | `portal` | Servidor del portal cautivo (sin 802.1X) | puerto de confianza | - | - |
+| 6 | `invitado` | Equipo de invitado: entra por el portal con `guest01` (sin 802.1X) | 50 | - | - |
+| 7 | `iot` | Dispositivo IoT, se identifica por su MAC (MAB, sin 802.1X) | 30 | - | - |
 
-Solo para pruebas puntuales de otro rol por 802.1X (hay que **escribir el nombre**; no se ofrecen por número): `profesor01`, `profesor02` (Docente, VLAN 10) y `support01` (Soporte, VLAN 40, `support_password`). El playbook copia a ese host solo el certificado de esa cuenta y quita los demás.
+**El administrador** (`support01`) entra por 802.1X como un equipo más: asígnaselo a un host en `config` (opción 4) y ese host recibe su certificado, y solo ese; el de administrador **no se copia a las PC de aula**. Se autentica con rol Soporte, VLAN 40 (tabla 40), atado a su MAC y puerto como los alumnos (`alta` los fija). No sube por el portal: la tabla `ascenso` solo tiene `alumno: [docente]`.
 
-**Cuentas de personas** (LDAP, contraseña `password123`): `profesor01` y `profesor02` son **personales**: no llevan MAC, switch ni puerto, y suben un equipo de Alumno a Docente desde el portal (sección 3d). `support01` (soporte técnico) sigue atado a una MAC y un puerto. `guest01` / `guest123` es el invitado del portal.
+Solo para probar el rol Docente por 802.1X en un host concreto (hay que **escribir el nombre**; no se ofrece por número): `profesor01`, `profesor02` (VLAN 10). El playbook copia a ese host solo el certificado de esa cuenta y quita los demás.
+
+**Cuentas de personas** (LDAP, contraseña `password123`): `profesor01` y `profesor02` son **personales**: no llevan MAC, switch ni puerto, y suben un equipo de Alumno a Docente desde el portal (sección 3d). `support01` (soporte técnico) es la identidad del equipo de TI y sigue atado a una MAC y un puerto. `guest01` / `guest123` es el invitado del portal.
 
 **Decisiones y límites:** las PC son de uso general, así que solo llevan el certificado de **su equipo** (rol Alumno); quien necesita más permisos sube con su cuenta personal. El rol JP (híbrido) no se usa: quien ejerce de JP entra con la cuenta de profesor. Lo que eso implica para la seguridad y la escalabilidad, y cómo encajaría el administrador, está en [`CERTIFICADOS_Y_ESCALABILIDAD.md`](CERTIFICADOS_Y_ESCALABILIDAD.md).
 

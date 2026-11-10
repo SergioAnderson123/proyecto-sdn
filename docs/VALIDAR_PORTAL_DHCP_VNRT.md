@@ -13,9 +13,34 @@ Guion de prueba, paso a paso, con los logs que corresponden a cada uno. Todo se 
 
 Lo que valida cada bloque está explicado en `DESPLIEGUE_UBUNTU.md` (3d y 3e) y `CERTIFICADOS_Y_ESCALABILIDAD.md` (6). **Nada de esto se había ejecutado antes en las VM**: si algo no sale como dice "Debes ver", el apartado "Si falla" de cada paso es el primer sitio donde mirar.
 
+## Previo: slice limpio
+
+**Slice nuevo (VM sin nada).** En el Controller, con el usuario `ubuntu` (no `root`):
+```bash
+sudo apt-get update && sudo apt-get install -y git curl wget ca-certificates
+curl -fsSL https://get.docker.com | sudo sh && sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER" && newgrp docker ; docker ps          # debe responder sin error
+df -h /                                                                # al menos 3 GB libres (ONOS ~1,2 GB + RADIUS, LDAP y Policy Mapper)
+git clone https://github.com/SergioAnderson123/proyecto-sdn.git ~/proyecto-sdn
+chmod +x ~/proyecto-sdn/R1/deploy/controller/*.sh
+```
+Los switches y los hosts no necesitan nada previo: Ansible instala Open vSwitch, `wpasupplicant` y el cliente DHCP. Solo hace falta poder entrar por SSH como `ubuntu` y saber su contraseña de sudo.
+
+**Reutilizando una VM de pruebas anteriores** (borra todo lo viejo; hazlo en el Controller):
+```bash
+cd ~/proyecto-sdn && git pull
+docker rm -f $(docker ps -aq) 2>/dev/null ; docker network rm sdn 2>/dev/null
+docker system prune -af --volumes                                      # imágenes y volúmenes sin uso (se vuelven a descargar)
+find R1/shared/ldap/openldap-data -mindepth 1 ! -name 'README*' -delete    # IMPRESCINDIBLE: el LDIF solo se carga con esa carpeta vacía y ahora cambió (profesores personales)
+rm -f ~/slice.json R1/deploy/.env R2/policy/policy.local.yaml          # config del slice, claves y política de un slice anterior
+```
+En los switches y los hosts no hace falta limpiar: los playbooks son idempotentes (en los hosts quitan solos los certificados que no son suyos).
+
+**Si algo no cuadra más adelante, empieza por esto:** el LDIF viejo (profesores con MAC y puerto de otro slice) o un `policy.local.yaml` de otro slice son las dos fuentes de rechazos y flujos extraños en un slice reutilizado.
+
 ## 0. Terminales de logs (déjalos abiertos todo el rato)
 
-Cada uno en una sesión SSH al Controller:
+Cada uno en una sesión SSH al Controller. **Ábrelos cuando termine el paso 2**: antes no existen los contenedores y `docker logs` falla.
 
 ```bash
 # A. Policy Mapper: decisiones, flujos instalados, ascensos, portal
@@ -41,9 +66,9 @@ sudo ovs-ofctl -O OpenFlow13 dump-flows sw2 | grep -v 0x888e                   #
 ```bash
 cd ~/proyecto-sdn && git pull
 chmod +x R1/deploy/controller/*.sh
-cd R1/deploy && python3 slice.py config        # hosts: h1 alumno01, h2 alumno02, h3 invitado (6), h4 portal (4); los puertos SSH y la interfaz como siempre
+cd R1/deploy && python3 slice.py config        # hosts: h1 alumno01, h2 alumno02, h3 invitado (6), h4 portal (5); los puertos SSH y la interfaz como siempre
 ```
-En la tabla de `config`: 1 = `alumno01`, 2 = `alumno02`, 3 = `alumno03`, 4 = `portal`, 5 = `invitado`, 6 = `iot`; también puedes escribir el nombre.
+En la tabla de `config`: 1 = `alumno01`, 2 = `alumno02`, 3 = `alumno03`, 4 = `support01` (administrador), 5 = `portal`, 6 = `invitado`, 7 = `iot`; también puedes escribir el nombre.
 
 **Parámetros de DHCP** (rango, concesión, DNS): tienen valor por defecto y se pueden cambiar antes del paso 2 en `R1/deploy/.env` (ver `.env.example`). Para esta prueba sirven tal cual.
 
@@ -200,6 +225,21 @@ curl -s -d 'usuario=guest01&clave=guest123' http://10.0.0.60:8080/login | grep -
 **Cerrar la sesión** (en h3): `curl -s -X POST -d '' http://10.0.0.60:8080/logout -o /dev/null -w "%{http_code}\n"`. Terminal A: `Portal: sesión cerrada por el usuario`; el flujo de h3 desaparece y h3 **vuelve a la cuarentena** (repite el `curl` al portal y el `ping`, como en el paso 6). Contraseña incorrecta: 401, evento `rechazado`.
 
 **Si falla:** `No se pudo ubicar el equipo en la red` → ONOS no conoce a h3: comprueba que la concesión DHCP existe (paso 4) y que `/onos/v1/hosts` lo lista; ese es el único punto donde el invitado depende de la app DHCP.
+
+## 9b. Probar al administrador (`support01`) en un host
+
+El administrador entra por 802.1X con el certificado de **equipo** de Soporte, no por el portal. Para probarlo en h2 (en lugar de `alumno02`):
+```bash
+python3 slice.py config            # h2: opción 4 (support01); deja el resto igual
+python3 slice.py hosts             # h2 recibe el certificado de support01 (solo h2) y se le quita el resto de los que no son suyos
+python3 slice.py alta              # libera, autentica y fija en LDAP la MAC y el puerto de h2
+```
+**Debes ver**
+- Terminal B (RADIUS): `Access-Accept` para `support01@example.org`.
+- Terminal A (Policy Mapper): `APROBADO` con VLAN 40 y `Flujo Prio 40001 inyectado`; SESIONES: `support01@example.org`, rol Soporte.
+- sw2: el flujo de la MAC de h2 hace `goto_table:40`.
+- En h2: `ls /home/ubuntu/supp/certs` solo tiene la CA, los certificados de alumno y el de `support01`; en h1 no existe el de `support01`.
+- **Sin ascenso:** desde h2, `curl -s -d 'usuario=profesor01&clave=password123' http://10.0.0.60:8080/login` da 409 (`no admite subir`, si `profesor01` no tiene ya otra sesión; si la tiene, `ya existe una sesión`): el administrador no sube ni es subido por el portal.
 
 ## 10. Cierre de sesión 802.1X (ya validado antes) y limpieza
 
