@@ -10,6 +10,22 @@
   become: true
   gather_facts: false
   tasks:
+    - name: Que systemd-networkd no gestione la interfaz de datos (VNRT le pone una IP fija por netplan/cloud-init)
+      register: portal_networkd
+      ansible.builtin.copy:
+        dest: "/etc/systemd/network/10-netplan-{{ iface }}.network"
+        content: |
+          # R1: la IP de la interfaz de datos la pone r1-ip-datos (la del portal), no netplan/cloud-init.
+          [Match]
+          Name={{ iface }}
+          [Link]
+          Unmanaged=yes
+
+    - name: Recargar systemd-networkd
+      when: portal_networkd.changed
+      ansible.builtin.command: networkctl reload
+      failed_when: false
+
     - name: Servicio r1-ip-datos (persiste tras reiniciar)
       register: ip_unidad
       ansible.builtin.copy:
@@ -21,7 +37,7 @@
           [Service]
           Type=oneshot
           RemainAfterExit=yes
-          ExecStart=/bin/sh -c 'ip link set {{ iface }} up && ip addr replace {{ ip_datos }}/24 dev {{ iface }}'
+          ExecStart=/bin/sh -c 'ip link set {{ iface }} up && ip -4 addr flush dev {{ iface }} && ip addr replace {{ ip_datos }}/24 dev {{ iface }}'
           ExecStop=/bin/sh -c 'ip addr del {{ ip_datos }}/24 dev {{ iface }}'
           [Install]
           WantedBy=multi-user.target
@@ -31,7 +47,7 @@
         name: r1-ip-datos
         daemon_reload: true
         enabled: true
-        state: "{{ 'restarted' if ip_unidad.changed else 'started' }}"
+        state: "{{ 'restarted' if (ip_unidad.changed or portal_networkd.changed) else 'started' }}"
 
 - name: Servidor del portal cautivo
   hosts: portal

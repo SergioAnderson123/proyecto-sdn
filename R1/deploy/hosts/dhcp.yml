@@ -5,8 +5,13 @@
 # de cuarentena (solo ARP y portal) y al autenticar conserva esa IP. Igual que una PC con la red configurada por DHCP.
 #
 # El script de dhclient SOLO pone o quita la direccion: no instala ruta por defecto ni DNS, porque la interfaz de datos no es la salida
-# del host (la del SSH es otra) y una ruta por defecto aqui lo dejaria sin acceso. Va en /etc/dhcp y los archivos se llaman dhclient-r1*
-# para que el perfil de AppArmor de dhclient los permita.
+# del host (la del SSH es otra) y una ruta por defecto aqui lo dejaria sin acceso.
+#
+# Dos cosas que VNRT obliga a hacer:
+#  - Las NIC de datos traen una IP FIJA de la plataforma (10.0.0.1, .2...) en /etc/netplan/50-cloud-init.yaml. Se saca la interfaz de
+#    systemd-networkd y se vacia su direccion, para que la IP la mande solo el DHCP.
+#  - El perfil de AppArmor de dhclient no deja ejecutar scripts propios ("execve ... Permission denied"): se le permite el de R1 en su
+#    archivo local (/etc/apparmor.d/local/sbin.dhclient) y se recarga el perfil.
 - name: Cliente DHCP en la interfaz de datos
   hosts: hosts:sin_802_1x
   become: true
@@ -18,6 +23,40 @@
         state: present
         update_cache: true
         cache_valid_time: 3600
+
+    - name: Que systemd-networkd no gestione la interfaz de datos (VNRT le pone una IP fija por netplan/cloud-init)
+      register: datos_networkd
+      ansible.builtin.copy:
+        dest: "/etc/systemd/network/10-netplan-{{ iface }}.network"
+        content: |
+          # R1: la interfaz de datos no la configura netplan/cloud-init (IP fija de la plataforma). Este archivo tapa al que netplan
+          # genera con el mismo nombre en /run/systemd/network y sobrevive a los reinicios y a la regeneracion de cloud-init.
+          [Match]
+          Name={{ iface }}
+          [Link]
+          Unmanaged=yes
+
+    - name: Recargar systemd-networkd
+      when: datos_networkd.changed
+      ansible.builtin.command: networkctl reload
+      failed_when: false
+
+    - name: AppArmor - permitir a dhclient ejecutar el script de R1
+      register: dhcp_apparmor
+      ansible.builtin.copy:
+        dest: /etc/apparmor.d/local/sbin.dhclient
+        content: |
+          # R1: script propio de dhclient (solo pone la direccion). ux = sin confinar y sin limpiar el entorno (lee $reason, $new_ip_address...)
+          /etc/dhcp/dhclient-r1-script ux,
+          /etc/dhcp/dhclient-r1.conf r,
+          /var/lib/dhcp/dhclient-r1.leases* rw,
+          /run/dhclient-r1.pid rw,
+      failed_when: false
+
+    - name: Recargar el perfil de AppArmor de dhclient
+      when: dhcp_apparmor.changed
+      ansible.builtin.shell: "test -f /etc/apparmor.d/sbin.dhclient && command -v apparmor_parser >/dev/null && apparmor_parser -r /etc/apparmor.d/sbin.dhclient || true"
+      changed_when: false
 
     - name: Script de dhclient (solo la direccion)
       register: dhcp_script
@@ -66,7 +105,7 @@
           Wants=r1-eapol-bcast.service
           After=network-online.target r1-eapol-bcast.service
           [Service]
-          ExecStartPre=/bin/sh -c 'ip link set {{ iface }} up'
+          ExecStartPre=/bin/sh -c 'ip link set {{ iface }} up && ip -4 addr flush dev {{ iface }}'
           ExecStart=/usr/sbin/dhclient -d -4 -v -cf /etc/dhcp/dhclient-r1.conf -sf /etc/dhcp/dhclient-r1-script -pf /run/dhclient-r1.pid -lf /var/lib/dhcp/dhclient-r1.leases {{ iface }}
           ExecStopPost=/bin/sh -c 'ip addr flush dev {{ iface }}'
           Restart=always
@@ -79,7 +118,7 @@
         name: r1-dhcp
         daemon_reload: true
         enabled: true
-        state: "{{ 'restarted' if (dhcp_script.changed or dhcp_conf.changed or dhcp_unidad.changed) else 'started' }}"
+        state: "{{ 'restarted' if (dhcp_script.changed or dhcp_conf.changed or dhcp_unidad.changed or dhcp_apparmor.changed or datos_networkd.changed) else 'started' }}"
 
     - name: Direccion de la interfaz de datos (puede tardar unos segundos en llegar)
       ansible.builtin.shell: "for i in 1 2 3 4 5 6; do ip -4 -o addr show dev {{ iface }} | grep -q inet && break; sleep 3; done; ip -4 -o addr show dev {{ iface }}"

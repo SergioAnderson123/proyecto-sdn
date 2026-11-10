@@ -257,6 +257,20 @@ def test_advierte_si_hay_dos_portales_pero_no_si_se_repite_iot(monkeypatch, tmp_
 
 # ---------------------------------------------------------------- DHCP
 
+def test_el_playbook_de_dhcp_resuelve_apparmor_y_la_ip_fija_de_la_plataforma():
+    import yaml
+    [play] = yaml.safe_load((AQUI / "hosts" / "dhcp.yml").read_text())
+    por_nombre = {t["name"]: t for t in play["tasks"]}
+    aa = next(t for n, t in por_nombre.items() if n.startswith("AppArmor"))["ansible.builtin.copy"]
+    assert aa["dest"] == "/etc/apparmor.d/local/sbin.dhclient" and "/etc/dhcp/dhclient-r1-script ux," in aa["content"]
+    red = next(t for n, t in por_nombre.items() if n.startswith("Que systemd-networkd"))["ansible.builtin.copy"]
+    assert red["dest"] == "/etc/systemd/network/10-netplan-{{ iface }}.network" and "Unmanaged=yes" in red["content"]
+    servicio = next(t for n, t in por_nombre.items() if n.startswith("Servicio r1-dhcp"))["ansible.builtin.copy"]["content"]
+    assert "ip -4 addr flush dev {{ iface }}" in servicio                  # sin la IP fija de netplan antes de pedir la del DHCP
+    nombres = list(por_nombre)
+    assert nombres.index(next(n for n in nombres if n.startswith("Que systemd-networkd"))) < nombres.index("Servicio r1-dhcp (persiste tras reiniciar)")
+
+
 def test_el_playbook_de_dhcp_toca_los_hosts_con_y_sin_802_1x_pero_no_el_portal():
     import yaml
     [play] = yaml.safe_load((AQUI / "hosts" / "dhcp.yml").read_text())

@@ -189,13 +189,13 @@ La regla de DHCP queda bajo la lista negra de R1 (45000) y el DROP de R5 (42000)
 
 | Parámetro (`.env`) | Por defecto | Qué es | Quién lo decide |
 |---|---|---|---|
-| `DHCP_INICIO` / `DHCP_FIN` | `10.0.0.100` / `10.0.0.199` | Rango único de ONOS: 100 direcciones, fuera de las IP fijas (portal `.60`, servicios `.40` y `.50`, servidor `.2`) | **Tuyo**: cuántos hosts, invitados e IoT esperas a la vez |
+| `DHCP_INICIO` / `DHCP_FIN` | `10.0.0.100` / `10.0.0.199` | Rango único de ONOS: 100 direcciones, fuera de las IP fijas (portal `.60`, servicios `.40` y `.50`, servidor `.250`, router `.254`) | **Tuyo**: cuántos hosts, invitados e IoT esperas a la vez |
 | `DHCP_LEASE` | `3600` s | Duración de una concesión | **Tuyo**: más corta libera antes las IP de invitados que se van; más larga genera menos tráfico. Conviene que no sea menor que la sesión de invitado (1800 s en `portal.duracion_s`) |
 | `DHCP_RENEW` / `DHCP_REBIND` | `1800` / `3150` s | Cuándo el cliente intenta renovar (T1) y cuándo pide a cualquiera (T2): la mitad y el 87,5 % de la concesión | Mío: derivados de `DHCP_LEASE` |
 | `DHCP_DNS` | `8.8.8.8` | DNS que se anuncia | **Tuyo**: el DNS del campus (el slice no tiene) |
-| `DHCP_ROUTER` | `10.0.0.1` | Puerta de enlace que se anuncia | **Tuyo**: no hay router en el slice; es solo informativa y el cliente no la instala (ver abajo) |
+| `DHCP_ROUTER` | `10.0.0.254` | Puerta de enlace que se anuncia | **Tuyo**: no hay router en el slice; es solo informativa y el cliente no la instala (ver abajo) |
 | `DHCP_MASCARA` / `DHCP_BROADCAST` | `255.255.255.0` / `10.0.0.255` | La subred `10.0.0.0/24`, la de `policy.yaml` | Mío: sigue a `policy.yaml` |
-| `DHCP_SERVIDOR_IP` / `DHCP_SERVIDOR_MAC` | `10.0.0.2` / `02:00:00:00:00:02` | Identidad del servidor DHCP | Mío |
+| `DHCP_SERVIDOR_IP` / `DHCP_SERVIDOR_MAC` | `10.0.0.250` / `02:00:00:00:00:02` | Identidad del servidor DHCP. No puede ser `10.0.0.1` a `.4`: VNRT las usa en las NIC de datos de los hosts | Mío |
 | `DHCP_PURGA_MIN` | `2` min | Cada cuánto ONOS libera las concesiones vencidas | Mío |
 | `cuarentena.tabla` (`policy.yaml`) | `99` | VLAN/tabla de cuarentena | Mío; quitar la sección desactiva la cuarentena |
 | `portal.duracion_s` (`policy.yaml`) | invitado 1800 s, el resto 8 h | Duración de la sesión del portal | **Tuyo** |
@@ -206,6 +206,8 @@ Para cambiarlos: edita `R1/deploy/.env` y ejecuta `bash R1/deploy/controller/ini
 - **Un solo rango y unos solos tiempos para todos.** No se pueden dar rangos distintos a invitados, alumnos o IoT. Por eso los invitados no tienen "su" rango: su separación es la **VLAN de cuarentena y después la VLAN 50**, no la subred. Si hiciera falta un rango propio por clase, habría que sustituir la app por otro servidor (Kea o dnsmasq con clases) y un relé; no lo he hecho.
 - La app anota en ONOS la IP y la ubicación de cada host que atiende, así que también un invitado queda ubicado (lo usa el portal para ubicar equipos sin sesión).
 - No hay límite de DHCP por puerto: un host puede inundar de `DISCOVER` al controlador. Se resolvería con un *meter* en el switch; no está.
+- **VNRT trae IP fijas** (`10.0.0.1`, `.2`... en `/etc/netplan/50-cloud-init.yaml`) en las NIC de datos. `dhcp.yml` saca esa interfaz de `systemd-networkd` (archivo `/etc/systemd/network/10-netplan-<iface>.network`) y vacía su dirección para que mande solo el DHCP; el portal conserva su IP fija `10.0.0.60`.
+- **AppArmor** impide a `dhclient` ejecutar scripts propios (`execve ... Permission denied` en `journalctl -u r1-dhcp`): `dhcp.yml` lo permite en `/etc/apparmor.d/local/sbin.dhclient`.
 - El cliente de los hosts **no instala ruta por defecto ni DNS** (solo la dirección): su interfaz de datos no es la salida del host y una ruta aquí le cortaría el SSH.
 - La renovación por unicast necesita ARP de la IP del servidor, y desde un host con sesión ese ARP no llega al controlador; el cliente renueva entonces por difusión en T2 (87,5 %), que sí funciona.
 

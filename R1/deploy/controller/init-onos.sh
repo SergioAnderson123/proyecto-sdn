@@ -76,9 +76,9 @@ curl -s -u "$AUTH" -X POST -H "Content-Type: application/json" "$ONOS_URL/networ
 
 # DHCP: la app org.onosproject.dhcp es un servidor DHCP dentro de ONOS con UN solo rango para todos los hosts (la separacion entre
 # alumnos, invitados, etc. la hacen las VLAN/tablas de R2, no la subred). Valores por defecto y su significado: R1/deploy/.env.example.
-DHCP_SERVIDOR_IP="${DHCP_SERVIDOR_IP:-10.0.0.2}"; DHCP_SERVIDOR_MAC="${DHCP_SERVIDOR_MAC:-02:00:00:00:00:02}"
+DHCP_SERVIDOR_IP="${DHCP_SERVIDOR_IP:-10.0.0.250}"; DHCP_SERVIDOR_MAC="${DHCP_SERVIDOR_MAC:-02:00:00:00:00:02}"
 DHCP_MASCARA="${DHCP_MASCARA:-255.255.255.0}"; DHCP_BROADCAST="${DHCP_BROADCAST:-10.0.0.255}"
-DHCP_ROUTER="${DHCP_ROUTER:-10.0.0.1}"; DHCP_DNS="${DHCP_DNS:-8.8.8.8}"
+DHCP_ROUTER="${DHCP_ROUTER:-10.0.0.254}"; DHCP_DNS="${DHCP_DNS:-8.8.8.8}"
 DHCP_INICIO="${DHCP_INICIO:-10.0.0.100}"; DHCP_FIN="${DHCP_FIN:-10.0.0.199}"
 DHCP_LEASE="${DHCP_LEASE:-3600}"; DHCP_RENEW="${DHCP_RENEW:-1800}"; DHCP_REBIND="${DHCP_REBIND:-3150}"; DHCP_PURGA_MIN="${DHCP_PURGA_MIN:-2}"
 echo "[*] Configurando la app DHCP de ONOS (rango $DHCP_INICIO - $DHCP_FIN, concesion de $DHCP_LEASE s)..."
