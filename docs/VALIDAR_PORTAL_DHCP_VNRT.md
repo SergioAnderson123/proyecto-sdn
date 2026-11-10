@@ -61,12 +61,13 @@ curl -s http://127.0.0.1:5000/sessions | python3 -m json.tool                  #
 sudo ovs-ofctl -O OpenFlow13 dump-flows sw2 | grep -v 0x888e                   # FLUJOS de un switch (en sw2 o sw3)
 ```
 
-## 1. Actualizar y configurar
+## 1. Configurar y preparar el acceso
 
 ```bash
 cd ~/proyecto-sdn && git pull
 chmod +x R1/deploy/controller/*.sh
 cd R1/deploy && python3 slice.py config        # hosts: h1 alumno01, h2 alumno02, h3 invitado (6), h4 portal (5); los puertos SSH y la interfaz como siempre
+python3 slice.py preparar       # instala Ansible, crea tu llave SSH y la copia a cada switch y host (pide la contraseña de ubuntu de cada máquina una vez)
 ```
 En la tabla de `config`: 1 = `alumno01`, 2 = `alumno02`, 3 = `alumno03`, 4 = `support01` (administrador), 5 = `portal`, 6 = `invitado`, 7 = `iot`; también puedes escribir el nombre.
 
