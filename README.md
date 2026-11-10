@@ -27,7 +27,7 @@ R2/   Restricción de recursos: tablas de rol, fallback MAB, portal cautivo y pa
 R5/   Seguridad perimetral: Suricata + integrador hacia ONOS
   codigo/  cli/  lab/  suricata/  tests/
   pruebas/               scripts, evidencia (JSON, capturas, pcap) y resultados de Docker y VNRT
-  deploy/ids/            despliegue en la VM IDS; deploy/prioridades.yaml es el mapa único de prioridades R1/R2/R5
+  deploy/ids/            despliegue de los dos sensores IDS (slice de 14 VM); topologia.example.yaml describe cores, puertos y NIC; prioridades.yaml es el mapa único de prioridades R1/R2/R5
 docs/   entregables y documentos del curso (no son código de un requerimiento)
 ```
 

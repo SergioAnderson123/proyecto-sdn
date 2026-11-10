@@ -1,20 +1,18 @@
-# VM IDS (R5): Suricata (sensor en el puerto de espejo del Core) + integrador M09 (alertas -> ONOS REST).
-# El integrador lee eve-alerts.json del volumen compartido y habla con ONOS por la red de gestion (CONTROLLER_IP:8181).
-# Uso: ./up.sh   (lee ../.env, calcula IDS_MAC, levanta todo e instala el espejo en el Core)
+# Sensor IDS de R5 (nodo-sec-1 o nodo-sec-2): Suricata en las NIC de espejo + integrador M09 (alertas -> ONOS REST).
+# Los dos sensores usan este mismo compose: reciben el mismo espejo y bloquean igual (si uno cae, el otro mantiene la cobertura).
+# La topologia (nodos ONOS, cores, redes, MAC de cada NIC) esta en R5/deploy/topologia.yaml; aqui solo van los ajustes por sensor.
+# Uso: ./up.sh   (lee ../.env y ../topologia.yaml, prepara las NIC, levanta todo e instala el espejo en los cores)
 x-r5-env: &r5-env
-  ONOS_URL: http://${CONTROLLER_IP:?falta CONTROLLER_IP}:8181/onos/v1
   ONOS_USER: ${ONOS_USER:-onos}
   ONOS_PASS: ${ONOS_PASS:-rocks}
   APP_ID: org.campus.r5
-  CORE_DEVICE: ${CORE_DEVICE:?falta CORE_DEVICE}
+  TOPOLOGIA: /opt/r5/topologia.yaml
+  SENSOR: ${SENSOR:?falta SENSOR (nodo-sec-1 o nodo-sec-2)}
   EVE_PATH: /var/log/suricata/eve-alerts.json
   STATE_PATH: /var/lib/integrador/state.json
-  HOME_NET: ${HOME_NET:-10.0.0.0/24}
-  LISTA_BLANCA: ${LISTA_BLANCA:-10.0.0.1/32}
   P_R5: ${P_R5:-42000}
   MAX_SEVERITY: ${MAX_SEVERITY:-2}
   BLOCK_SEC: ${BLOCK_SEC:-300}
-  MAPPER_URL: ${MAPPER_URL:-}
 
 services:
   suricata:
@@ -23,8 +21,7 @@ services:
     network_mode: host
     cap_add: [NET_ADMIN, NET_RAW, SYS_NICE]
     environment:
-      IDS_IFACE: ${IDS_IFACE:?falta IDS_IFACE}
-      HOME_NET: ${HOME_NET:-10.0.0.0/24}
+      IDS_IFACES: ${IDS_IFACES:?falta IDS_IFACES (NIC de espejo del sensor, separadas por comas)}
       SURICATA_ET: ${SURICATA_ET:-0}
     entrypoint: ["/bin/bash", "/opt/r5/entrypoint.sh"]
     volumes:
@@ -32,6 +29,9 @@ services:
       - suricata-rules:/var/lib/suricata
       - ../../suricata/local.rules:/opt/r5/local.rules:ro
       - ./suricata/entrypoint.sh:/opt/r5/entrypoint.sh:ro
+      - ./suricata/af_packet.py:/opt/r5/af_packet.py:ro
+      - ../../codigo/topologia.py:/opt/r5/codigo/topologia.py:ro
+      - ${TOPOLOGIA_ARCHIVO:?lo define up.sh}:/opt/r5/topologia.yaml:ro
     restart: unless-stopped
 
   integrador:
@@ -44,11 +44,13 @@ services:
     volumes:
       - suricata-log:/var/log/suricata:ro
       - integrador-state:/var/lib/integrador
+      - ${TOPOLOGIA_ARCHIVO:?lo define up.sh}:/opt/r5/topologia.yaml:ro
     depends_on:
       - suricata
     restart: unless-stopped
 
-  # Instalador del espejo selectivo en el Core (una vez; es permanente). Se ejecuta con: docker compose run --rm espejo
+  # Instalador del espejo selectivo en los cores (una vez; es permanente e idempotente: instalarlo desde los dos sensores es inocuo).
+  # Se ejecuta con: docker compose run --rm espejo     Ver switches y puertos de ONOS: docker compose run --rm espejo python3 /opt/r5/lab/espejo.py --descubrir
   espejo:
     image: r5-integrador:local
     profiles: ["setup"]
@@ -56,11 +58,8 @@ services:
     environment:
       <<: *r5-env
       P_ESPEJO: ${P_ESPEJO:-41000}
-      PUERTO_UPLINK: ${PUERTO_UPLINK:-3}
-      PUERTO_IDS: ${PUERTO_IDS:-1}
-      ESPEJO_HOME_NET: ${ESPEJO_HOME_NET:-10.0.0.0/24}
-      ESPEJO_RED_EXTERNA: ${ESPEJO_RED_EXTERNA:-10.0.1.0/24}
-      IDS_MAC: ${IDS_MAC:-}
+    volumes:
+      - ${TOPOLOGIA_ARCHIVO:?lo define up.sh}:/opt/r5/topologia.yaml:ro
     depends_on:
       - integrador
 

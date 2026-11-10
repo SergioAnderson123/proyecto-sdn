@@ -18,22 +18,43 @@ import sys
 
 import requests
 
-ONOS_URL = os.getenv("ONOS_URL", "http://localhost:8181/onos/v1")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "codigo"))
+import topologia  # noqa: E402
+
+TOPO = topologia.aplicar_entorno()      # con TOPOLOGIA definida: nodos ONOS, cores y nombres de los switches salen de topologia.yaml
+
+ONOS_URL = os.getenv("ONOS_URL", "http://localhost:8181/onos/v1")      # varios nodos separados por coma: se usa el primero que responda
 AUTH = (os.getenv("ONOS_USER", "onos"), os.getenv("ONOS_PASS", "rocks"))
 APP_ID = os.getenv("APP_ID", "org.campus.r5")
 PRIORIDAD = int(os.getenv("P_R5", "42000"))
-CORE = os.getenv("CORE_DEVICE", "of:0000000000000001")
+CORES = [d.strip() for d in os.getenv("CORE_DEVICES", "").split(",") if d.strip()] or [os.getenv("CORE_DEVICE", "of:0000000000000001")]
+CORE = CORES[0]
 EVE = os.getenv("EVE_PATH", "/var/log/suricata/eve-alerts.json")
 MAX_SEVERIDAD = int(os.getenv("MAX_SEVERITY", "2"))
 PRIO_ESPEJO = int(os.getenv("P_ESPEJO", "41000"))   # misma variable que lab/espejo.py
 NOMBRES = {"of:0000000000000001": "s1 Core", "of:0000000000000002": "s2", "of:0000000000000003": "s3", "of:0000a223f2c04547": "s1 Core", "of:00001a749039894a": "s2 borde (h1,h2)", "of:0000ca272d265744": "s3 borde (h3,h4)"}
+if TOPO:
+    NOMBRES.update(topologia.nombres_switches(TOPO))
+
+
+def peticion(metodo, ruta, **kw):
+    """Llama a ONOS probando cada nodo del clúster; devuelve la primera respuesta que no sea un fallo de red o un 5xx."""
+    ultimo = None
+    for base in [u.strip().rstrip("/") for u in ONOS_URL.split(",") if u.strip()]:
+        try:
+            r = requests.request(metodo, f"{base}{ruta}", auth=AUTH, timeout=5, **kw)
+        except requests.RequestException as e:
+            ultimo = f"{base}: {e}"
+            continue
+        if r.status_code >= 500:
+            ultimo = f"{base}: HTTP {r.status_code}"
+            continue
+        return r
+    sys.exit(f"error: no se pudo hablar con ONOS ({ultimo})")
 
 
 def onos(metodo, ruta, **kw):
-    try:
-        r = requests.request(metodo, f"{ONOS_URL}{ruta}", auth=AUTH, timeout=5, **kw)
-    except requests.RequestException as e:
-        sys.exit(f"error: no se pudo hablar con ONOS ({ONOS_URL}): {e}")
+    r = peticion(metodo, ruta, **kw)
     if r.status_code >= 400:
         sys.exit(f"error: ONOS respondió HTTP {r.status_code}: {r.text[:200]}")
     return r
@@ -49,11 +70,8 @@ def ip_valida(texto):
 def flujos_r5():
     """[(ip, flujo)] de los DROP por IP de origen que pertenecen a R5."""
     res = []
-    try:       # ONOS responde 404 mientras R5 no haya instalado ningún flujo (el appId aún no existe)
-        r = requests.get(f"{ONOS_URL}/flows/application/{APP_ID}", auth=AUTH, timeout=5)
-    except requests.RequestException as e:
-        sys.exit(f"error: no se pudo hablar con ONOS ({ONOS_URL}): {e}")
-    if r.status_code == 404:
+    r = peticion("GET", f"/flows/application/{APP_ID}")
+    if r.status_code == 404:      # ONOS responde 404 mientras R5 no haya instalado ningún flujo (el appId aún no existe)
         return res
     if r.status_code >= 400:
         sys.exit(f"error: ONOS respondió HTTP {r.status_code}: {r.text[:200]}")
@@ -117,15 +135,24 @@ def cmd_alertas(a):
 def cmd_estado(a):
     fl = flujos_r5()
     print(f"Bloqueos activos de R5: {len(fl)}")
-    core = onos("GET", f"/flows/{CORE}").json().get("flows", [])
-    def sentido(f):
-        cr = {c["type"]: c.get("ip") or c.get("port") for c in f["selector"]["criteria"]}
-        if "IN_PORT" in cr:
-            return "entrante"
-        return "interno" if cr.get("IPV4_DST") == cr.get("IPV4_SRC") else "saliente"
-    espejo = [(sentido(f), f.get("packets", 0)) for f in core if f["priority"] == PRIO_ESPEJO]
-    print("Espejo al IDS:", ", ".join(f"{d} {p} paquetes" for d, p in espejo) or "NO instalado")
-    print(f"Flujos en el Core: {len(core)}\n")
+    if len(CORES) == 1 and not TOPO:      # laboratorio de un solo Core: entrante / saliente / interno, como antes
+        core = onos("GET", f"/flows/{CORE}").json().get("flows", [])
+        def sentido(f):
+            cr = {c["type"]: c.get("ip") or c.get("port") for c in f["selector"]["criteria"]}
+            if "IN_PORT" in cr:
+                return "entrante"
+            return "interno" if cr.get("IPV4_DST") == cr.get("IPV4_SRC") else "saliente"
+        espejo = [(sentido(f), f.get("packets", 0)) for f in core if f["priority"] == PRIO_ESPEJO]
+        print("Espejo al IDS:", ", ".join(f"{d} {p} paquetes" for d, p in espejo) or "NO instalado")
+        print(f"Flujos en el Core: {len(core)}\n")
+    else:                                  # dos cores: reglas y paquetes copiados en cada uno
+        print("Espejo al IDS (reglas / paquetes copiados por core):")
+        for dev in CORES:
+            flujos = onos("GET", f"/flows/{dev}").json().get("flows", [])
+            reglas = [f for f in flujos if f["priority"] == PRIO_ESPEJO]
+            estado = f"{len(reglas)} reglas, {sum(f.get('packets', 0) for f in reglas)} paquetes" if reglas else "NO instalado"
+            print(f"  {NOMBRES.get(dev, dev)}: {estado}  (flujos en el switch: {len(flujos)})")
+        print()
     cmd_bloqueos(a)
     print("\nÚltimas alertas accionables:")
     try:
@@ -136,13 +163,13 @@ def cmd_estado(a):
 
 def cmd_bloquear(a):
     ip = ip_valida(a.ip)
-    dispositivo = a.dispositivo or CORE
-    regla = {"flows": [{"priority": PRIORIDAD, "timeout": a.seg, "isPermanent": a.seg == 0, "deviceId": dispositivo,
+    dispositivos = [a.dispositivo] if a.dispositivo else CORES      # por defecto, en todos los cores (ECMP: entra por cualquiera)
+    regla = {"flows": [{"priority": PRIORIDAD, "timeout": a.seg, "isPermanent": a.seg == 0, "deviceId": d,
                         "treatment": {"instructions": []},
                         "selector": {"criteria": [{"type": "ETH_TYPE", "ethType": "0x0800"},
-                                                  {"type": "IPV4_SRC", "ip": f"{ip}/32"}]}}]}
+                                                  {"type": "IPV4_SRC", "ip": f"{ip}/32"}]}} for d in dispositivos]}
     onos("POST", "/flows", params={"appId": APP_ID}, json=regla)
-    print(f"Bloqueada {ip} en {NOMBRES.get(dispositivo, dispositivo)}"
+    print(f"Bloqueada {ip} en {', '.join(NOMBRES.get(d, d) for d in dispositivos)}"
           + (" (permanente)" if a.seg == 0 else f" por {a.seg} s de inactividad") + ".")
 
 
@@ -168,7 +195,7 @@ def main():
     s = sub.add_parser("bloquear", help="bloqueo manual de una IP")
     s.add_argument("ip")
     s.add_argument("--seg", type=int, default=300, help="timeout de inactividad en segundos; 0 = permanente")
-    s.add_argument("--dispositivo", help="deviceId del switch (por defecto, el Core)")
+    s.add_argument("--dispositivo", help="deviceId del switch (por defecto, todos los cores)")
     s.set_defaults(f=cmd_bloquear)
     s = sub.add_parser("desbloquear", help="retira el bloqueo de una IP")
     s.add_argument("ip")

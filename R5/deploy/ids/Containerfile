@@ -1,8 +1,9 @@
 # Imagen de R5: integrador M09, CLI r5ctl y el instalador del espejo. El contexto de build es la raiz del repositorio.
 FROM python:3.12-slim
-RUN pip install --no-cache-dir requests
+RUN pip install --no-cache-dir requests pyyaml
 WORKDIR /opt/r5
 COPY R5/codigo/integrador.py codigo/integrador.py
+COPY R5/codigo/topologia.py codigo/topologia.py
 COPY R5/cli/r5ctl.py cli/r5ctl.py
 COPY R5/lab/espejo.py lab/espejo.py
 RUN printf '#!/bin/sh\nexec python3 /opt/r5/cli/r5ctl.py "$@"\n' > /usr/local/bin/r5ctl && chmod +x /usr/local/bin/r5ctl

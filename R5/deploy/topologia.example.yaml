@@ -1,0 +1,53 @@
+# Topología de R5 en el slice de 14 VM (informe previo del Lab 6). Copiar a R5/deploy/topologia.yaml y completar con los datos reales.
+# topologia.yaml no se versiona (los deviceId y las MAC cambian en cada slice). Se valida con:  python3 R5/codigo/topologia.py R5/deploy/topologia.yaml
+#
+# Todos los valores de ESTE ejemplo son ilustrativos. Cómo obtener los reales, en orden:
+#   1. Nodos ONOS y Policy Mapper: IP de gestión (192.168.100.0/24) de nodo-ctrl-1, 2 y 3.
+#   2. deviceId y nombres de interfaz de cada core:
+#        ONOS_URL=http://<IP-ONOS>:8181/onos/v1 ONOS_PASS=rocks python3 R5/lab/espejo.py --descubrir
+#      Se escriben NOMBRES de interfaz (ens5...), no números: el número de puerto OpenFlow se resuelve contra ONOS al instalar el
+#      espejo (si ONOS no entrega nombres de puerto, se pueden escribir los números).
+#   3. MAC de las NIC de espejo de cada sensor:       bash R5/deploy/ids/macs.sh      (en nodo-sec-1 y en nodo-sec-2)
+
+onos:
+  urls:                                   # clúster de 3 nodos: el integrador usa el primero que responda y pasa al siguiente si uno cae
+    - http://192.168.100.11:8181/onos/v1
+    - http://192.168.100.12:8181/onos/v1
+    - http://192.168.100.13:8181/onos/v1
+
+policy_mapper:
+  urls:                                   # primario (nodo-ctrl-1) y réplica (nodo-ctrl-2); R5 le pide revocar la sesión de un host bloqueado (I11)
+    - http://192.168.100.11:5000
+    - http://192.168.100.12:5000
+
+redes:
+  home: [10.0.0.0/24]                     # campus: servidores .40 y .50, hosts por DHCP (HOME_NET de Suricata)
+  externa: [203.0.113.0/24]               # PROPUESTO: red entre vm-atacante y el gateway; el informe previo no la define (ver README)
+  lista_blanca:                           # IP que R5 nunca bloquea
+    - 10.0.0.40/32                        # servidores de recursos
+    - 10.0.0.50/32
+    - 10.0.0.250/32                       # servidor DHCP de la app de ONOS
+
+sensores: [nodo-sec-1, nodo-sec-2]
+
+# Un core por entrada. El espejo se instala al INGRESAR el tráfico por un puerto de `entradas` (hacia gateway, servidores o accesos);
+# NO se listan los puertos de la troncal entre cores (el LAG), para que un paquete que cruza ambos cores se copie una sola vez.
+# Cada sensor recibe la copia en una NIC distinta de cada core: `puerto` es la interfaz del CORE y `mac`, la de la NIC del SENSOR al otro lado.
+cores:
+  - nombre: sw-core-1
+    device: of:00000000000000a1
+    entradas: [ens5, ens8, ens9, ens10]   # gateway, servidores, sw-acc1, sw-acc2 (AJUSTAR)
+    espejo:
+      nodo-sec-1: {puerto: ens11, mac: "fa:16:3e:00:00:11"}
+      nodo-sec-2: {puerto: ens12, mac: "fa:16:3e:00:00:21"}
+  - nombre: sw-core-2
+    device: of:00000000000000a2
+    entradas: [ens5, ens8, ens9, ens10]
+    espejo:
+      nodo-sec-1: {puerto: ens11, mac: "fa:16:3e:00:00:12"}
+      nodo-sec-2: {puerto: ens12, mac: "fa:16:3e:00:00:22"}
+
+# Solo para mostrar nombres en r5ctl (los DROP de hosts internos se instalan en el acceso donde ONOS ubica al host)
+accesos:
+  - {nombre: sw-acc1, device: of:00000000000000b1}
+  - {nombre: sw-acc2, device: of:00000000000000b2}

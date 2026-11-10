@@ -7,7 +7,7 @@ Todo se lanza desde la **VM Controller** con un asistente en Python, `R1/deploy/
 | Controller | ONOS 2.7, OpenLDAP, Policy Mapper, FreeRADIUS (y Ansible) | `slice.py controller` |
 | sw1..sw3 | Open vSwitch (sin contenedores) | `slice.py switches` |
 | h1..h4 | `wpa_supplicant` (suplicantes 802.1X con la identidad de su equipo) y cliente DHCP; uno de ellos puede hacer de servidor del portal cautivo (IP fija) | `slice.py hosts`, `dhcp`, `portal` y `alta` |
-| IDS | Suricata 7 + integrador R5 | `R5/deploy/ids/` (sección 4) |
+| nodo-sec-1, nodo-sec-2 (IDS) | Suricata 7 + integrador R5, uno por sensor | `R5/deploy/ids/` (sección 4; guía completa en `R5/deploy/README.md`) |
 
 Topología de referencia: h1 y h2 cuelgan de sw2; h3 y h4, de sw3; sw1 es el core y no recibe flujos de sesión.
 
@@ -243,15 +243,18 @@ sudo ovs-ofctl -O OpenFlow13 dump-flows sw2 | grep -E "priority=40500|priority=1
 ```
 Antes de autenticar, h1 debe tener IP y estar en `table=99` (sus paquetes cuentan en el flujo de `priority=1000`); tras `alta`, su flujo de sesión `priority=40001` sustituye a la cuarentena y la IP no cambia.
 
-## 4. VM IDS (R5)
+## 4. Sensores IDS (R5)
+
+En el slice de 14 VM hay **dos sensores** (`nodo-sec-1` y `nodo-sec-2`) que reciben el mismo espejo de **dos cores**, con ONOS en clúster. Los nodos ONOS, los cores (deviceId, puertos de entrada y de espejo), las redes y la MAC de la NIC de cada sensor van en un solo archivo, `R5/deploy/topologia.yaml`; en el `.env` de cada sensor solo van su nombre y sus NIC de espejo:
 
 ```bash
 cd ~/proyecto-sdn/R5/deploy
-cp .env.example .env && nano .env     # CONTROLLER_IP, IDS_IFACE (puerto espejo), CORE_DEVICE (deviceId de sw1), PUERTO_UPLINK, PUERTO_IDS, HOME_NET, ESPEJO_*, LISTA_BLANCA
-cd ids && ./up.sh
+cp .env.example .env && nano .env                    # SENSOR=nodo-sec-1 (o -2), IDS_IFACES (una NIC por core)
+cp topologia.example.yaml topologia.yaml && nano topologia.yaml     # nodos ONOS, deviceId de los cores, MAC de las NIC (bash ids/macs.sh)
+cd ids && chmod +x up.sh macs.sh && ./up.sh
 docker compose exec integrador r5ctl estado      # también: bloqueos | alertas -n 20 | bloquear IP | desbloquear IP
 ```
-El `deviceId` de sw1 sale de `python3 slice.py estado` (sección "Switches"). `up.sh` calcula `IDS_MAC` (la red de VNRT solo entrega al IDS tramas dirigidas a su MAC), levanta Suricata y el integrador e instala el espejo en el Core. `SURICATA_ET=1` descarga ET Open (~50 mil reglas, varios GB de RAM).
+Los `deviceId` salen de `python3 slice.py estado` (sección "Switches"). `up.sh` valida la topología, prepara las NIC de espejo, levanta Suricata y el integrador e instala el espejo en los dos cores (cada NIC recibe la copia con su MAC como destino: la red de VNRT solo entrega a una VM las tramas dirigidas a su MAC). `SURICATA_ET=1` descarga ET Open (~50 mil reglas, varios GB de RAM). Pasos, decisiones y lo que falta validar: [`R5/deploy/README.md`](../R5/deploy/README.md).
 
 ## 5. Qué puede ser cada host
 

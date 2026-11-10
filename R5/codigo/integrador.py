@@ -5,20 +5,37 @@ import json
 import logging
 import os
 import signal
+import socket
+import sys
 import time
 
 import requests
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import topologia  # noqa: E402
+
+# Con TOPOLOGIA=/ruta/topologia.yaml (slice de 14 VM) el archivo rellena lo que el entorno no defina: ONOS_URL (clúster), MAPPER_URL
+# (primario y réplica), HOME_NET, LISTA_BLANCA y CORE_DEVICES. Sin TOPOLOGIA todo sigue viniendo del entorno, como antes.
+topologia.aplicar_entorno()
+
 # ---------------- Configuración ----------------
 EVE_PATH   = os.getenv("EVE_PATH", "/var/log/suricata/eve-alerts.json")
 STATE_PATH = os.getenv("STATE_PATH", "/var/lib/integrador/state.json")
+# ONOS_URL admite varios nodos separados por coma (clúster): se usa el primero que responda y se recuerda cuál fue.
 ONOS_URL   = os.getenv("ONOS_URL")    # https://<host-onos>:8443/onos/v1 (8181 es HTTP; HTTPS se activa en ONOS)
 ONOS_USER  = os.getenv("ONOS_USER")
 ONOS_PASS  = os.getenv("ONOS_PASS")
 ONOS_CA    = os.getenv("ONOS_CA")     # ruta al CA; si no se define, usa el del sistema
 APP_ID     = os.getenv("APP_ID", "org.campus.r5")   # nombre propio: permite listar/borrar solo nuestras reglas
 DRY_RUN    = os.getenv("DRY_RUN") == "1"
-MAPPER_URL = os.getenv("MAPPER_URL", "").rstrip("/")   # Policy Mapper de R1/R2 (p. ej. http://192.168.0.10:5000); vacío = I11 desactivada
+# Policy Mapper de R1/R2 (p. ej. http://192.168.100.11:5000), con réplica separada por coma; vacío = I11 desactivada
+MAPPER_URL = os.getenv("MAPPER_URL", "")
+SENSOR     = os.getenv("SENSOR", socket.gethostname())   # nodo-sec-1 o nodo-sec-2: los dos reciben el mismo espejo y bloquean igual
+
+
+def lista_urls(valor):
+    """'http://a:1/, http://b:1' -> ['http://a:1', 'http://b:1']."""
+    return [u.strip().rstrip("/") for u in (valor or "").split(",") if u.strip()]
 
 
 def redes(var, defecto):
@@ -27,8 +44,11 @@ def redes(var, defecto):
 
 
 HOME_NET     = redes("HOME_NET", "10.0.0.0/24")                    # = suricata.yaml
-LISTA_BLANCA = redes("LISTA_BLANCA", "10.0.0.99/32,10.0.0.10/32")  # gateway, DNS, ONOS, IDS, gestión
-CORE_DEVICE  = os.getenv("CORE_DEVICE", "of:0000000000000001")
+LISTA_BLANCA = redes("LISTA_BLANCA", "10.0.0.40/32,10.0.0.50/32,10.0.0.250/32")  # servidores de recursos y servidor DHCP de ONOS
+# Cores donde se bloquea a un atacante externo. Con ECMP su tráfico puede entrar por cualquiera de los dos, así que el DROP va en todos.
+CORE_DEVICES = [d.strip() for d in os.getenv("CORE_DEVICES", "").split(",") if d.strip()] \
+    or [os.getenv("CORE_DEVICE", "of:0000000000000001")]
+CORE_DEVICE  = CORE_DEVICES[0]                                    # compatibilidad: el primero (o el único)
 PRIORITY     = int(os.getenv("P_R5", "42000"))     # banda R5 41000-44999: sobre la sesión R2 (40001), bajo R1 (45000)
 MAX_SEVERITY = int(os.getenv("MAX_SEVERITY", "2"))
 INTRANET     = os.getenv("INTRANET_BLOCK", "1") == "1"   # bloquear también alertas interno -> interno (requiere espejo interno)
@@ -55,13 +75,32 @@ class Descartar(Exception):
 
 
 # ---------------- ONOS ----------------
+_nodo = 0        # índice del último nodo de ONOS que respondió: se sigue usando mientras funcione
+
+
 def onos(metodo, ruta, **kw):
-    try:
-        r = requests.request(metodo, f"{ONOS_URL}{ruta}", auth=AUTH,
-                             verify=VERIFY, timeout=3, **kw)
-    except requests.RequestException as e:
-        raise Reintentar(str(e))
-    if r.status_code >= 500 or r.status_code in (401, 403, 408, 429):
+    """Llama a la REST de ONOS. Con varios nodos prueba en orden, empezando por el último que funcionó, y pasa al siguiente si uno
+    no responde o devuelve 5xx (un nodo caído no debe frenar un bloqueo). Los 401/403/408/429 y los 4xx se tratan igual en todos."""
+    global _nodo
+    bases = lista_urls(ONOS_URL)
+    ultimo, r = None, None
+    for i in range(len(bases)):
+        idx = (_nodo + i) % len(bases)
+        try:
+            r = requests.request(metodo, f"{bases[idx]}{ruta}", auth=AUTH, verify=VERIFY, timeout=3, **kw)
+        except requests.RequestException as e:
+            ultimo = str(e)
+            continue
+        if r.status_code >= 500:
+            ultimo = f"HTTP {r.status_code}"
+            continue
+        if idx != _nodo:
+            log.warning("ONOS: se pasa al nodo %s", bases[idx])
+        _nodo = idx
+        break
+    else:
+        raise Reintentar(ultimo or "ONOS_URL sin nodos")
+    if r.status_code in (401, 403, 408, 429):
         raise Reintentar(f"HTTP {r.status_code}")
     if r.status_code >= 400:
         raise Descartar(f"HTTP {r.status_code}: {r.text[:200]}")
@@ -69,14 +108,24 @@ def onos(metodo, ruta, **kw):
 
 
 def ubicar_host(ip):
-    """I10a: GET /hosts y buscar la IP en la respuesta. Devuelve el deviceId del borde."""
+    """I10a: GET /hosts y buscar la IP en la respuesta. Devuelve el deviceId del borde, o None si ONOS no conoce al host."""
     if DRY_RUN:
         return "of:0000000000000002"
     for h in onos("GET", "/hosts").json().get("hosts", []):
         if ip in h.get("ipAddresses", []) and h.get("locations"):
             return h["locations"][0]["elementId"]
+    return None
+
+
+def dispositivos_para(ip, donde):
+    """Switches donde se instala el DROP: todos los cores para un atacante externo; el borde del host para uno interno."""
+    if donde == "core":
+        return list(CORE_DEVICES)
+    dev = ubicar_host(ip)
+    if dev:
+        return [dev]
     log.warning("host %s no encontrado en ONOS; se bloquea en el Core", ip)
-    return CORE_DEVICE                               # plan B: al menos se corta el tráfico Norte-Sur
+    return list(CORE_DEVICES)                        # plan B: al menos se corta el tráfico Norte-Sur
 
 
 def mac_de(ip):
@@ -110,20 +159,28 @@ def revocar_sesion(ip, mac=None):
     El DROP por IP de R5 solo aísla el tráfico IPv4; sin esto la sesión (flujo 40001) seguiría registrada y el usuario podría
     volver a pasar en cuanto expire el DROP. Es opcional y no debe impedir el bloqueo: cualquier fallo solo se registra.
     Devuelve el estado que responde el mapper ("revocada" o "sin_sesion") o None."""
-    if not MAPPER_URL:
+    mappers = lista_urls(MAPPER_URL)            # primario y réplica: se prueba el siguiente si uno no responde
+    if not mappers:
         return None
     try:
         mac = mac or mac_de(ip)
-        if not mac:
-            log.warning("I11: no se conoce la MAC de %s (ni la alerta ni ONOS); no se revoca su sesión", ip)
-            return None
-        r = requests.post(f"{MAPPER_URL}/sessions/revoke", json={"mac": mac, "motivo": "R5", "segundos": BLOCK_SEC}, timeout=3)
-        estado = r.json().get("status") if r.status_code == 200 else None
-        log.info("I11: sesión de %s (%s) -> %s", ip, mac, estado or f"HTTP {r.status_code}")
-        return estado
-    except (Reintentar, Descartar, requests.RequestException, ValueError) as e:
+    except (Reintentar, Descartar, ValueError) as e:
         log.warning("I11: no se pudo revocar la sesión de %s: %s", ip, e)
         return None
+    if not mac:
+        log.warning("I11: no se conoce la MAC de %s (ni la alerta ni ONOS); no se revoca su sesión", ip)
+        return None
+    for base in mappers:
+        try:
+            r = requests.post(f"{base}/sessions/revoke", json={"mac": mac, "motivo": "R5", "segundos": BLOCK_SEC}, timeout=3)
+            estado = r.json().get("status") if r.status_code == 200 else None
+        except (requests.RequestException, ValueError) as e:
+            log.warning("I11: el Policy Mapper %s no respondió para %s: %s", base, ip, e)
+            continue
+        log.info("I11: sesión de %s (%s) -> %s", ip, mac, estado or f"HTTP {r.status_code}")
+        if estado:
+            return estado
+    return None
 
 
 def regla_drop(device, ip):
@@ -141,22 +198,25 @@ def regla_drop(device, ip):
 
 
 def aplicar(ip, donde):
-    """Instala el DROP. Devuelve (device, flow_id, t_post, t_201)."""
-    device = CORE_DEVICE if donde == "core" else ubicar_host(ip)   # I10a / I10b
-    payload = regla_drop(device, ip)
+    """Instala el DROP. Devuelve (device, flow_id, t_post, t_201); con varios switches, ambos van unidos por comas."""
+    devices = dispositivos_para(ip, donde)                          # I10a / I10b
+    payload = {"flows": [regla_drop(d, ip)["flows"][0] for d in devices]}
+    device = ",".join(devices)
     t_post = time.time()
     if DRY_RUN:
         log.info("[SIMULACIÓN] POST /flows (device %s)\n%s", device, json.dumps(payload, indent=2))
         return device, None, t_post, time.time()
-    # POST /flows recibe la lista {"flows": [...]}; el deviceId va dentro de cada regla
+    # POST /flows recibe la lista {"flows": [...]}; el deviceId va dentro de cada regla. Una sola petición instala el DROP en todos
+    # los switches, así que un atacante externo queda cortado a la vez en los dos cores.
     r = onos("POST", "/flows", params={"appId": APP_ID}, json=payload)
     t_201 = time.time()
     try:
-        flow_id = r.json()["flows"][0]["flowId"]   # necesario para el DELETE y la reconciliación
-    except (ValueError, KeyError, IndexError, TypeError):
-        flow_id = None
+        ids = [str(f["flowId"]) for f in r.json()["flows"] if f.get("flowId")]   # necesarios para el DELETE y la reconciliación
+    except (ValueError, KeyError, TypeError):
+        ids = []
+    if not ids:
         log.warning("ONOS no devolvió flowId para %s", ip)
-    return device, flow_id, t_post, t_201
+    return device, (",".join(ids) or None), t_post, t_201
 
 
 # ---------------- Decisión ----------------
@@ -211,7 +271,7 @@ def procesar(ev, st, t_lectura=None):
     t_lectura = t_lectura or t_post
     st["bloqueadas"][ip] = {
         "vence": t_201 + BLOCK_SEC,   # estimado: el timeout real es de inactividad
-        "device": device, "flow_id": flow_id, "donde": donde,
+        "device": device, "flow_id": flow_id, "donde": donde, "sensor": SENSOR,
         "sid": ev["alert"].get("signature_id"), "firma": ev["alert"].get("signature"),
         "t_alerta": ev.get("timestamp"),   # hora del paquete en el sensor (reloj de Suricata)
         "t_lectura": t_lectura, "t_post": t_post, "t_201": t_201,
@@ -268,6 +328,8 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit))
 
     st = cargar_estado()
+    log.info("Integrador %s: %d nodo(s) ONOS, cores %s, Policy Mapper %s", SENSOR, len(lista_urls(ONOS_URL)), ",".join(CORE_DEVICES),
+             ",".join(lista_urls(MAPPER_URL)) or "desactivado")
     ultimo_guardado, espera = time.time(), BACKOFF_MIN
     ultima_reconc = 0.0
     try:
