@@ -82,7 +82,14 @@ def test_el_inventario_separa_hosts_con_802_1x_portal_y_sin_802_1x():
 def test_la_ip_del_portal_es_la_de_policy_yaml():
     import yaml
     pol = yaml.safe_load((AQUI.parent.parent / "R2" / "policy" / "policy.yaml").read_text(encoding="utf-8"))
-    assert pol["portal"]["ip"] == sd.PORTAL_IP and int(pol["portal"]["puerto"]) == sd.PORTAL_PUERTO
+    assert pol["portal"]["ip"] == sd.PORTAL_IP
+    assert int(pol["portal"]["puerto"]) == 8080 and sd.PORTAL_PUERTO == 8443        # el laboratorio sigue en HTTP; VNRT usa HTTPS (policy.local.yaml)
+
+
+def test_los_tuneles_al_portal_salen_desde_cada_host_menos_el_del_portal():
+    t = sd.comandos_tunel_portal(CFG)
+    assert [n for n, _, _ in t] == ["h1", "h2", "h4", "h5"]                     # h3 es el portal
+    assert t[0] == ("h1", 8091, "ssh -L 8091:10.0.0.60:8443 -p 7001 ubuntu@1.2.3.4")
 
 
 def test_tuneles_a_la_interfaz_web_solo_de_los_hosts_con_802_1x():
@@ -106,9 +113,10 @@ def test_el_playbook_de_hosts_instala_el_agente_y_no_deja_dos_suplicantes():
 def test_el_playbook_del_portal_instala_el_servidor_y_la_ip_de_datos():
     import yaml
     plays = yaml.safe_load((AQUI / "hosts" / "portal.yml").read_text())
-    assert [p["hosts"] for p in plays] == ["portal", "portal"]          # IP fija y servidor: solo el host del portal
+    assert [p["hosts"] for p in plays] == ["portal", "portal", "hosts:sin_802_1x"]    # IP fija y servidor en el portal; certificado y ARP en los demas
     nombres = " ".join(t["name"] for p in plays for t in p["tasks"])
     assert "IP de datos" in nombres and "Servicio r1-portal" in nombres
+    assert "Certificado y clave TLS del portal" in nombres and "portal-curl" in nombres and "ARP estatico" in nombres
     assert (AQUI.parent.parent / "R2" / "portal_cautivo" / "server.py").is_file()
     assert (AQUI.parent.parent / "R2" / "portal_cautivo" / "static" / "tabler.min.css").is_file()
 
@@ -126,7 +134,7 @@ def test_el_inventario_de_hosts_lleva_la_clave_solo_si_se_da():
     assert "agente_token=abc123" in sd.inventario_hosts(CFG, "abc123")
     assert "agente_token" not in sd.inventario_hosts(CFG)
     inv = sd.inventario_hosts(CFG, "abc123", "def456")
-    assert "portal_token=def456" in inv and "portal_ip=10.0.0.60" in inv and "portal_puerto=8080" in inv
+    assert "portal_token=def456" in inv and "portal_ip=10.0.0.60" in inv and "portal_puerto=8443" in inv
     assert "portal_token" not in sd.inventario_hosts(CFG, "abc123")
 
 
@@ -319,7 +327,7 @@ def test_los_parametros_dhcp_de_init_onos_estan_documentados_en_env_example():
     assert len(variables) >= 10
     for v in variables:
         assert f"#{v}=" in ejemplo, v
-    for clave in ("ip", "mac", "subnet", "broadcast", "router", "domain", "startip", "endip", "lease", "renew", "rebind", "delay"):
+    for clave in ("ip", "mac", "subnet", "broadcast", "router", "domain", "startip", "endip", "lease", "renew", "rebind", "delay", "timeout"):
         assert '\\"' + clave + '\\":' in init, clave         # claves de DhcpConfig de ONOS 2.7
 
 
@@ -339,3 +347,24 @@ def test_el_rango_dhcp_por_defecto_no_pisa_ninguna_ip_fija_ni_el_servidor():
     assert ini in red and fin in red and ipaddress.ip_address(d["DHCP_BROADCAST"]) == red.broadcast_address
     assert int(d["DHCP_RENEW"]) < int(d["DHCP_REBIND"]) < int(d["DHCP_LEASE"])
     assert ipaddress.ip_address(pol["portal"]["ip"]) in red                  # el portal esta en la misma subred que los clientes
+
+
+# ---------------------------------------------------------------- portal con HTTPS
+
+def test_el_certificado_del_portal_lleva_su_ip_y_se_genera_una_vez(monkeypatch, tmp_path):
+    import shutil
+    import subprocess
+    if shutil.which("openssl") is None:
+        pytest.skip("sin openssl")
+    monkeypatch.setattr(sd, "PORTAL_TLS", tmp_path / "portal-tls")
+    cert, clave = sd.certificado_portal()
+    texto = subprocess.run(["openssl", "x509", "-in", str(cert), "-noout", "-text"], capture_output=True, text=True).stdout
+    assert "IP Address:10.0.0.60" in texto and clave.exists()
+    antes = cert.read_bytes()
+    assert sd.certificado_portal() == (cert, clave) and cert.read_bytes() == antes        # no lo regenera: los hosts lo tienen fijado
+
+
+def test_el_portal_de_vnrt_usa_https_y_el_puerto_de_confianza_es_el_mismo():
+    portal = sd.ubicar_portal(HOSTS_ONOS)
+    texto = sd.politica_local(sd.puertos_de_confianza(ENLACES, portal), portal[0], ["of:00000000000000a1"])
+    assert f"puerto: {sd.PORTAL_PUERTO}" in texto and sd.PORTAL_PUERTO == 8443

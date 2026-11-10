@@ -65,10 +65,11 @@ USUARIOS_PRUEBA = {
 # Red de datos del slice (la de la interfaz que va al switch). Los hosts toman su IP por DHCP (app DHCP de ONOS, rango en
 # R1/deploy/.env.example); solo el portal tiene IP fija, la de portal.ip en R2/policy/policy.yaml (fuera del rango DHCP).
 PORTAL_IP = "10.0.0.60"
-PORTAL_PUERTO = 8080
+PORTAL_PUERTO = 8443            # el portal de VNRT habla HTTPS (el laboratorio de Mininet conserva el 8080 de policy.yaml); portal.puerto de policy.local.yaml
+PORTAL_TLS = DEPLOY / "hosts" / "portal-tls"      # certificado autofirmado del portal (no se versiona): hosts/portal-tls/portal.crt y portal.key
 # Hosts sin 802.1X: no llevan agente ni certificado.
 TIPOS = {
-    "portal": f"Servidor del portal cautivo ({PORTAL_IP}:{PORTAL_PUERTO})",
+    "portal": f"Servidor del portal cautivo (https://{PORTAL_IP}:{PORTAL_PUERTO})",
     "invitado": "Invitado: entra por el portal (guest01)",
     "iot": "IoT: se identifica por su MAC (MAB)",
 }
@@ -317,6 +318,13 @@ def comandos_tunel(cfg):
             for i, h in enumerate(cfg["hosts"], 1) if usa_802_1x(h)]
 
 
+def comandos_tunel_portal(cfg):
+    """Un tunel SSH por host (menos el del portal) para abrir el portal en el navegador de tu PC: la conexion sale DESDE ese host, asi que el
+    portal ve su IP y su MAC (la sesion que se inicie sera la de ese host). Un tunel al host del portal le mostraria la MAC del propio portal."""
+    return [(h["nombre"], 8090 + i, f"ssh -L {8090 + i}:{PORTAL_IP}:{PORTAL_PUERTO} -p {h['puerto']} ubuntu@{cfg['ip_publica']}")
+            for i, h in enumerate(cfg["hosts"], 1) if h["usuario"] != "portal"]
+
+
 def interfaz():
     cfg = config_o_salir()
     titulo("Interfaz web del agente 802.1X de cada host")
@@ -493,6 +501,21 @@ def politica_local(confianza, mac, switches):
     return "\n".join(lineas)
 
 
+def certificado_portal():
+    """Certificado autofirmado del portal (subjectAltName = su IP), una sola vez. Se FIJA en cada host (`portal-curl`): un equipo que anuncie
+    la IP del portal por ARP no puede presentarlo y no captura las contrasenas. Para renovarlo, borra hosts/portal-tls y repite `portal`."""
+    cert, clave = PORTAL_TLS / "portal.crt", PORTAL_TLS / "portal.key"
+    if cert.exists() and clave.exists():
+        return cert, clave
+    if shutil.which("openssl") is None:
+        raise SystemExit("Falta openssl en el Controller: sudo apt-get install -y openssl")
+    PORTAL_TLS.mkdir(parents=True, exist_ok=True)
+    ejecutar(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "825", "-keyout", clave, "-out", cert,
+              "-subj", "/CN=portal.r1.local", "-addext", f"subjectAltName=IP:{PORTAL_IP}"], capturar=True)
+    os.chmod(clave, 0o600)
+    return cert, clave
+
+
 def portal():
     cfg = config_o_salir()
     titulo("Portal cautivo en un host (IP fija) y puertos de confianza")
@@ -502,6 +525,7 @@ def portal():
         return
     carpeta = DEPLOY / "hosts"
     token = token_portal()
+    certificado_portal()
     (carpeta / "inventory.ini").write_text(inventario_hosts(cfg, token_agente(), token))
     ejecutar(["ansible-playbook", "-i", "inventory.ini", "portal.yml", "-e", f"@{archivo_sudo()}"], cwd=carpeta)
     en_mapper = (ejecutar(["docker", "exec", "policy_mapper", "printenv", "PORTAL_TOKEN"], check=False, capturar=True) or "").strip()
@@ -532,11 +556,16 @@ def portal():
     ejecutar(["docker", "restart", "policy_mapper"], capturar=True)
     time.sleep(5)
     http("POST", MAPPER + "/policy/sync")
-    print(f"\nListo. Portal en http://{PORTAL_IP}:{PORTAL_PUERTO} (visible solo desde la red de datos del slice).")
+    print(f"\nListo. Portal en https://{PORTAL_IP}:{PORTAL_PUERTO} (visible solo desde la red de datos del slice).")
     print("El Policy Mapper se reinicio: se perdieron las sesiones, repite `python3 slice.py alta`.")
     print("Prueba desde un host con sesion de Alumno (el portal toma la MAC del host de su tabla ARP):")
-    print(f"  curl -s http://{PORTAL_IP}:{PORTAL_PUERTO}/ | grep -i -o 'Subir de rol'            # el equipo puede subir")
-    print(f"  curl -s -d 'usuario=profesor01&clave=password123' http://{PORTAL_IP}:{PORTAL_PUERTO}/login | grep -i -o 'Docente'")
+    print("(`portal-curl` es curl con el certificado del portal fijado; sin el, curl rechaza al portal)")
+    print(f"  portal-curl -s https://{PORTAL_IP}:{PORTAL_PUERTO}/ | grep -i -o 'Subir de rol'            # el equipo puede subir")
+    print(f"  portal-curl -s -d 'usuario=profesor01&clave=password123' https://{PORTAL_IP}:{PORTAL_PUERTO}/login | grep -i -o 'Docente'")
+    print("O en el navegador de tu PC, con un tunel SSH A TRAVES del host cuya sesion quieres usar (el portal ve la MAC de ese host;")
+    print("el navegador avisara del certificado: es autofirmado y el nombre es localhost; aceptalo solo para esta prueba):")
+    for nombre, local, cmd in comandos_tunel_portal(cfg):
+        print(f"  {nombre}:  {cmd}      -> https://localhost:{local}")
 
 
 def reiniciar_aaa():

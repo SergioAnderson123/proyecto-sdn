@@ -5,6 +5,10 @@
 # Por que en un host y no en el Controller: el portal toma la MAC del cliente de su tabla ARP (nunca del cliente), asi que debe estar en el
 # mismo dominio de difusion que los clientes, y el Controller solo tiene la red de gestion. Su puerto del switch debe ser de CONFIANZA
 # en R2 (lo hace `slice.py portal` con R2/policy/policy.local.yaml): su trafico no pasa por una sesion 802.1X.
+#
+# El portal habla HTTPS con un certificado propio (slice.py lo genera en hosts/portal-tls/). Ese certificado se FIJA en los demas hosts
+# (/usr/local/share/r1/portal.crt, comando `portal-curl`) y la MAC del portal se deja como ARP estatico: un equipo en cuarentena que anuncie
+# la IP del portal por ARP no puede presentar ese certificado, asi que no captura la contrasena del invitado.
 - name: IP fija del host del portal (fuera del rango DHCP)
   hosts: portal
   become: true
@@ -57,7 +61,16 @@
     origen: "{{ playbook_dir }}/../../../R2/portal_cautivo"
     destino: /opt/portal
     mapper_url: "http://{{ controller_ip | default('192.168.0.10') }}:5000"
+    tls_dir: "{{ playbook_dir }}/portal-tls"
   tasks:
+    - name: Parar el agente 802.1X y el suplicante de usos anteriores de este host (el agente escucha en 127.0.0.1:8080 y chocaria con el portal)
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop: [r1-agente, r1-supplicant]
+      failed_when: false
+
     - name: Instalar arping (anuncia la IP del portal para que ONOS lo ubique)
       ansible.builtin.apt:
         name: iputils-arping
@@ -84,6 +97,22 @@
         dest: "{{ destino }}/static/"
         mode: "0644"
 
+    - name: Carpeta del certificado TLS
+      ansible.builtin.file:
+        path: "{{ destino }}/tls"
+        state: directory
+        mode: "0700"
+
+    - name: Certificado y clave TLS del portal
+      register: portal_tls
+      ansible.builtin.copy:
+        src: "{{ tls_dir }}/{{ item.nombre }}"
+        dest: "{{ destino }}/tls/{{ item.nombre }}"
+        mode: "{{ item.modo }}"
+      loop:
+        - {nombre: portal.crt, modo: "0644"}
+        - {nombre: portal.key, modo: "0600"}
+
     - name: Servicio r1-portal
       register: portal_unidad
       ansible.builtin.copy:
@@ -99,6 +128,9 @@
           Environment=PORTAL_TOKEN={{ portal_token | default('') }}
           Environment=PORTAL_IP={{ portal_ip }}
           Environment=PORTAL_PUERTOS={{ portal_puerto }}
+          Environment=PORTAL_BIND_IP=1
+          Environment=PORTAL_TLS_CERT={{ destino }}/tls/portal.crt
+          Environment=PORTAL_TLS_KEY={{ destino }}/tls/portal.key
           ExecStart=/usr/bin/python3 {{ destino }}/server.py
           Restart=always
           RestartSec=3
@@ -110,13 +142,71 @@
         name: r1-portal
         daemon_reload: true
         enabled: true
-        state: "{{ 'restarted' if (portal_codigo.changed or portal_unidad.changed) else 'started' }}"
+        state: "{{ 'restarted' if (portal_codigo.changed or portal_unidad.changed or portal_tls.changed) else 'started' }}"
 
     - name: Anunciar la IP del portal (ARP gratuito)
       ansible.builtin.command: "arping -U -c 3 -I {{ iface }} {{ ip_datos }}"
       changed_when: false
       failed_when: false
 
+    - name: MAC de la interfaz de datos del portal (para el ARP estatico de los demas hosts)
+      ansible.builtin.command: "cat /sys/class/net/{{ iface }}/address"
+      register: portal_mac
+      changed_when: false
+
     - name: Resumen
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: portal en http://{{ ip_datos }}:{{ portal_puerto }} (solo en la red de datos); el Policy Mapper esta en {{ mapper_url }}"
+        msg: "{{ inventory_hostname }}: portal en https://{{ ip_datos }}:{{ portal_puerto }} (solo en la red de datos), MAC {{ portal_mac.stdout }}; el Policy Mapper esta en {{ mapper_url }}"
+
+- name: Los demas hosts confian en el portal (certificado fijado y ARP estatico)
+  hosts: hosts:sin_802_1x
+  become: true
+  gather_facts: false
+  vars:
+    tls_dir: "{{ playbook_dir }}/portal-tls"
+    mac_portal: "{{ hostvars[groups['portal'][0]].portal_mac.stdout | trim }}"
+  tasks:
+    - name: Carpeta de R1
+      ansible.builtin.file:
+        path: /usr/local/share/r1
+        state: directory
+        mode: "0755"
+
+    - name: Certificado del portal fijado (solo la parte publica)
+      ansible.builtin.copy:
+        src: "{{ tls_dir }}/portal.crt"
+        dest: /usr/local/share/r1/portal.crt
+        mode: "0644"
+
+    - name: portal-curl (curl que solo acepta el certificado del portal)
+      ansible.builtin.copy:
+        dest: /usr/local/bin/portal-curl
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          # R1: curl contra el portal verificando SU certificado (fijado en /usr/local/share/r1/portal.crt). Uso: portal-curl -s https://{{ portal_ip }}:{{ portal_puerto }}/
+          exec curl --cacert /usr/local/share/r1/portal.crt "$@"
+
+    - name: Servicio r1-portal-arp (ARP estatico del portal; persiste tras reiniciar)
+      register: arp_unidad
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/r1-portal-arp.service
+        content: |
+          [Unit]
+          Description=R1: ARP estatico del portal {{ portal_ip }} -> {{ mac_portal }} en {{ iface }}
+          After=network-online.target r1-dhcp.service
+          PartOf=r1-dhcp.service
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/sh -c 'ip neigh replace {{ portal_ip }} lladdr {{ mac_portal }} dev {{ iface }} nud permanent'
+          ExecStop=/bin/sh -c 'ip neigh del {{ portal_ip }} dev {{ iface }}'
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Activar el ARP estatico del portal
+      ansible.builtin.systemd:
+        name: r1-portal-arp
+        daemon_reload: true
+        enabled: true
+        state: "{{ 'restarted' if arp_unidad.changed else 'started' }}"

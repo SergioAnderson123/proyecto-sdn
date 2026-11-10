@@ -149,17 +149,19 @@ python3 slice.py config     # elige el tipo portal para un host (h4 por defecto)
 python3 slice.py portal     # IP de datos de cada host, servidor del portal (servicio r1-portal) y puertos de confianza
 python3 slice.py alta       # portal reinicia el Policy Mapper: se pierden las sesiones
 ```
-`slice.py portal` hace cuatro cosas:
+`slice.py portal` hace seis cosas:
 1. **IP fija del portal** en la interfaz que va al switch (servicio `r1-ip-datos`): `10.0.0.60`, la de `portal.ip` en `policy.yaml`, fuera del rango DHCP. Los demás hosts toman la suya por DHCP (sección 3e).
-2. **Servidor del portal** (`R2/portal_cautivo`) en `/opt/portal` del host, como servicio `r1-portal` en el puerto 8080, y un ARP gratuito para que ONOS lo ubique.
+2. **Servidor del portal** (`R2/portal_cautivo`) en `/opt/portal` del host, como servicio `r1-portal`, **por HTTPS en el puerto 8443**, con un certificado autofirmado que genera `slice.py` (`R1/deploy/hosts/portal-tls/`, no se versiona; `openssl` en el Controller), y un ARP gratuito para que ONOS lo ubique.
 3. **Puertos de confianza.** El tráfico del portal y el que pasa de un switch al otro no tiene sesión 802.1X, así que R2 no debe aplicarle las tablas de rol. El paso lee de ONOS dónde está el portal y los enlaces entre switches, y escribe `R2/policy/policy.local.yaml` (no se versiona; `policy_tables.py` lo mezcla con `policy.yaml`): puertos `trusted` y `portal.switches`.
-4. Reinicia el Policy Mapper y reinstala las tablas de rol.
+4. **Fija el certificado en los demás hosts** (`/usr/local/share/r1/portal.crt`) y deja el comando `portal-curl`: es `curl` que solo acepta el certificado del portal. Sin esto, `curl https://10.0.0.60:8443` falla con un error de certificado, que es justo la defensa.
+5. **ARP estático del portal** en los demás hosts (servicio `r1-portal-arp`): su IP queda ligada a la MAC real del portal.
+6. Reinicia el Policy Mapper y reinstala las tablas de rol.
 
-**Ascenso desde un host con sesión de Alumno** (h1 autenticado como `alumno01`; el portal está en `10.0.0.60:8080`, que el rol Alumno ya puede alcanzar):
+**Ascenso desde un host con sesión de Alumno** (h1 autenticado como `alumno01`; el portal está en `10.0.0.60:8443`, que el rol Alumno ya puede alcanzar):
 ```bash
-curl -s http://10.0.0.60:8080/ | grep -i "Subir de rol"                                         # el equipo puede subir
-curl -s -d 'usuario=profesor01&clave=password123' http://10.0.0.60:8080/login | grep -i Docente  # ascenso: tabla 10
-curl -s -X POST -d '' http://10.0.0.60:8080/logout                                                 # el equipo vuelve a Alumno (tabla 20)
+portal-curl -s https://10.0.0.60:8443/ | grep -i "Subir de rol"                                         # el equipo puede subir
+portal-curl -s -d 'usuario=profesor01&clave=password123' https://10.0.0.60:8443/login | grep -i Docente  # ascenso: tabla 10
+portal-curl -s -X POST -d '' https://10.0.0.60:8443/logout                                                 # el equipo vuelve a Alumno (tabla 20)
 ```
 En el Controller se ve igual: `curl -s http://127.0.0.1:5000/sessions | python3 -m json.tool` (la sesión de esa MAC es `profesor01`, Docente, con `base`: el equipo) y `sudo ovs-ofctl -O OpenFlow13 dump-flows <switch> | grep 40001` (el flujo de esa MAC hace `goto_table:10`). También se puede probar sin el servidor, contra la API (`<MAC>` es la de la interfaz de datos del host):
 ```bash
@@ -171,9 +173,13 @@ curl -s -X POST http://127.0.0.1:5000/portal/logout -H 'Content-Type: applicatio
 
 **Qué valida el ascenso.** La MAC tiene una sesión 802.1X de Alumno sin ascenso previo, el rol Alumno puede subir a Docente (`ascenso` en `policy.yaml`), el profesor no tiene otra sesión y **la ubicación coincide**: la que ONOS AAA tiene para esa MAC (`/onos/aaa/app/users`, entrada `AUTHORIZED`: switch y puerto donde recibió el EAPOL) debe ser la que el Policy Mapper guardó al admitir la sesión. Si ONOS AAA no tiene a la MAC autorizada se rechaza (`ascenso_exigir_ubicacion: true`); con `false` solo se compara cuando la tiene. Cualquier otra combinación responde 409. Explicación completa y su relación con el antispoofing en [`CERTIFICADOS_Y_ESCALABILIDAD.md`](CERTIFICADOS_Y_ESCALABILIDAD.md), sección 6.
 
-**Invitados e IoT.** Los hosts `invitado` e `iot` no llevan agente ni certificado; solo el cliente DHCP. Sin sesión quedan en la **cuarentena** (sección 3e: reciben IP, pero solo alcanzan ARP y el portal). El invitado entra por el mismo portal con `guest01` / `guest123`: `curl -s -d 'usuario=guest01&clave=guest123' http://10.0.0.60:8080/login`; el IoT se identifica por su MAC (MAB, sección 7).
+**Quién puede entrar por el portal, y cómo.** Lo fija `R2/policy/policy.yaml`, sección `portal`:
+- `grupos`: qué grupo de LDAP da qué rol: `profesor` → docente, `alumno` → alumno, `invitado` → invitado. **`soporteTI` no está**: el administrador no entra por el portal, solo por 802.1X con el certificado de su equipo (`support01`). Con su contraseña desde el portal, el Policy Mapper responde 403 (`Su grupo no tiene acceso`) y registra `rechazado`.
+- `login_directo: [invitado, alumno]`: los roles que pueden iniciar sesión **desde un equipo sin sesión**. Un profesor no: desde un equipo sin sesión recibe 403 (`solo puede iniciar sesión desde un equipo ya autenticado por 802.1X`) y no se instala ningún flujo. Un profesor solo entra **subiendo un equipo que ya está autenticado** (el ascenso de arriba), así que siempre queda atado a un equipo con certificado. Sin la clave `login_directo`, valen todos los de `grupos`.
 
-**Límites.** Es una prueba con `curl`: los hosts no tienen navegador. El portal envía la contraseña en HTTP plano (HTTPS fuera del laboratorio). Un navegador desde tu PC puede abrirlo con un túnel SSH al host del portal (`ssh -L 8090:10.0.0.60:8080 -p <puerto-del-portal> ubuntu@<IP_PUBLICA>`), pero entonces la MAC que ve el portal es la de su propia tabla ARP (la de ese host), no la de tu PC. **No se ha ejecutado todavía contra las VM**: `slice.py portal`, los playbooks y los puertos de confianza solo tienen pruebas unitarias.
+**Invitados e IoT.** Los hosts `invitado` e `iot` no llevan agente ni certificado; solo el cliente DHCP. Sin sesión quedan en la **cuarentena** (sección 3e: reciben IP, pero solo alcanzan ARP y el portal). El invitado entra por el mismo portal con `guest01` / `guest123`: `portal-curl -s -d 'usuario=guest01&clave=guest123' https://10.0.0.60:8443/login`; el IoT se identifica por su MAC (MAB, sección 7).
+
+**Límites.** Es una prueba con `curl`: los hosts no tienen navegador. El portal usa HTTPS con un certificado autofirmado y fijado en los hosts; para renovarlo (825 días) borra `R1/deploy/hosts/portal-tls/` y repite `python3 slice.py portal`. En el laboratorio de Mininet sigue en HTTP (puerto 8080). **Ver y usar el portal en el navegador de tu PC:** abre un túnel SSH **a través del host cuya sesión quieres usar** (no del host del portal): `ssh -L 8093:10.0.0.60:8443 -p <puerto-de-h3> ubuntu@<IP_PUBLICA>` y abre `https://localhost:8093` (el navegador avisará del certificado: es autofirmado y el nombre es `localhost`; acéptalo solo para la prueba). La conexión sale desde h3, así que el portal ve la IP y la MAC de h3 y la sesión que inicies es la de h3. Un túnel al host del portal le mostraría la MAC del propio portal y el login fallaría (`No se pudo identificar su equipo`). `python3 slice.py portal` imprime el túnel de cada host. **No se ha ejecutado todavía contra las VM**: `slice.py portal`, los playbooks y los puertos de confianza solo tienen pruebas unitarias.
 
 ## 3e. DHCP y cuarentena (R2)
 
@@ -197,6 +203,7 @@ La regla de DHCP queda bajo la lista negra de R1 (45000) y el DROP de R5 (42000)
 | `DHCP_MASCARA` / `DHCP_BROADCAST` | `255.255.255.0` / `10.0.0.255` | La subred `10.0.0.0/24`, la de `policy.yaml` | Mío: sigue a `policy.yaml` |
 | `DHCP_SERVIDOR_IP` / `DHCP_SERVIDOR_MAC` | `10.0.0.250` / `02:00:00:00:00:02` | Identidad del servidor DHCP. No puede ser `10.0.0.1` a `.4`: VNRT las usa en las NIC de datos de los hosts | Mío |
 | `DHCP_PURGA_MIN` | `2` min | Cada cuánto ONOS libera las concesiones vencidas | Mío |
+| `DHCP_TIMEOUT` | `60` s | Cuánto reserva ONOS una IP *ofrecida* que el cliente no llega a pedir. Cuanto menor, menos dura una inundación de `DISCOVER` con MAC falsas | Mío; sube si hay clientes muy lentos |
 | `cuarentena.tabla` (`policy.yaml`) | `99` | VLAN/tabla de cuarentena | Mío; quitar la sección desactiva la cuarentena |
 | `portal.duracion_s` (`policy.yaml`) | invitado 1800 s, el resto 8 h | Duración de la sesión del portal | **Tuyo** |
 
@@ -205,11 +212,23 @@ Para cambiarlos: edita `R1/deploy/.env` y ejecuta `bash R1/deploy/controller/ini
 **Límites de la app DHCP de ONOS, que condicionan el diseño:**
 - **Un solo rango y unos solos tiempos para todos.** No se pueden dar rangos distintos a invitados, alumnos o IoT. Por eso los invitados no tienen "su" rango: su separación es la **VLAN de cuarentena y después la VLAN 50**, no la subred. Si hiciera falta un rango propio por clase, habría que sustituir la app por otro servidor (Kea o dnsmasq con clases) y un relé; no lo he hecho.
 - La app anota en ONOS la IP y la ubicación de cada host que atiende, así que también un invitado queda ubicado (lo usa el portal para ubicar equipos sin sesión).
-- No hay límite de DHCP por puerto: un host puede inundar de `DISCOVER` al controlador. Se resolvería con un *meter* en el switch; no está.
+- **Inundación de `DISCOVER`** (agotar el rango con MAC falsas): lo que sí está hecho es acortar la reserva de las IP ofrecidas (`DHCP_TIMEOUT`). **Lo que no está** es un límite de `DISCOVER` por puerto, que se hace con un *meter* de OpenFlow en el switch: depende de la versión de Open vSwitch de VNRT y un meter mal puesto dejaría sin DHCP a todos, así que primero hay que probarlo a mano en un switch (abajo).
 - **VNRT trae IP fijas** (`10.0.0.1`, `.2`... en `/etc/netplan/50-cloud-init.yaml`) en las NIC de datos. `dhcp.yml` saca esa interfaz de `systemd-networkd` (archivo `/etc/systemd/network/10-netplan-<iface>.network`) y vacía su dirección para que mande solo el DHCP; el portal conserva su IP fija `10.0.0.60`.
 - **AppArmor** impide a `dhclient` ejecutar scripts propios (`execve ... Permission denied` en `journalctl -u r1-dhcp`): `dhcp.yml` lo permite en `/etc/apparmor.d/local/sbin.dhclient`.
 - El cliente de los hosts **no instala ruta por defecto ni DNS** (solo la dirección): su interfaz de datos no es la salida del host y una ruta aquí le cortaría el SSH.
 - La renovación por unicast necesita ARP de la IP del servidor, y desde un host con sesión ese ARP no llega al controlador; el cliente renueva entonces por difusión en T2 (87,5 %), que sí funciona.
+
+**Probar si el switch soporta *meters*** (primer paso antes de limitar el DHCP por puerto). En sw2:
+```bash
+sudo ovs-ofctl -O OpenFlow13 add-meter sw2 'meter=99,pktps,burst,band=type=drop,rate=10,burst_size=20'
+sudo ovs-ofctl -O OpenFlow13 dump-meters sw2          # debe listar meter=99 con su banda drop
+sudo ovs-ofctl -O OpenFlow13 del-meter sw2 meter=99
+```
+Si `add-meter` falla (`OFPMMFC_...`), ese Open vSwitch no los soporta y la limitación habría que hacerla de otra forma. Si funciona, pásame la salida: añadir el límite a la regla de DHCP (`priority=40500`) es entonces un cambio pequeño en `policy_tables.py` que sí puedo probar.
+
+**Portal falso por ARP y contraseñas.** En la cuarentena el ARP está permitido, así que otro equipo podría anunciar la IP del portal. Está resuelto en dos capas, ambas en `slice.py portal`: el portal habla **HTTPS** con un certificado que los hosts tienen **fijado** (`portal-curl`; quien se haga pasar por el portal no puede presentarlo), y los hosts gestionados tienen la MAC del portal como **ARP estático**. Un equipo de un invitado (que no es gestionado) no tiene el certificado fijado: depende de que su navegador avise del certificado inválido; en un campus real conviene un certificado de una CA que sus equipos ya confíen. Lo que no se hace es inspección de ARP en el switch: el REST de ONOS 2.7 no sabe emparejar por IP dentro del ARP.
+
+**Clonar una MAC desde el mismo puerto** exige acceso físico a ese puerto y es una limitación de cualquier control por MAC. Lo que sí cubre el diseño: el flujo de sesión va atado a `in_port` + MAC (otro puerto con esa MAC no hereda la sesión), un 802.1X con otra identidad sobre esa MAC es suplantación (409 y lista negra) y los profesores solo entran en equipos ya autenticados.
 
 **Comprobarlo:**
 ```bash
@@ -252,7 +271,7 @@ El `deviceId` de sw1 sale de `python3 slice.py estado` (sección "Switches"). `u
 
 Solo para probar el rol Docente por 802.1X en un host concreto (hay que **escribir el nombre**; no se ofrece por número): `profesor01`, `profesor02` (VLAN 10). El playbook copia a ese host solo el certificado de esa cuenta y quita los demás.
 
-**Cuentas de personas** (LDAP, contraseña `password123`): `profesor01` y `profesor02` son **personales**: no llevan MAC, switch ni puerto, y suben un equipo de Alumno a Docente desde el portal (sección 3d). `support01` (soporte técnico) es la identidad del equipo de TI y sigue atado a una MAC y un puerto. `guest01` / `guest123` es el invitado del portal.
+**Cuentas de personas** (LDAP, contraseña `password123`): `profesor01` y `profesor02` son **personales**: no llevan MAC, switch ni puerto, y **solo** suben un equipo ya autenticado de Alumno a Docente desde el portal (sección 3d); desde un equipo sin sesión el portal les responde 403. `support01` (soporte técnico) es la identidad del equipo de TI, atado a una MAC y un puerto, y **no entra por el portal** (su grupo no está en `portal.grupos`). `guest01` / `guest123` es el invitado del portal.
 
 **Decisiones y límites:** las PC son de uso general, así que solo llevan el certificado de **su equipo** (rol Alumno); quien necesita más permisos sube con su cuenta personal. El rol JP (híbrido) no se usa: quien ejerce de JP entra con la cuenta de profesor. Lo que eso implica para la seguridad y la escalabilidad, y cómo encajaría el administrador, está en [`CERTIFICADOS_Y_ESCALABILIDAD.md`](CERTIFICADOS_Y_ESCALABILIDAD.md).
 

@@ -57,3 +57,56 @@ def test_la_sesion_de_un_ascenso_avisa_que_el_equipo_vuelve_a_su_rol_base():
     pag = server.sesion_activa(sesion, DESTINO)
     assert "vuelve al rol" in pag and "Alumno" in pag and 'action="/logout"' in pag
     assert "vuelve al rol" not in server.sesion_activa({"usuario": "guest01", "rol": "Invitado", "metodo": "Portal"}, DESTINO)
+
+
+# ---- HTTPS
+def _certificado(tmp_path):
+    import shutil
+    import subprocess
+    if shutil.which("openssl") is None:
+        import pytest
+        pytest.skip("sin openssl")
+    cert, clave = tmp_path / "portal.crt", tmp_path / "portal.key"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-keyout", str(clave), "-out", str(cert),
+                    "-subj", "/CN=portal.prueba", "-addext", "subjectAltName=IP:127.0.0.1"], check=True, capture_output=True)
+    return str(cert), str(clave)
+
+
+def test_el_portal_habla_https_y_no_http_cuando_hay_certificado(tmp_path, monkeypatch):
+    import http.client
+    import ssl
+    import threading
+    cert, clave = _certificado(tmp_path)
+    srv = server.crear_servidor("127.0.0.1", 0, cert, clave)
+    puerto = srv.server_address[1]
+    monkeypatch.setattr(server, "PUERTO_PORTAL", puerto)       # es el puerto del portal, no el del destino desviado
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        ctx = ssl.create_default_context(cafile=cert)          # el certificado fijado en el cliente (el del portal)
+        con = http.client.HTTPSConnection("127.0.0.1", puerto, context=ctx, timeout=5)
+        con.request("GET", "/")
+        r = con.getresponse()
+        assert r.status == 200 and b"<form" in r.read()
+        # sin fijar el certificado, un cliente que verifica rechaza al portal (un portal falso no podria presentar este)
+        otro = http.client.HTTPSConnection("127.0.0.1", puerto, context=ssl.create_default_context(), timeout=5)
+        try:
+            otro.request("GET", "/")
+            assert False, "debio fallar la verificacion"
+        except ssl.SSLError:
+            pass
+        # y en claro no responde con la pagina (la contrasena no viaja sin cifrar)
+        plano = http.client.HTTPConnection("127.0.0.1", puerto, timeout=3)
+        try:
+            plano.request("GET", "/")
+            assert b"<form" not in plano.getresponse().read()
+        except (http.client.HTTPException, OSError):
+            pass
+    finally:
+        srv.shutdown()
+
+
+def test_sin_certificado_el_portal_sigue_en_http_como_en_el_laboratorio():
+    import threading
+    srv = server.crear_servidor("127.0.0.1", 0)
+    assert type(srv).__name__ == "ThreadingHTTPServer"
+    srv.server_close()

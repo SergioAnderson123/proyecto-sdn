@@ -27,10 +27,25 @@ echo "[+] ONOS API REST disponible."
 http_code() { curl -s -o /dev/null -w '%{http_code}' -u "$AUTH" "$@"; }
 activa() { curl -s -u "$AUTH" "$ONOS_URL/applications/$1" | grep -q '"state":"ACTIVE"'; }
 
-activar() {
-  local codigo; codigo="$(http_code -X POST "$ONOS_URL/applications/$1/active")"
+activar() {   # un 404 justo tras arrancar ONOS es que aun no cargo esa app: se reintenta unos segundos
+  local codigo n=0
+  while :; do
+    codigo="$(http_code -X POST "$ONOS_URL/applications/$1/active")"
+    if [ "$codigo" = "404" ] && [ "$n" -lt 20 ]; then n=$((n + 1)); sleep 3; continue; fi
+    break
+  done
   if [ "$codigo" = "200" ] || [ "$codigo" = "409" ]; then echo "    $1: activada"; else echo "    [!] $1: no se pudo activar (HTTP $codigo)"; FALLOS=1; fi
 }
+
+# La API REST responde antes de que ONOS termine de cargar sus apps incluidas: sin esta espera, activarlas da 404 (pasa justo tras arrancar
+# o recrear el contenedor, y mas con poca RAM). Se espera a que la app openflow exista.
+echo "[*] Esperando a que ONOS cargue sus apps incluidas (puede tardar un par de minutos tras arrancar)..."
+espera=0
+until [ "$(http_code "$ONOS_URL/applications/org.onosproject.openflow")" = "200" ]; do
+  sleep 5; espera=$((espera + 5))
+  [ "$espera" -ge 300 ] && { echo "[X] ONOS no cargo sus apps en 5 minutos: revisa 'docker logs onos --tail 60' y la RAM (free -h)."; exit 1; }
+done
+echo "[+] Apps de ONOS cargadas."
 
 echo "[*] Activando OpenFlow y las apps que ya trae ONOS..."
 activar org.onosproject.openflow
@@ -48,7 +63,9 @@ descargar() {   # $1 = app, $2 = version
 }
 instalar() {
   local codigo; codigo="$(http_code -X POST -H "Content-Type: application/octet-stream" --data-binary "@$1" "$ONOS_URL/applications?activate=true")"
-  if [ "$codigo" = "200" ] || [ "$codigo" = "201" ]; then echo "    $1: instalada y activada"; else echo "    [!] $1: no se pudo instalar (HTTP $codigo)"; FALLOS=1; fi
+  if [ "$codigo" = "200" ] || [ "$codigo" = "201" ]; then echo "    $1: instalada y activada"
+  elif [ "$codigo" = "409" ]; then echo "    $1: ya estaba instalada (se comprueba mas abajo que este ACTIVE)"   # al repetir el script: no es un fallo
+  else echo "    [!] $1: no se pudo instalar (HTTP $codigo)"; FALLOS=1; fi
 }
 
 echo "[*] Descargando SADIS $SADIS_VER y AAA $AAA_VER (solo si faltan)..."
@@ -81,12 +98,13 @@ DHCP_MASCARA="${DHCP_MASCARA:-255.255.255.0}"; DHCP_BROADCAST="${DHCP_BROADCAST:
 DHCP_ROUTER="${DHCP_ROUTER:-10.0.0.254}"; DHCP_DNS="${DHCP_DNS:-8.8.8.8}"
 DHCP_INICIO="${DHCP_INICIO:-10.0.0.100}"; DHCP_FIN="${DHCP_FIN:-10.0.0.199}"
 DHCP_LEASE="${DHCP_LEASE:-3600}"; DHCP_RENEW="${DHCP_RENEW:-1800}"; DHCP_REBIND="${DHCP_REBIND:-3150}"; DHCP_PURGA_MIN="${DHCP_PURGA_MIN:-2}"
+DHCP_TIMEOUT="${DHCP_TIMEOUT:-60}"
 echo "[*] Configurando la app DHCP de ONOS (rango $DHCP_INICIO - $DHCP_FIN, concesion de $DHCP_LEASE s)..."
 curl -s -u "$AUTH" -X POST -H "Content-Type: application/json" "$ONOS_URL/network/configuration" -d "{
   \"apps\": {\"org.onosproject.dhcp\": {\"dhcp\": {
     \"ip\": \"$DHCP_SERVIDOR_IP\", \"mac\": \"$DHCP_SERVIDOR_MAC\", \"subnet\": \"$DHCP_MASCARA\", \"broadcast\": \"$DHCP_BROADCAST\",
     \"router\": \"$DHCP_ROUTER\", \"domain\": \"$DHCP_DNS\", \"startip\": \"$DHCP_INICIO\", \"endip\": \"$DHCP_FIN\",
-    \"lease\": \"$DHCP_LEASE\", \"renew\": \"$DHCP_RENEW\", \"rebind\": \"$DHCP_REBIND\", \"delay\": \"$DHCP_PURGA_MIN\"}}}}"
+    \"lease\": \"$DHCP_LEASE\", \"renew\": \"$DHCP_RENEW\", \"rebind\": \"$DHCP_REBIND\", \"delay\": \"$DHCP_PURGA_MIN\", \"timeout\": \"$DHCP_TIMEOUT\"}}}}"
 echo
 
 # La app AAA puede haber arrancado ANTES de recibir esta configuración y fallar con "Remote RADIUS Server: null" (NPE en activate):

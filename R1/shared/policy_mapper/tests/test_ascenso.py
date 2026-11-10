@@ -101,15 +101,21 @@ def test_el_estado_del_portal_dice_a_que_roles_puede_subir_el_equipo(mundo):
 
 # ------------------------------------------------------------------ lo que NO se puede subir (siguen siendo 409)
 
-@pytest.mark.parametrize("usuario,motivo", [
-    ("alumno02", "no admite subir"),         # un alumno no sube a alumno
-    ("support01", "no admite subir"),        # soporte no esta en la tabla `ascenso` para alumno
-])
-def test_un_rol_que_no_esta_en_la_tabla_de_ascenso_no_sube(mundo, usuario, motivo):
+def test_un_alumno_no_sube_un_equipo_de_alumno(mundo):
     _base()
-    r = _login(mundo, usuario)
-    assert r.status_code == 409 and motivo in r.json()["detail"]
+    r = _login(mundo, "alumno02")
+    assert r.status_code == 409 and "no admite subir" in r.json()["detail"]      # alumno -> alumno no esta en la tabla `ascenso`
     assert session_store.get_by_mac(MAC).username == PC and not mundo["borrados"] and not mundo["inyectados"]
+
+
+def test_el_administrador_no_entra_por_el_portal_ni_sube_un_equipo(mundo):
+    """El grupo soporteTI no esta en `portal.grupos`: el administrador solo entra por 802.1X con el certificado de su equipo."""
+    _base()
+    r = _login(mundo, "support01")
+    assert r.status_code == 403 and "no tiene acceso" in r.json()["detail"]
+    assert session_store.get_by_mac(MAC).username == PC and not mundo["borrados"] and not mundo["inyectados"]
+    assert eventos.listar()[-1]["tipo"] == "rechazado"
+    assert "soporteTI" not in pm.POLITICA["portal"]["grupos"]
 
 
 def test_la_sesion_base_de_otro_rol_no_sube(mundo):
@@ -336,3 +342,41 @@ def test_el_antispoofing_sin_ascenso_sigue_igual(mundo, monkeypatch):
     _onos_con(monkeypatch, "alumno02@example.org")
     r = _webhook(mundo, "alumno02@example.org")
     assert r.status_code == 409 and mundo["negras"] and session_store.get_by_mac(MAC).username == PC
+
+
+# ------------------------------------------------------------------ login directo (equipo sin sesion): solo `portal.login_directo`
+
+@pytest.fixture
+def sin_sesion(mundo, monkeypatch):
+    async def ubicar(mac, url, auth):
+        return (DPID, "2")
+    monkeypatch.setattr(pm.portal_auth, "ubicar_host", ubicar)
+    session_store.remove_session(MAC)
+    return mundo
+
+
+def test_un_profesor_no_inicia_sesion_directo_desde_un_equipo_sin_sesion(sin_sesion):
+    r = _login(sin_sesion, "profesor01")
+    assert r.status_code == 403 and "equipo ya autenticado" in r.json()["detail"]
+    assert session_store.get_by_mac(MAC) is None and not sin_sesion["inyectados"]          # no se instalo ningun flujo
+    ev = eventos.listar()[-1]
+    assert ev["tipo"] == "rechazado" and "ascenso" in ev["detalle"]
+
+
+def test_un_alumno_y_un_invitado_si_pueden_entrar_directo(sin_sesion, monkeypatch):
+    monkeypatch.setitem(GRUPOS, "guest01", ["invitado"])
+    r = _login(sin_sesion, "alumno02")
+    assert r.status_code == 200 and r.json()["rol"] == "Alumno" and r.json()["tabla"] == 20
+    session_store.remove_session(MAC)
+    r = _login(sin_sesion, "guest01")
+    assert r.status_code == 200 and r.json()["rol"] == "Invitado" and r.json()["tabla"] == 50
+
+
+def test_el_mismo_profesor_si_sube_un_equipo_ya_autenticado(mundo):
+    _base()
+    assert _login(mundo, "profesor01").status_code == 200                                  # el ascenso no se ve afectado
+
+
+def test_sin_login_directo_configurado_vale_el_comportamiento_anterior(sin_sesion, monkeypatch):
+    monkeypatch.delitem(pm.POLITICA["portal"], "login_directo")
+    assert _login(sin_sesion, "profesor01").status_code == 200

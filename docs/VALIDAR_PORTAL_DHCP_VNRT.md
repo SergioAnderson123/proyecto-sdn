@@ -105,7 +105,7 @@ Comprueba las reglas nuevas en un switch de acceso (en sw2):
 sudo ovs-ofctl -O OpenFlow13 dump-flows sw2 | grep -E "priority=40500|priority=1000|table=99"
 # priority=40500,udp,tp_src=68,tp_dst=67 actions=CONTROLLER:65535          (DHCP al controlador)
 # priority=1000 actions=push_vlan:0x8100,set_field:4195->vlan_vid,goto_table:99     (cuarentena)
-# table=99, ... arp ... / ... tcp,nw_dst=10.0.0.60,tp_dst=8080 ... / table=99, priority=0 actions=drop
+# table=99, ... arp ... / ... tcp,nw_dst=10.0.0.60,tp_dst=8443 ... / table=99, priority=0 actions=drop
 ```
 **Si falla:** no hay `table=99` → el Policy Mapper no cargó el `policy.yaml` nuevo: `docker restart policy_mapper && curl -s -X POST http://127.0.0.1:5000/policy/sync`.
 
@@ -143,6 +143,7 @@ Hace: IP fija `10.0.0.60` y el servicio `r1-portal` en h4, lee de ONOS dónde es
 
 **Debes ver**
 - La salida: `h4: 10.0.0.60 MAC ... en of:... puerto N` y las líneas `confianza of:...: puertos [...]` (un switch por línea; el core aparece con sus enlaces).
+- El portal habla **HTTPS (8443)** con el certificado de `R1/deploy/hosts/portal-tls/`; en los demás hosts existen `/usr/local/share/r1/portal.crt`, el comando `portal-curl` y el servicio `r1-portal-arp` (`ip neigh show 10.0.0.60` dice `PERMANENT`).
 - En h4: `systemctl status r1-portal --no-pager` activo, y `journalctl -u r1-portal -f` (déjalo en otra terminal: aquí salen todas las peticiones del portal con la IP de cada cliente).
 - `cat ~/proyecto-sdn/R2/policy/policy.local.yaml`.
 - Flujos de confianza en sw3 (donde está h4): `sudo ovs-ofctl -O OpenFlow13 dump-flows sw3 | grep "priority=40001" | grep -v dl_src` → un `in_port=<N>` por cada puerto de confianza.
@@ -153,7 +154,7 @@ Hace: IP fija `10.0.0.60` y el servicio `r1-portal` en h4, lee de ONOS dónde es
 
 Ningún host tiene sesión, así que todos están en cuarentena. **En h1** (y en h3):
 ```bash
-curl -s -m 5 http://10.0.0.60:8080/ | grep -o "<title>[^<]*"     # SÍ llega: el portal está permitido en la cuarentena
+portal-curl -s -m 5 https://10.0.0.60:8443/ | grep -o "<title>[^<]*"     # SÍ llega: el portal está permitido en la cuarentena
 ping -c 2 -W 1 10.0.0.60                                         # NO responde: solo se permite TCP al portal
 curl -s -m 3 http://10.0.0.40:8003/ >/dev/null; echo $?          # NO llega (código distinto de 0)
 ```
@@ -174,7 +175,7 @@ python3 slice.py alta
   curl -s -u onos:rocks http://127.0.0.1:8181/onos/aaa/app/users | python3 -m json.tool | grep -E "username|macAddress|connectPoint|authState"
   # alumno01@example.org, MAC de h1, of:00001a749039894a/<puerto>, AUTHORIZED_STATE
   ```
-- Con sesión, h1 sigue alcanzando el portal (la tabla 20 lo permite): `curl -s http://10.0.0.60:8080/ | grep -o "Subir de rol"` **en h1** → `Subir de rol` (el portal le ofrece subir porque su equipo es Alumno).
+- Con sesión, h1 sigue alcanzando el portal (la tabla 20 lo permite): `portal-curl -s https://10.0.0.60:8443/ | grep -o "Subir de rol"` **en h1** → `Subir de rol` (el portal le ofrece subir porque su equipo es Alumno).
 
 **Si falla:** rechazo `MAC no coincide` → es el device binding: `alta` lo corrige (libera y fija en LDAP lo que ONOS vio).
 
@@ -182,7 +183,7 @@ python3 slice.py alta
 
 **En h1:**
 ```bash
-curl -s -d 'usuario=profesor01&clave=password123' http://10.0.0.60:8080/login | grep -o -i -E "docente|vuelve al rol alumno"
+portal-curl -s -d 'usuario=profesor01&clave=password123' https://10.0.0.60:8443/login | grep -o -i -E "docente|vuelve al rol alumno"
 ```
 **Debes ver**
 - Terminal A (Policy Mapper): `[V] ASCENSO: profesor01 sube alumno01@example.org (Alumno) a Docente en of:...:N -> tabla 20 -> 10`.
@@ -194,36 +195,46 @@ curl -s -d 'usuario=profesor01&clave=password123' http://10.0.0.60:8080/login | 
 **Pruebas negativas (cada una debe dar 409 y un evento `conflicto`; el flujo de h1 no cambia):**
 ```bash
 # en h1: otro profesor sobre un equipo ya ascendido
-curl -s -d 'usuario=profesor02&clave=password123' http://10.0.0.60:8080/login | grep -o -i "ya existe una sesi[^<]*"
+portal-curl -s -d 'usuario=profesor02&clave=password123' https://10.0.0.60:8443/login | grep -o -i "ya existe una sesi[^<]*"
 # en h2: un alumno no sube (alumno -> alumno no está en la tabla `ascenso`)
-curl -s -d 'usuario=alumno02&clave=password123' http://10.0.0.60:8080/login | grep -o -i "no admite subir[^<]*"
+portal-curl -s -d 'usuario=alumno02&clave=password123' https://10.0.0.60:8443/login | grep -o -i "no admite subir[^<]*"
 # en h2: un profesor que ya tiene sesión en h1 no puede abrir otra
-curl -s -d 'usuario=profesor01&clave=password123' http://10.0.0.60:8080/login | grep -o -i "ya existe una sesi[^<]*"
+portal-curl -s -d 'usuario=profesor01&clave=password123' https://10.0.0.60:8443/login | grep -o -i "ya existe una sesi[^<]*"
 ```
 En terminal A cada una deja `conflicto` con el motivo (`Portal: ...`). Contraseña incorrecta (`clave=mala`) → 401 y evento `rechazado`.
 
 **Volver a Alumno** (en h1):
 ```bash
-curl -s -X POST -d '' http://10.0.0.60:8080/logout -o /dev/null -w "%{http_code}\n"       # 302
+portal-curl -s -X POST -d '' https://10.0.0.60:8443/logout -o /dev/null -w "%{http_code}\n"       # 302
 ```
 Terminal A: `Ascenso de profesor01 ... cerrada por el usuario; el equipo vuelve a Alumno`; sw2: el flujo de h1 vuelve a `goto_table:20`; SESIONES: `alumno01@example.org`, Alumno, 802.1X, sin `base`.
 
 **Ascenso y antispoofing, sin cruzarse** (vuelve a ascender a h1 y luego, en la página del agente de h1 —`python3 slice.py interfaz`— o con `sudo systemctl restart r1-agente` en h1, reautentica con `alumno01`): terminal A debe mostrar que el ascenso se anula y h1 queda como Alumno **sin** `lista negra`. Autenticar con otra identidad (`alumno02`) en h1 sigue siendo suplantación: 409 y MAC en lista negra 600 s.
+
+## 8b. Lo que el portal NO permite (en h3, sin sesión)
+
+```bash
+portal-curl -s -d 'usuario=profesor01&clave=password123' https://10.0.0.60:8443/login | grep -o -i "solo puede iniciar[^<]*"
+portal-curl -s -d 'usuario=support01&clave=password123' https://10.0.0.60:8443/login | grep -o -i "no tiene acceso"
+```
+**Debes ver**: un profesor desde un equipo sin sesión recibe `solo puede iniciar sesión desde un equipo ya autenticado por 802.1X`, y el administrador, `Su grupo no tiene acceso`. En ambos casos terminal A (Policy Mapper) registra `rechazado` con el motivo y **no** aparece ningún flujo nuevo de la MAC de h3 en sw3 (sigue en cuarentena).
+
+**El portal es el de verdad** (en h3): `curl -s -m 5 https://10.0.0.60:8443/` **sin** el certificado fijado debe fallar con un error de certificado (`self-signed certificate`), y `portal-curl` (con el certificado) funciona. Es lo que impediría que un portal falso capturara la contraseña.
 
 ## 9. Entrar como invitado (h3)
 
 h3 tiene IP por DHCP y está en cuarentena desde el paso 4. **En h3:**
 ```bash
 ip -4 -o addr show ens4
-curl -s -d 'usuario=guest01&clave=guest123' http://10.0.0.60:8080/login | grep -o -i -E "invitado|sesi[^<]*"
+portal-curl -s -d 'usuario=guest01&clave=guest123' https://10.0.0.60:8443/login | grep -o -i -E "invitado|sesi[^<]*"
 ```
 **Debes ver**
 - Terminal A (Policy Mapper): `[V] PORTAL: guest01 (invitado) en of:...:N -> tabla 50`. Para ubicar a h3 el Policy Mapper pregunta a ONOS por su MAC: la app DHCP ya lo registró con IP y ubicación (`curl -s -u onos:rocks http://127.0.0.1:8181/onos/v1/hosts | python3 -m json.tool | grep -B3 -A8 <MAC de h3>`).
 - SESIONES: `guest01`, `Invitado`, método `Portal`, y `expira` a 30 minutos (`portal.duracion_s`).
 - sw3: aparece `priority=40001,in_port=...,dl_src=<MAC de h3>` con `goto_table:50`, y la IP de h3 no cambió.
-- Con la sesión de invitado, h3 solo alcanza `university_portal` (`10.0.0.40:8003`, que en el slice no existe) y el portal: `curl -s -m 3 http://10.0.0.60:8080/ | grep -o -i "sesi[^<]*"` funciona y lo demás sigue sin llegar.
+- Con la sesión de invitado, h3 solo alcanza `university_portal` (`10.0.0.40:8003`, que en el slice no existe) y el portal: `portal-curl -s -m 3 https://10.0.0.60:8443/ | grep -o -i "sesi[^<]*"` funciona y lo demás sigue sin llegar.
 
-**Cerrar la sesión** (en h3): `curl -s -X POST -d '' http://10.0.0.60:8080/logout -o /dev/null -w "%{http_code}\n"`. Terminal A: `Portal: sesión cerrada por el usuario`; el flujo de h3 desaparece y h3 **vuelve a la cuarentena** (repite el `curl` al portal y el `ping`, como en el paso 6). Contraseña incorrecta: 401, evento `rechazado`.
+**Cerrar la sesión** (en h3): `portal-curl -s -X POST -d '' https://10.0.0.60:8443/logout -o /dev/null -w "%{http_code}\n"`. Terminal A: `Portal: sesión cerrada por el usuario`; el flujo de h3 desaparece y h3 **vuelve a la cuarentena** (repite el `curl` al portal y el `ping`, como en el paso 6). Contraseña incorrecta: 401, evento `rechazado`.
 
 **Si falla:** `No se pudo ubicar el equipo en la red` → ONOS no conoce a h3: comprueba que la concesión DHCP existe (paso 4) y que `/onos/v1/hosts` lo lista; ese es el único punto donde el invitado depende de la app DHCP.
 
@@ -240,7 +251,7 @@ python3 slice.py alta              # libera, autentica y fija en LDAP la MAC y e
 - Terminal A (Policy Mapper): `APROBADO` con VLAN 40 y `Flujo Prio 40001 inyectado`; SESIONES: `support01@example.org`, rol Soporte.
 - sw2: el flujo de la MAC de h2 hace `goto_table:40`.
 - En h2: `ls /home/ubuntu/supp/certs` solo tiene la CA, los certificados de alumno y el de `support01`; en h1 no existe el de `support01`.
-- **Sin ascenso:** desde h2, `curl -s -d 'usuario=profesor01&clave=password123' http://10.0.0.60:8080/login` da 409 (`no admite subir`, si `profesor01` no tiene ya otra sesión; si la tiene, `ya existe una sesión`): el administrador no sube ni es subido por el portal.
+- **Sin ascenso:** desde h2, `portal-curl -s -d 'usuario=profesor01&clave=password123' https://10.0.0.60:8443/login` da 409 (`no admite subir`, si `profesor01` no tiene ya otra sesión; si la tiene, `ya existe una sesión`): el administrador no sube ni es subido por el portal.
 
 ## 10. Cierre de sesión 802.1X (ya validado antes) y limpieza
 

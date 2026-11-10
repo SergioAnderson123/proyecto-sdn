@@ -8,3 +8,6 @@ state.json
 
 # politica propia de un despliegue (la genera slice.py portal)
 R2/policy/policy.local.yaml
+
+# certificado autofirmado del portal de un despliegue (lo genera slice.py portal)
+R1/deploy/hosts/portal-tls/

@@ -221,6 +221,11 @@ async def portal_login(p: PortalLogin, x_portal_token: str = Header(default=""))
         base = ses_mac
         dpid, port = base.dpid, base.port      # la ubicacion es la de la sesion 802.1X, ya verificada contra LDAP
     else:
+        directos = policy_tables.roles_login_directo(POLITICA)
+        if directos is not None and rol not in directos:
+            # login directo desde un equipo sin sesion: solo los roles de `portal.login_directo`; los demas suben un equipo autenticado
+            eventos.registrar("rechazado", p.usuario, mac, detalle=f"Portal: el rol {rol} solo entra desde un equipo autenticado (ascenso)", rol=rol)
+            raise HTTPException(status_code=403, detail="Este usuario solo puede iniciar sesión desde un equipo ya autenticado por 802.1X")
         ubic = await portal_auth.ubicar_host(mac, ONOS_BASE_URL, ONOS_AUTH)
         if not ubic:
             eventos.registrar("rechazado", p.usuario, mac, detalle="Portal: ONOS no conoce al equipo", rol=rol)

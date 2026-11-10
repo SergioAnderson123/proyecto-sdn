@@ -90,6 +90,13 @@ def puede_ascender(politica: dict, rol_base: Optional[str], rol_destino: Optiona
     return bool(rol_base and rol_destino) and rol_destino in roles_de_ascenso(politica, rol_base)
 
 
+def roles_login_directo(politica: dict) -> Optional[List[str]]:
+    """Roles que pueden iniciar sesion en el portal desde un equipo SIN sesion (`portal.login_directo`); None = todos los de `portal.grupos`.
+    Los demas solo entran subiendo un equipo ya autenticado por 802.1X (`ascenso`)."""
+    d = (politica.get("portal") or {}).get("login_directo")
+    return None if d is None else list(d)
+
+
 def ascenso_exige_ubicacion(politica: dict) -> bool:
     return bool(politica.get("ascenso_exigir_ubicacion", True))
 

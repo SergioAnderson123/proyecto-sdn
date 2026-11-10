@@ -8,12 +8,18 @@ Corre en la IP del portal (policy.yaml -> portal.ip, 10.0.0.60) y escucha en dos
 La MAC del cliente se lee de la tabla ARP del portal (mismo segmento L2), nunca de lo que envía el cliente.
 Sin dependencias fuera de la biblioteca estándar. Diseño: Tabler (MIT).
 
-Variables: MAPPER_URL (http://policy_mapper:5000), PORTAL_TOKEN, PORTAL_IP (10.0.0.60), PORTAL_PUERTOS (8080,8083)
+HTTPS: con PORTAL_TLS_CERT y PORTAL_TLS_KEY (rutas a un certificado y su clave en PEM) todos los puertos hablan TLS 1.2+; sin ellas, HTTP
+(el laboratorio de Mininet). La contrasena del usuario viaja en el formulario: sin TLS, quien se haga pasar por el portal (ARP abierto
+en la cuarentena) la captura; con TLS y el certificado fijado en el cliente, no.
+
+Variables: MAPPER_URL (http://policy_mapper:5000), PORTAL_TOKEN, PORTAL_IP (10.0.0.60), PORTAL_PUERTOS (8080,8083),
+           PORTAL_TLS_CERT, PORTAL_TLS_KEY
 """
 import html
 import json
 import mimetypes
 import os
+import ssl
 import sys
 import threading
 import urllib.error
@@ -28,6 +34,39 @@ PUERTOS = [int(p) for p in os.getenv("PORTAL_PUERTOS", "8080,8083").split(",")]
 PUERTO_PORTAL = PUERTOS[0]
 RAIZ = os.path.dirname(os.path.abspath(__file__))
 DESTINO_POR_DEFECTO = os.getenv("DESTINO_POR_DEFECTO", "http://10.0.0.40:8003/")
+TLS_CERT = os.getenv("PORTAL_TLS_CERT", "")
+TLS_KEY = os.getenv("PORTAL_TLS_KEY", "")
+ESQUEMA = "https" if TLS_CERT else "http"
+
+
+class ServidorTLS(ThreadingHTTPServer):
+    """El mismo servidor con TLS. El apreton de manos se hace en el hilo de cada conexion (no en el `accept`), para que un cliente
+    que se quede a medias no bloquee a los demas; un fallo de TLS solo cierra esa conexion."""
+    contexto = None
+
+    def get_request(self):
+        conexion, direccion = super().get_request()
+        conexion.settimeout(10)
+        return self.contexto.wrap_socket(conexion, server_side=True, do_handshake_on_connect=False), direccion
+
+    def handle_error(self, request, client_address):
+        pass     # TLS fallido o cliente que se va: no hace falta una traza por cada uno
+
+
+def contexto_tls(cert, clave):
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(cert, clave)
+    return ctx
+
+
+def crear_servidor(ip, puerto, cert="", clave=""):
+    """Servidor HTTP, o HTTPS si hay certificado y clave."""
+    if not cert:
+        return ThreadingHTTPServer((ip, puerto), Manejador)
+    srv = ServidorTLS((ip, puerto), Manejador)
+    srv.contexto = contexto_tls(cert, clave)
+    return srv
 
 
 def mac_de(ip):
@@ -158,7 +197,7 @@ class Manejador(BaseHTTPRequestHandler):
         if puerto != PUERTO_PORTAL:
             # destino desviado: se manda al formulario recordando a dónde quería ir el usuario
             original = f"http://{self.headers.get('Host', '10.0.0.40:8003')}{self.path}"
-            return self._redir(f"http://{IP_PORTAL}:{PUERTO_PORTAL}/?" + urllib.parse.urlencode({"destino": original}))
+            return self._redir(f"{ESQUEMA}://{IP_PORTAL}:{PUERTO_PORTAL}/?" + urllib.parse.urlencode({"destino": original}))
         destino = destino_seguro(urllib.parse.parse_qs(consulta).get("destino", [""])[0])
         mac = self._mac()
         if mac:
@@ -196,10 +235,10 @@ class Manejador(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    servidores = [ThreadingHTTPServer((IP_PORTAL if os.getenv("PORTAL_BIND_IP") else "0.0.0.0", p), Manejador) for p in PUERTOS]
+    servidores = [crear_servidor(IP_PORTAL if os.getenv("PORTAL_BIND_IP") else "0.0.0.0", p, TLS_CERT, TLS_KEY) for p in PUERTOS]
     for s in servidores[1:]:
         threading.Thread(target=s.serve_forever, daemon=True).start()
-    print(f"Portal cautivo en http://{IP_PORTAL}:{PUERTO_PORTAL} (desvío en {PUERTOS[1:]}; mapper {MAPPER})", flush=True)
+    print(f"Portal cautivo en {ESQUEMA}://{IP_PORTAL}:{PUERTO_PORTAL} (desvío en {PUERTOS[1:]}; mapper {MAPPER})", flush=True)
     try:
         servidores[0].serve_forever()
     except KeyboardInterrupt:
