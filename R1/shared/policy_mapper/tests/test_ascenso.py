@@ -101,11 +101,13 @@ def test_el_estado_del_portal_dice_a_que_roles_puede_subir_el_equipo(mundo):
 
 # ------------------------------------------------------------------ lo que NO se puede subir (siguen siendo 409)
 
-def test_un_alumno_no_sube_un_equipo_de_alumno(mundo):
+def test_un_alumno_no_entra_por_el_portal_ni_sube_un_equipo(mundo):
+    """El grupo alumno no esta en `portal.grupos`: un alumno usa un equipo registrado (802.1X), no el portal."""
     _base()
     r = _login(mundo, "alumno02")
-    assert r.status_code == 409 and "no admite subir" in r.json()["detail"]      # alumno -> alumno no esta en la tabla `ascenso`
+    assert r.status_code == 403 and "no tiene acceso" in r.json()["detail"]
     assert session_store.get_by_mac(MAC).username == PC and not mundo["borrados"] and not mundo["inyectados"]
+    assert "alumno" not in pm.POLITICA["portal"]["grupos"]
 
 
 def test_el_administrador_no_entra_por_el_portal_ni_sube_un_equipo(mundo):
@@ -363,13 +365,15 @@ def test_un_profesor_no_inicia_sesion_directo_desde_un_equipo_sin_sesion(sin_ses
     assert ev["tipo"] == "rechazado" and "ascenso" in ev["detalle"]
 
 
-def test_un_alumno_y_un_invitado_si_pueden_entrar_directo(sin_sesion, monkeypatch):
+def test_solo_el_invitado_entra_directo_desde_un_equipo_sin_sesion(sin_sesion, monkeypatch):
     monkeypatch.setitem(GRUPOS, "guest01", ["invitado"])
-    r = _login(sin_sesion, "alumno02")
-    assert r.status_code == 200 and r.json()["rol"] == "Alumno" and r.json()["tabla"] == 20
-    session_store.remove_session(MAC)
+    assert pm.POLITICA["portal"]["login_directo"] == ["invitado"]
     r = _login(sin_sesion, "guest01")
     assert r.status_code == 200 and r.json()["rol"] == "Invitado" and r.json()["tabla"] == 50
+    session_store.remove_session(MAC)
+    for usuario in ("alumno02", "support01"):                                  # ni alumno ni administrador: equipos registrados por 802.1X
+        r = _login(sin_sesion, usuario)
+        assert r.status_code == 403 and session_store.get_by_mac(MAC) is None
 
 
 def test_el_mismo_profesor_si_sube_un_equipo_ya_autenticado(mundo):

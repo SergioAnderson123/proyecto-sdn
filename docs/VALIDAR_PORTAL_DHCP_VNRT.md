@@ -196,8 +196,8 @@ portal-curl -s -d 'usuario=profesor01&clave=password123' https://10.0.0.60:8443/
 ```bash
 # en h1: otro profesor sobre un equipo ya ascendido
 portal-curl -s -d 'usuario=profesor02&clave=password123' https://10.0.0.60:8443/login | grep -o -i "ya existe una sesi[^<]*"
-# en h2: un alumno no sube (alumno -> alumno no está en la tabla `ascenso`)
-portal-curl -s -d 'usuario=alumno02&clave=password123' https://10.0.0.60:8443/login | grep -o -i "no admite subir[^<]*"
+# en h2: un alumno no entra por el portal (en la red cableada solo los invitados lo usan; un alumno entra por 802.1X)
+portal-curl -s -d 'usuario=alumno02&clave=password123' https://10.0.0.60:8443/login | grep -o -i "no tiene acceso"
 # en h2: un profesor que ya tiene sesión en h1 no puede abrir otra
 portal-curl -s -d 'usuario=profesor01&clave=password123' https://10.0.0.60:8443/login | grep -o -i "ya existe una sesi[^<]*"
 ```
@@ -216,8 +216,9 @@ Terminal A: `Ascenso de profesor01 ... cerrada por el usuario; el equipo vuelve 
 ```bash
 portal-curl -s -d 'usuario=profesor01&clave=password123' https://10.0.0.60:8443/login | grep -o -i "solo puede iniciar[^<]*"
 portal-curl -s -d 'usuario=support01&clave=password123' https://10.0.0.60:8443/login | grep -o -i "no tiene acceso"
+portal-curl -s -d 'usuario=alumno01&clave=password123' https://10.0.0.60:8443/login | grep -o -i "no tiene acceso"
 ```
-**Debes ver**: un profesor desde un equipo sin sesión recibe `solo puede iniciar sesión desde un equipo ya autenticado por 802.1X`, y el administrador, `Su grupo no tiene acceso`. En ambos casos terminal A (Policy Mapper) registra `rechazado` con el motivo y **no** aparece ningún flujo nuevo de la MAC de h3 en sw3 (sigue en cuarentena).
+**Debes ver**: un profesor desde un equipo sin sesión recibe `solo puede iniciar sesión desde un equipo ya autenticado por 802.1X`, y el administrador y el alumno, `Su grupo no tiene acceso` (solo el invitado entra directo). En ambos casos terminal A (Policy Mapper) registra `rechazado` con el motivo y **no** aparece ningún flujo nuevo de la MAC de h3 en sw3 (sigue en cuarentena).
 
 **El portal es el de verdad** (en h3): `curl -s -m 5 https://10.0.0.60:8443/` **sin** el certificado fijado debe fallar con un error de certificado (`self-signed certificate`), y `portal-curl` (con el certificado) funciona. Es lo que impediría que un portal falso capturara la contraseña.
 

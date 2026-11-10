@@ -38,12 +38,13 @@ portal:
   switches: ["of:0000000000000001"]   # switches de acceso donde se instalan los flujos del portal
   desvios:                            # destino original (ip, mac y puerto) -> puerto del portal que lo representa
     - {ip: 10.0.0.40, mac: "00:00:00:00:00:44", tcp: 8003, puerto_portal: 8083}
-  # grupo LDAP -> rol. soporteTI NO esta: el administrador entra solo por 802.1X con el certificado de su equipo, nunca con una
-  # contrasena tecleada en el portal (HTTP/HTTPS desde un equipo cualquiera).
-  grupos: {profesor: docente, alumno: alumno, invitado: invitado}
+  # grupo LDAP -> rol. Red cableada: solo los INVITADOS entran al portal desde un equipo sin sesion. Alumnos y administradores entran por
+  # 802.1X con el certificado de un equipo registrado de la universidad (alumno y soporteTI NO estan aqui: una laptop personal usa la red
+  # inalambrica, no el cable). El profesor figura solo para el ascenso: sube un equipo registrado, nunca entra directo.
+  grupos: {profesor: docente, invitado: invitado}
   # Roles que pueden iniciar sesion DIRECTAMENTE desde un equipo sin sesion. El resto (docente) solo entra subiendo un equipo que ya esta
   # autenticado por 802.1X (seccion `ascenso`): asi un profesor siempre queda atado a un equipo con certificado. Sin esta clave, todos.
-  login_directo: [invitado, alumno]
+  login_directo: [invitado]
   # Duración máxima de una sesión del portal (s), por rol; al vencer se borra el flujo y hay que volver a entrar.
   # Las de 802.1X no vencen: terminan cuando el agente del host avisa del cierre (POST /sessions/logout).
   duracion_s: {invitado: 1800, default: 28800}

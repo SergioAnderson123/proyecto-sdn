@@ -37,5 +37,5 @@ Las sesiones del portal vencen: `portal.duracion_s` en `policy.yaml` fija los se
 - LDAP caído ⇒ se rechaza. Un bind sin contraseña (anónimo) se rechaza explícitamente.
 - Una sesión por usuario y por MAC (409 si ya existe, igual que en 802.1X). Los bloqueos de R1/R5 (45000/42000) siguen por encima del portal.
 - **HTTPS opcional:** con `PORTAL_TLS_CERT` y `PORTAL_TLS_KEY` (PEM) el servidor habla TLS 1.2+ en todos sus puertos; sin ellas, HTTP (el laboratorio de Mininet). En VNRT lo activa `slice.py portal` y fija el certificado en los hosts.
-- **Quién entra:** `portal.grupos` (grupo LDAP → rol) y `portal.login_directo` (roles que pueden iniciar sesión desde un equipo sin sesión; el resto solo sube un equipo ya autenticado) en `R2/policy/policy.yaml`.
+- **Quién entra:** `portal.grupos` (grupo LDAP → rol) y `portal.login_directo` (roles que pueden iniciar sesión desde un equipo sin sesión: en VNRT solo `invitado`; el profesor solo sube un equipo ya autenticado) en `R2/policy/policy.yaml`.
 - Límites: sin TLS el portal envía la contraseña en claro, y el ARP sin sesión es abierto porque el REST de ONOS 2.7 no empareja `ARP_TPA`.
