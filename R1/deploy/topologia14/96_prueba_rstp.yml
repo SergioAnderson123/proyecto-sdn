@@ -1,0 +1,139 @@
+# Prueba de RSTP SOLO entre sw-core-1 y sw-core-2: ¿atraviesan los BPDU la red virtual de VNRT?
+#   PLAYBOOK=96_prueba_rstp.yml ./lanzar.sh                       # prueba y desactiva RSTP al terminar (lo normal)
+#   PLAYBOOK=96_prueba_rstp.yml ./lanzar.sh -e dejar_rstp=true    # lo deja activado en los dos cores
+#
+# Por qué: los BPDU van a la dirección reservada 01:80:c2:00:00:00 y la red virtual ya descarta otra de ese rango (la del EAPOL). Si
+# también descarta los BPDU, cada switch se cree la raíz y RSTP "activado" no cierra ningún lazo.
+#
+# Qué hace (no instala flujos ni cambia controladores; los accesos y el borde NO se tocan):
+#   1. Mide los paquetes por segundo de los 5 switches y se detiene si alguno está en tormenta.
+#   2. Activa RSTP en los dos cores (sw-core-1 con prioridad 4096, sw-core-2 con 8192: core-1 debe ser la raíz).
+#   3. Espera la convergencia, captura BPDU en el enlace entre cores y guarda `ovs-appctl rstp/show`.
+#   4. Vuelve a medir los paquetes por segundo (no debe haber tormenta).
+#   5. DESACTIVA RSTP aunque algo falle (salvo -e dejar_rstp=true) y da el veredicto.
+# Veredicto: BPDU recibidos = core-2 NO se declara raíz (reconoce a core-1). Si los dos se declaran raíz, los BPDU no pasan.
+
+- name: Antes de empezar, ningún switch en tormenta
+  hosts: switches
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    umbral_tormenta_pps: 2000
+  tasks:
+    - name: Medir paquetes por segundo
+      ansible.builtin.script:
+        cmd: "tasas_puertos.py {{ bridge }} 5 {{ umbral_tormenta_pps }}"
+        executable: /usr/bin/python3
+      register: antes
+      changed_when: false
+      tags: [rstp_prueba]
+
+    - name: Sin tormenta antes de tocar nada
+      ansible.builtin.assert:
+        that: "'tormenta=no' in antes.stdout"
+        fail_msg: "{{ inventory_hostname }} ya está en tormenta: no se activa nada. Freno: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true"
+        quiet: true
+      tags: [rstp_prueba]
+
+- name: Probar RSTP entre los dos cores
+  hosts: cores
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    dejar_rstp: false
+    espera_s: 12                     # convergencia de RSTP (con valores por defecto, unos segundos)
+    nic_entre_cores: ens7            # enlace sw-core-1 (ens7) <-> sw-core-2 (ens7)
+    prioridad_rstp: {sw-core-1: 4096, sw-core-2: 8192}
+    umbral_tormenta_pps: 2000
+  tasks:
+    - name: tcpdump (para ver los BPDU)
+      ansible.builtin.apt:
+        name: tcpdump
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      tags: [rstp_prueba]
+
+    - name: Activar RSTP y comprobar; desactivarlo al final aunque falle algo
+      block:
+        - name: Activar RSTP en este core
+          ansible.builtin.command: >-
+            ovs-vsctl set Bridge {{ bridge }} rstp_enable=true other_config:rstp-priority={{ prioridad_rstp[inventory_hostname] }}
+          changed_when: true
+          tags: [rstp_prueba]
+
+        - name: Esperar la convergencia
+          ansible.builtin.pause:
+            seconds: "{{ espera_s }}"
+          tags: [rstp_prueba]
+
+        - name: Capturar BPDU en el enlace entre cores (8 s o 3 BPDU)
+          ansible.builtin.shell: timeout 8 tcpdump -ni {{ nic_entre_cores }} -c 3 stp 2>&1
+          register: bpdu
+          changed_when: false
+          failed_when: false
+          tags: [rstp_prueba]
+
+        - name: Estado de RSTP de este core
+          ansible.builtin.command: ovs-appctl rstp/show {{ bridge }}
+          register: rstp
+          changed_when: false
+          tags: [rstp_prueba]
+
+        - name: Paquetes por segundo con RSTP activo
+          ansible.builtin.script:
+            cmd: "tasas_puertos.py {{ bridge }} 5 {{ umbral_tormenta_pps }}"
+            executable: /usr/bin/python3
+          register: despues
+          changed_when: false
+          tags: [rstp_prueba]
+
+        - name: Guardar qué se vio en este core
+          ansible.builtin.set_fact:
+            vi_bpdu: "{{ bpdu.stdout is search('BPDU|STP|RSTP|Config|Root') }}"
+            se_cree_raiz: "{{ 'This bridge is the root' in rstp.stdout }}"
+            tormenta: "{{ 'tormenta=si' in despues.stdout }}"
+          tags: [rstp_prueba]
+
+      always:
+        - name: Desactivar RSTP (salvo dejar_rstp=true)
+          ansible.builtin.shell: |
+            ovs-vsctl set Bridge {{ bridge }} rstp_enable=false
+            ovs-vsctl --if-exists remove Bridge {{ bridge }} other_config rstp-priority
+          when: not (dejar_rstp | bool)
+          changed_when: true
+          tags: [rstp_prueba]
+
+- name: Veredicto de la prueba
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Lo que se vio en cada core
+      ansible.builtin.debug:
+        msg:
+          - "sw-core-1: BPDU capturados={{ hostvars['sw-core-1'].vi_bpdu }}, se declara raíz={{ hostvars['sw-core-1'].se_cree_raiz }}, tormenta={{ hostvars['sw-core-1'].tormenta }}"
+          - "sw-core-2: BPDU capturados={{ hostvars['sw-core-2'].vi_bpdu }}, se declara raíz={{ hostvars['sw-core-2'].se_cree_raiz }}, tormenta={{ hostvars['sw-core-2'].tormenta }}"
+          - "rstp/show de sw-core-2: {{ hostvars['sw-core-2'].rstp.stdout_lines }}"
+          - "tcpdump en sw-core-2: {{ hostvars['sw-core-2'].bpdu.stdout_lines[-4:] }}"
+      tags: [rstp_prueba]
+
+    - name: Sin tormenta durante la prueba
+      ansible.builtin.assert:
+        that: not (hostvars['sw-core-1'].tormenta | bool) and not (hostvars['sw-core-2'].tormenta | bool)
+        fail_msg: "TORMENTA durante la prueba: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true"
+        quiet: true
+      tags: [rstp_prueba]
+
+    - name: "VEREDICTO: los BPDU atraviesan la red (core-1 es la raíz y core-2 la reconoce)"
+      ansible.builtin.assert:
+        that:
+          - hostvars['sw-core-1'].se_cree_raiz | bool
+          - not (hostvars['sw-core-2'].se_cree_raiz | bool)
+        fail_msg: >-
+          Los BPDU NO llegan: sw-core-2 también se declara raíz. RSTP no cerraría ningún lazo en esta red.
+          Alternativa: un solo uplink por acceso (sin lazos físicos). Pásame la salida de arriba.
+        success_msg: "RSTP funciona entre los cores: sw-core-1 es la raíz y sw-core-2 la reconoce. Se puede extender a los 5 switches."
+      tags: [rstp_prueba]

@@ -61,3 +61,17 @@ def test_los_playbooks_de_diagnostico_y_freno_son_yaml_valido_y_el_freno_exige_c
     for tarea in diag[0]["tasks"]:                    # el diagnóstico no usa ningún módulo que cambie estado
         assert not any(k in tarea for k in ("ansible.builtin.copy", "ansible.builtin.template", "ansible.builtin.service"))
     assert "confirmar" in str(freno[0]["tasks"][0])   # el freno se niega sin -e confirmar=true
+
+
+def test_la_prueba_de_rstp_se_limita_a_los_cores_y_siempre_la_desactiva():
+    import pytest
+    yaml = pytest.importorskip("yaml")
+    texto = open(os.path.join(AQUI, "96_prueba_rstp.yml"), encoding="utf-8").read()
+    plays = yaml.safe_load(texto)
+    cores = next(p for p in plays if p["name"].startswith("Probar RSTP"))
+    assert cores["hosts"] == "cores"                       # los accesos y el borde no se tocan
+    bloque = next(t for t in cores["tasks"] if "block" in t)
+    assert "rstp_enable=true" in str(bloque["block"][0]) and "rstp_enable=false" in str(bloque["always"][0])
+    assert "dejar_rstp" in bloque["always"][0]["when"]     # solo se deja activo si se pide
+    assert plays[0]["hosts"] == "switches" and plays[0].get("any_errors_fatal")       # se detiene si ya hay tormenta
+    assert "ansible.builtin.copy" not in texto and "set-controller" not in texto      # no instala nada ni mueve controladores
