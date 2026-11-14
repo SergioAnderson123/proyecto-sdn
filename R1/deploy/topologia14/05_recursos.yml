@@ -14,36 +14,35 @@
           disco_gb: "{{ (((ansible_mounts | selectattr('mount', 'equalto', '/') | map(attribute='size_total') | first) | float) / 1073741824) | round(1) }}"
         d: "{{ diseno[inventory_hostname] }}"
 
+    - name: Que recursos quedan bajo el minimo y bajo el diseño
+      ansible.builtin.set_fact:
+        bajo_min: "{{ (['vCPU'] if medida.vcpu | int < d.vcpu_min else []) + (['RAM'] if medida.ram_gb | float < d.ram_min_gb * ram_tolerancia else []) + (['disco'] if medida.disco_gb | float < d.disco_min_gb else []) }}"
+        bajo_diseno: "{{ (['vCPU'] if medida.vcpu | int < d.vcpu else []) + (['RAM'] if medida.ram_gb | float < d.ram_gb * ram_tolerancia else []) + (['disco'] if medida.disco_gb | float < d.disco_gb else []) }}"
+
     - name: Veredicto de esta VM
       ansible.builtin.set_fact:
-        veredicto: >-
-          {{ 'BAJO EL MINIMO' if (medida.vcpu | int < d.vcpu_min
-                                  or medida.ram_gb | float < d.ram_min_gb * ram_tolerancia
-                                  or medida.disco_gb | float < d.disco_min_gb)
-             else ('bajo el diseño' if (medida.vcpu | int < d.vcpu
-                                        or medida.ram_gb | float < d.ram_gb * ram_tolerancia
-                                        or medida.disco_gb | float < d.disco_gb)
-                   else 'OK') }}
+        veredicto: "{{ ('BAJO EL MINIMO (' ~ (bajo_min | join(', ')) ~ ')') if bajo_min | length > 0 else (('bajo el diseño (' ~ (bajo_diseno | join(', ')) ~ ')') if bajo_diseno | length > 0 else 'OK') }}"
 
 - name: Informe de recursos
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
+    nl: "\n"
     lineas: >-
       {%- set out = [] -%}
       {%- for h in groups['all'] if hostvars[h].medida is defined -%}
       {%- set m = hostvars[h].medida -%}{%- set d = diseno[h] -%}
       {%- set _ = out.append('%-13s vCPU %s (diseño %s, mín %s) | RAM %s GiB (diseño %s, mín %s) | disco %s GB (diseño %s, mín %s) | %s' % (h, m.vcpu, d.vcpu, d.vcpu_min, m.ram_gb, d.ram_gb, d.ram_min_gb, m.disco_gb, d.disco_gb, d.disco_min_gb, hostvars[h].veredicto)) -%}
       {%- endfor -%}
-      {{ out | join('\n') }}
+      {{ out | join(nl) }}
   tasks:
     - name: Mostrar el informe
       ansible.builtin.debug:
-        msg: "{{ lineas.split('\n') }}"
+        msg: "{{ lineas.split(nl) }}"
 
     - name: Guardar el informe en ~/recursos_vm.txt
       ansible.builtin.copy:
         dest: "{{ lookup('env', 'HOME') }}/recursos_vm.txt"
-        content: "{{ lineas }}\n"
+        content: "{{ lineas }}{{ nl }}"
         mode: "0644"
