@@ -71,3 +71,25 @@ def test_el_arp_de_la_tabla_0_no_choca_con_el_mapa_de_prioridades():
     assert mapa["reenvio_arp"] == ip.PRIO_ARP_TABLA0
     usadas = [v for k, v in mapa.items() if isinstance(v, int) and k not in ("tabla_rol", "tabla_cuarentena", "cuarentena")]
     assert usadas.count(ip.PRIO_ARP_TABLA0) == 1             # nadie más usa 40003
+
+
+class _OnosFalso:
+    """Responde /devices/<id>/ports como la API de ONOS."""
+    def __init__(self, puertos):
+        self.puertos = puertos
+
+    def get(self, ruta):
+        dev = ruta.split("/")[2]
+        return {"ports": [{"element": dev, "port": p, "isEnabled": ok} for p, ok in self.puertos[dev]]}
+
+
+def test_puertos_de_acceso_por_rest_excluye_troncales_local_y_deshabilitados():
+    puertos = {B: [("1", True), ("2", True), ("3", True), ("LOCAL", True)],
+               C1: [("5", True), ("6", True), ("7", True), ("9", True), ("1", True), ("8", False)],
+               C2: [("5", True), ("6", True), ("7", True), ("9", True)], A1: [("1", True), ("5", True), ("6", True)],
+               A2: [("1", True), ("5", True), ("6", True)]}
+    acceso = ip.puertos_acceso_rest(_OnosFalso(puertos), LINKS)
+    assert acceso[A1] == [1] and acceso[A2] == [1]            # solo el puerto del host: los otros dos son troncales
+    assert acceso[B] == [3]                                    # LOCAL fuera, 1 y 2 son troncales
+    assert acceso[C1] == [1]                                   # 8 deshabilitado fuera
+    assert C2 not in acceso                                    # sin puertos de acceso

@@ -1,0 +1,66 @@
+# Reenvío proactivo (sin NORMAL ni STP) en UN switch, por fases. Corre en switch-borde con el código del repositorio; habla con ONOS por REST.
+#   PLAYBOOK=60_proactivo.yml ./lanzar.sh -e fase=B -e dispositivo=acc-1                  # simula (no toca nada)
+#   PLAYBOOK=60_proactivo.yml ./lanzar.sh -e fase=B -e dispositivo=acc-1 -e aplicar=true  # instala la tabla 60 (nadie llega a ella todavía)
+#   PLAYBOOK=60_proactivo.yml ./lanzar.sh -e fase=C -e dispositivo=acc-1 -e aplicar=true  # la tabla 0 manda el ARP a la tabla 60 (actúa)
+#   PLAYBOOK=60_proactivo.yml ./lanzar.sh -e fase=quitar -e aplicar=true                  # borra TODO lo instalado (cualquier switch)
+# dispositivo: acc-1, acc-2, core-1, core-2 o borde (o un deviceId). Un switch por ejecución.
+#
+# Seguridad (diseño en docs/DISENO_FLUJOS_PROACTIVOS.md): el script se detiene si ONOS no ve los 14 enlaces esperados, si algún árbol no es
+# válido, si algún flujo generado inundaría (NORMAL/FLOOD/ALL), o si se pide la fase C sin la B. Sin `aplicar=true` solo imprime.
+# Después de CADA ejecución con aplicar=true, este playbook mide los paquetes por segundo del switch y avisa si hay tormenta.
+- name: Reenvío proactivo por fases
+  hosts: switch-borde
+  gather_facts: false
+  vars:
+    fase: B
+    dispositivo: ""
+    aplicar: false
+    onos_url: "http://{{ onos_ip }}:8181"
+    carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
+  tasks:
+    - name: La fase debe ser B, C o quitar
+      ansible.builtin.assert:
+        that: fase in ['B', 'C', 'quitar']
+        fail_msg: "fase debe ser B, C o quitar (ahora: {{ fase }})"
+        quiet: true
+      tags: [proactivo]
+
+    - name: Ejecutar el instalador
+      ansible.builtin.command:
+        cmd: "python3 instalar_proactivo.py --onos {{ onos_url }} --fase {{ fase }}{{ (' --dispositivo ' ~ dispositivo) if dispositivo != '' else '' }}{{ ' --aplicar' if (aplicar | bool) else '' }}"
+        chdir: "{{ carpeta_codigo }}"
+      register: instalador
+      changed_when: aplicar | bool
+      failed_when: instalador.rc != 0 or 'DETENIDO' in instalador.stdout
+      tags: [proactivo]
+
+    - name: Lo que hizo (o haría) el instalador
+      ansible.builtin.debug:
+        var: instalador.stdout_lines
+      tags: [proactivo]
+
+- name: Medir tormenta tras instalar (solo con aplicar=true)
+  hosts: switches
+  become: true
+  gather_facts: false
+  vars:
+    fase: B
+    aplicar: false
+    umbral_tormenta_pps: 2000
+  tasks:
+    - name: Paquetes por segundo
+      ansible.builtin.script:
+        cmd: "tasas_puertos.py {{ bridge }} 5 {{ umbral_tormenta_pps }}"
+        executable: /usr/bin/python3
+      register: medida
+      changed_when: false
+      when: aplicar | bool
+      tags: [proactivo]
+
+    - name: "Sin tormenta en {{ inventory_hostname }}"
+      ansible.builtin.assert:
+        that: "'tormenta=no' in medida.stdout"
+        fail_msg: "TORMENTA en {{ inventory_hostname }}: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true   y luego   PLAYBOOK=60_proactivo.yml ./lanzar.sh -e fase=quitar -e aplicar=true"
+        quiet: true
+      when: aplicar | bool
+      tags: [proactivo]

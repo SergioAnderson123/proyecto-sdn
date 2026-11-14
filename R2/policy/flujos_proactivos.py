@@ -9,9 +9,15 @@ Lo que no tiene regla (broadcast, multicast, destinos desconocidos) cae en un de
 from typing import Dict, Iterable, List
 
 import caminos
-from policy_tables import _base
 
 TABLA_REENVIO = 60
+
+
+def _base(dpid: str, tabla: int, prioridad: int, criterios: list, instrucciones: list) -> dict:
+    """Mismo formato que policy_tables._base (copiado para no depender de httpx/yaml en el borde)."""
+    return {"priority": prioridad, "timeout": 0, "isPermanent": True, "deviceId": dpid, "tableId": tabla,
+            "treatment": {"instructions": instrucciones}, "selector": {"criteria": criterios}}
+
 PRIO_UNICAST = 100
 PRIO_DESCARTE = 1
 

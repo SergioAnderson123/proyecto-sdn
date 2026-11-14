@@ -95,6 +95,19 @@ class Onos:
         return self._pedir("DELETE", f"/flows/application/{APP_ID}")
 
 
+def puertos_acceso_rest(onos, links):
+    """{dispositivo: [puertos]} sin pedir nada a mano: los puertos numéricos habilitados de cada switch menos los que tienen un enlace."""
+    grafo = c.grafo_desde_links(links)
+    troncales = {(d, p) for d, v in grafo.items() for _, p in v}
+    acceso = {}
+    for d in grafo:
+        for pt in onos.get(f"/devices/{d}/ports").get("ports", []):
+            num = str(pt.get("port", ""))
+            if num.isdigit() and pt.get("isEnabled") and (d, int(num)) not in troncales:
+                acceso.setdefault(d, []).append(int(num))
+    return acceso
+
+
 def fase_b_instalada(onos, dpid, esperados):
     """¿Están ya en ONOS los flujos de la fase B de este switch (mismo appId, tabla 60)?"""
     actuales = [f for f in onos.get(f"/flows/{dpid}").get("flows", [])
@@ -108,7 +121,7 @@ def main(argv=None):
     a.add_argument("--dispositivo", help="nombre (acc-1, acc-2, core-1, core-2, borde) o deviceId; obligatorio salvo en 'quitar'")
     a.add_argument("--onos", default="http://localhost:8181")
     a.add_argument("--usuario", default="onos:rocks")
-    a.add_argument("--edge", default="edge_ports.txt", help="salida del comando `edge-ports` de la consola de ONOS")
+    a.add_argument("--edge", default=None, help="opcional: archivo con la salida de `edge-ports`; si no, se leen los puertos por la API de ONOS")
     a.add_argument("--enlaces", type=int, default=14, help="entradas de /links esperadas (7 cables x 2 sentidos)")
     a.add_argument("--aplicar", action="store_true", help="sin esta bandera solo se simula")
     arg = a.parse_args(argv)
@@ -123,10 +136,13 @@ def main(argv=None):
         if not arg.dispositivo:
             raise Detener("--dispositivo es obligatorio: se instala en un solo switch a la vez.")
         dpid = resolver_dispositivo(arg.dispositivo)
-        plan = construir_plan(onos.get("/links")["links"], hosts_de_onos(onos.get("/hosts")), puertos_acceso_de(arg.edge), dpid, arg.fase,
-                              arg.enlaces)
+        links = onos.get("/links")["links"]
+        hosts = hosts_de_onos(onos.get("/hosts"))
+        acceso = puertos_acceso_de(arg.edge) if arg.edge else puertos_acceso_rest(onos, links)
+        print("Puertos de acceso:", {NOMBRES.get(d, d): sorted(p) for d, p in acceso.items()})
+        plan = construir_plan(links, hosts, acceso, dpid, arg.fase, arg.enlaces)
         if arg.fase == "C":
-            b = construir_plan(onos.get("/links")["links"], hosts_de_onos(onos.get("/hosts")), puertos_acceso_de(arg.edge), dpid, "B", arg.enlaces)
+            b = construir_plan(links, hosts, acceso, dpid, "B", arg.enlaces)
             if not fase_b_instalada(onos, dpid, len(b)):
                 raise Detener(f"La fase B de {dpid} no está instalada ({len(b)} flujos en la tabla 60). Instálala antes de la C.")
         print(f"Fase {arg.fase} en {dpid}: {len(plan)} flujos ({'SE INSTALAN' if arg.aplicar else 'simulación'})")
