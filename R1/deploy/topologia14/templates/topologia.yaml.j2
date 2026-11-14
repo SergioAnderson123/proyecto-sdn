@@ -1,0 +1,37 @@
+# Generado por R1/deploy/topologia14/50_sensores.yml. No editar a mano: se regenera en cada ejecucion.
+# Diseno de perimetro: el espejo vive en switch-borde y llega a los DOS sensores (ens5 de cada uno), asi que ambos ven todo el trafico
+# norte-sur y, si uno cae, el otro mantiene la cobertura. Puertos por NOMBRE; R5 los resuelve contra ONOS (portName).
+onos:
+  urls:
+    - http://{{ onos_ip }}:8181/onos/v1
+
+policy_mapper:
+  urls:
+    - http://{{ onos_ip }}:5000
+
+redes:
+  home: [{{ red_home }}]
+  externa: [{{ red_externa }}]          # PENDIENTE: red del atacante (ens4 de vm-atacante). 203.0.113.0/24 es la propuesta del repo
+  control: [{{ red_control }}]          # red de gestion (roja): R5 nunca la bloquea ni la espeja
+  lista_blanca:
+    - 10.0.0.40/32
+    - 10.0.0.50/32
+    - 10.0.0.60/32
+    - 10.0.0.250/32
+
+sensores: [node-sec-1, node-sec-2]
+
+cores:
+  - nombre: switch-borde
+    device: {{ hostvars['switch-borde'].dpid }}
+    entradas: [{{ entradas_borde | join(', ') }}]
+    espejo:
+      node-sec-1: {puerto: {{ puerto_borde_sec1 }}, mac: "{{ hostvars['node-sec-1'].ansible_facts[nic_borde].macaddress }}"}
+      node-sec-2: {puerto: {{ puerto_borde_sec2 }}, mac: "{{ hostvars['node-sec-2'].ansible_facts[nic_borde].macaddress }}"}
+
+# Solo para mostrar nombres en r5ctl
+accesos:
+  - {nombre: sw-core-1, device: {{ hostvars['sw-core-1'].dpid }}}
+  - {nombre: sw-core-2, device: {{ hostvars['sw-core-2'].dpid }}}
+  - {nombre: sw-acc-1, device: {{ hostvars['sw-acc-1'].dpid }}}
+  - {nombre: sw-acc-2, device: {{ hostvars['sw-acc-2'].dpid }}}

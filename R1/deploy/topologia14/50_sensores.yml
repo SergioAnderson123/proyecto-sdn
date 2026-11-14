@@ -1,0 +1,109 @@
+# Fase 2: los dos sensores IDS (R5). Docker, repo, topologia.yaml y .env generados, y R5/deploy/ids/up.sh (Suricata + integrador + espejo).
+#   ./lanzar.sh --tags sensores            todo
+#   ./lanzar.sh --tags sensores_config     solo genera y valida topologia.yaml y .env (no levanta nada)
+# Diseno: espejo en switch-borde hacia los DOS sensores (perimetro, con redundancia). Requiere ONOS arriba y los 5 switches conectados.
+# Las etiquetas van en cada tarea (las del play se heredan a todas y romperian sensores_config).
+
+- name: Leer el deviceId (datapath_id) de cada switch
+  hosts: switches
+  become: true
+  gather_facts: false
+  tasks:
+    - name: datapath_id de br0
+      ansible.builtin.command: ovs-vsctl get bridge {{ bridge }} datapath_id
+      register: dp
+      changed_when: false
+      tags: [sensores, sensores_config]
+
+    - name: Guardar el deviceId de ONOS
+      ansible.builtin.set_fact:
+        dpid: "of:{{ dp.stdout | replace('\"', '') | trim }}"
+      tags: [sensores, sensores_config]
+
+- name: Preparar y levantar los sensores
+  hosts: sec
+  gather_facts: true
+  gather_subset: ['!all', 'network']
+  tasks:
+    - name: La NIC de espejo hacia el borde existe en los dos sensores
+      ansible.builtin.assert:
+        that: ansible_facts[nic_borde] is defined
+        fail_msg: "{{ inventory_hostname }}: no existe la interfaz {{ nic_borde }}"
+        quiet: true
+      tags: [sensores, sensores_config]
+
+    - name: Paquetes (Docker, git, PyYAML, ethtool)
+      become: true
+      ansible.builtin.apt:
+        name: [docker.io, docker-compose-v2, git, curl, python3-yaml, ethtool, ca-certificates]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      tags: [sensores, sensores_config]
+
+    - name: Docker arrancado y habilitado
+      become: true
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+      tags: [sensores]
+
+    - name: Clonar o actualizar el repo
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ repo_dir }}"
+        version: "{{ repo_rama }}"
+        update: true
+        force: false
+      tags: [sensores, sensores_config]
+
+    - name: Scripts ejecutables
+      ansible.builtin.file:
+        path: "{{ repo_dir }}/R5/deploy/ids/{{ item }}"
+        mode: "0755"
+      loop: [up.sh, macs.sh]
+      tags: [sensores, sensores_config]
+
+    - name: topologia.yaml de este slice
+      ansible.builtin.template:
+        src: topologia.yaml.j2
+        dest: "{{ repo_dir }}/R5/deploy/topologia.yaml"
+        mode: "0644"
+      tags: [sensores, sensores_config]
+
+    - name: .env de este sensor
+      ansible.builtin.template:
+        src: r5.env.j2
+        dest: "{{ repo_dir }}/R5/deploy/.env"
+        mode: "0600"
+      tags: [sensores, sensores_config]
+
+    - name: Validar topologia.yaml con el validador de R5
+      ansible.builtin.command: python3 ../codigo/topologia.py topologia.yaml
+      args:
+        chdir: "{{ repo_dir }}/R5/deploy"
+      register: valida
+      changed_when: false
+      tags: [sensores, sensores_config]
+
+    - name: Resultado de la validacion
+      ansible.builtin.debug:
+        msg: "{{ valida.stdout }}"
+      tags: [sensores, sensores_config]
+
+    - name: Levantar Suricata, el integrador y el espejo (up.sh)
+      become: true
+      ansible.builtin.command: bash up.sh
+      args:
+        chdir: "{{ repo_dir }}/R5/deploy/ids"
+      async: 2400
+      poll: 20
+      register: up
+      changed_when: true
+      tags: [sensores]
+
+    - name: Ultimas lineas de up.sh
+      ansible.builtin.debug:
+        msg: "{{ up.stdout_lines[-15:] }}"
+      tags: [sensores]

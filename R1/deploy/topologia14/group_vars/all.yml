@@ -13,6 +13,16 @@ repo_dir: /home/ubuntu/proyecto-sdn
 libre_minimo_mb: 2800            # el despliegue se detiene si hay menos libre que esto
 liberar_firmware: false          # true = purga linux-firmware (~600 MB). Es opcional: solo si falta espacio
 
+# --- Sensores IDS (R5) ---
+red_home: 10.0.0.0/24            # campus (HOME_NET de Suricata)
+red_externa: 203.0.113.0/24      # PENDIENTE: red del atacante (ens4 de vm-atacante); propuesta del repo (rango de documentacion)
+red_control: 192.168.201.0/24    # red de gestion (roja): lista blanca de R5
+ids_ifaces: ens5                 # NIC de espejo de cada sensor: ens5 = hacia switch-borde (perimetro). ens4 = hacia su core (fase 2)
+nic_borde: ens5                  # NIC del sensor cuya MAC recibe el espejo del borde
+entradas_borde: [ens4, ens6, ens7]   # puertos del borde por donde entra trafico (atacante y cores); no incluye los de espejo
+puerto_borde_sec1: ens8          # puerto del borde hacia node-sec-1 (segun el dibujo oficial; verificar con arping/tcpdump)
+puerto_borde_sec2: ens9          # puerto del borde hacia node-sec-2
+
 # Tamaño de cada VM segun la tabla de dimensionamiento del informe previo (Lab 6): valor de diseño y mínimo con el que el piloto funciona.
 # Lo usa 05_recursos.yml. vm-atacante no esta en el inventario (no tiene red de gestión): se mide a mano.
 ram_tolerancia: 0.9              # el SO reserva ~5-8 % de la RAM: 1,9 GiB cuenta como "2 GB"

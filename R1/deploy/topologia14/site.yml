@@ -11,3 +11,4 @@
   tags: [switches]
 - import_playbook: 90_estado.yml
   tags: [estado]
+- import_playbook: 50_sensores.yml
