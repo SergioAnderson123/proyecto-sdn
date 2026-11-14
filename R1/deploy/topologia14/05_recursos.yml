@@ -1,0 +1,49 @@
+# Tamaño real de cada VM (vCPU, RAM y disco) frente al diseño del informe previo. Solo mide: no cambia nada.
+# Deja el informe en ~/recursos_vm.txt del nodo de control (evidencia del criterio "recursos definidos en el diseño").
+#   ./lanzar.sh --tags recursos
+- name: Medir los recursos de cada VM
+  hosts: all
+  gather_facts: true
+  gather_subset: ['!all', 'hardware']
+  tasks:
+    - name: Resultado de esta VM
+      ansible.builtin.set_fact:
+        medida:
+          vcpu: "{{ ansible_processor_vcpus }}"
+          ram_gb: "{{ ((ansible_memtotal_mb | float) / 1024) | round(2) }}"
+          disco_gb: "{{ (((ansible_mounts | selectattr('mount', 'equalto', '/') | map(attribute='size_total') | first) | float) / 1073741824) | round(1) }}"
+        d: "{{ diseno[inventory_hostname] }}"
+
+    - name: Veredicto de esta VM
+      ansible.builtin.set_fact:
+        veredicto: >-
+          {{ 'BAJO EL MINIMO' if (medida.vcpu | int < d.vcpu_min
+                                  or medida.ram_gb | float < d.ram_min_gb * ram_tolerancia
+                                  or medida.disco_gb | float < d.disco_min_gb)
+             else ('bajo el diseño' if (medida.vcpu | int < d.vcpu
+                                        or medida.ram_gb | float < d.ram_gb * ram_tolerancia
+                                        or medida.disco_gb | float < d.disco_gb)
+                   else 'OK') }}
+
+- name: Informe de recursos
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lineas: >-
+      {%- set out = [] -%}
+      {%- for h in groups['all'] if hostvars[h].medida is defined -%}
+      {%- set m = hostvars[h].medida -%}{%- set d = diseno[h] -%}
+      {%- set _ = out.append('%-13s vCPU %s (diseño %s, mín %s) | RAM %s GiB (diseño %s, mín %s) | disco %s GB (diseño %s, mín %s) | %s' % (h, m.vcpu, d.vcpu, d.vcpu_min, m.ram_gb, d.ram_gb, d.ram_min_gb, m.disco_gb, d.disco_gb, d.disco_min_gb, hostvars[h].veredicto)) -%}
+      {%- endfor -%}
+      {{ out | join('\n') }}
+  tasks:
+    - name: Mostrar el informe
+      ansible.builtin.debug:
+        msg: "{{ lineas.split('\n') }}"
+
+    - name: Guardar el informe en ~/recursos_vm.txt
+      ansible.builtin.copy:
+        dest: "{{ lookup('env', 'HOME') }}/recursos_vm.txt"
+        content: "{{ lineas }}\n"
+        mode: "0644"

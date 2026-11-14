@@ -12,3 +12,21 @@ repo_dir: /home/ubuntu/proyecto-sdn
 # Disco (los nodos de VNRT traen 5,9 GB con ~3,1 GB libres). El stack completo pide unos 3 GB.
 libre_minimo_mb: 2800            # el despliegue se detiene si hay menos libre que esto
 liberar_firmware: false          # true = purga linux-firmware (~600 MB). Es opcional: solo si falta espacio
+
+# Tamaño de cada VM segun la tabla de dimensionamiento del informe previo (Lab 6): valor de diseño y mínimo con el que el piloto funciona.
+# Lo usa 05_recursos.yml. vm-atacante no esta en el inventario (no tiene red de gestión): se mide a mano.
+ram_tolerancia: 0.9              # el SO reserva ~5-8 % de la RAM: 1,9 GiB cuenta como "2 GB"
+diseno:
+  node-ctrl-1:  {vcpu: 4, vcpu_min: 2, ram_gb: 8, ram_min_gb: 4, disco_gb: 20, disco_min_gb: 15}
+  node-ctrl-2:  {vcpu: 4, vcpu_min: 2, ram_gb: 8, ram_min_gb: 4, disco_gb: 20, disco_min_gb: 15}
+  node-ctrl-3:  {vcpu: 4, vcpu_min: 2, ram_gb: 8, ram_min_gb: 4, disco_gb: 20, disco_min_gb: 15}
+  switch-borde: {vcpu: 1, vcpu_min: 1, ram_gb: 1, ram_min_gb: 1, disco_gb: 10, disco_min_gb: 8}    # gateway del informe
+  sw-core-1:    {vcpu: 2, vcpu_min: 1, ram_gb: 2, ram_min_gb: 1, disco_gb: 10, disco_min_gb: 8}
+  sw-core-2:    {vcpu: 2, vcpu_min: 1, ram_gb: 2, ram_min_gb: 1, disco_gb: 10, disco_min_gb: 8}
+  sw-acc-1:     {vcpu: 2, vcpu_min: 1, ram_gb: 2, ram_min_gb: 1, disco_gb: 10, disco_min_gb: 8}
+  sw-acc-2:     {vcpu: 2, vcpu_min: 1, ram_gb: 2, ram_min_gb: 1, disco_gb: 10, disco_min_gb: 8}
+  server:       {vcpu: 2, vcpu_min: 1, ram_gb: 2, ram_min_gb: 1, disco_gb: 10, disco_min_gb: 8}
+  node-sec-1:   {vcpu: 2, vcpu_min: 2, ram_gb: 4, ram_min_gb: 2, disco_gb: 20, disco_min_gb: 10}
+  node-sec-2:   {vcpu: 2, vcpu_min: 2, ram_gb: 4, ram_min_gb: 2, disco_gb: 20, disco_min_gb: 10}
+  h1-profesor:  {vcpu: 2, vcpu_min: 1, ram_gb: 2, ram_min_gb: 2, disco_gb: 10, disco_min_gb: 10}
+  h2-alumno:    {vcpu: 1, vcpu_min: 1, ram_gb: 1, ram_min_gb: 1, disco_gb: 10, disco_min_gb: 8}
