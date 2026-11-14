@@ -1,0 +1,27 @@
+# Lista las MAC de todas las interfaces de cada VM (y el datapath de los switches). SOLO LECTURA, no envía tráfico.
+#   PLAYBOOK=97_macs.yml ./lanzar.sh
+# Sirve para cruzar cada VM con los nodos y enlaces de la interfaz web de VNRT: cada ventana de un nodo lista, por "Enlace N", la MAC de la
+# NIC de ESE nodo; la misma MAC aquí identifica la VM, y el mismo número de enlace en dos ventanas son los dos extremos de un cable.
+- name: MAC de cada interfaz
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Interfaces ensN con su MAC
+      ansible.builtin.shell: ip -br link | awk '$1 ~ /^ens/ {print $1, $3}'
+      register: macs
+      changed_when: false
+      tags: [macs]
+
+    - name: Datapath del bridge (solo switches)
+      ansible.builtin.command: ovs-vsctl get bridge {{ bridge }} datapath_id
+      register: dpid
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname in groups['switches']
+      tags: [macs]
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ [inventory_hostname ~ '  ' ~ ansible_host | default('local')] + macs.stdout_lines + (['datapath_id=' ~ (dpid.stdout | default('') | trim)] if dpid.stdout is defined else []) }}"
+      tags: [macs]
