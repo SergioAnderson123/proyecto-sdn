@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#fff3e9">
+  <title>Campus | Bienvenido a la red</title>
+  <style>
+    :root{--accent:#d47a3c;--accent-dark:#a95522;--tint:#fff1e5;--ink:#30251f;--muted:#81736b;--line:#f0e4da;--bg:#fbf8f5}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 50% 0%,#fff0e2 0%,var(--bg) 54%);color:var(--ink);font:16px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-direction:column}
+    a{color:inherit;text-decoration:none}.top{background:rgba(255,255,255,.72);border-bottom:1px solid var(--line)}.nav{max-width:1060px;margin:auto;padding:20px 24px;display:flex;align-items:center;justify-content:space-between;gap:18px}
+    .brand{display:flex;align-items:center;gap:12px;font-weight:750;letter-spacing:-.02em}.mark{width:38px;height:38px;border-radius:12px;background:var(--accent);display:grid;place-items:center;color:white;font-weight:800}.nav small{color:var(--muted)}
+    main{width:min(760px,100% - 40px);margin:auto;padding:72px 0 82px;text-align:center}.welcome-icon{width:74px;height:74px;border-radius:24px;background:white;border:1px solid var(--line);box-shadow:0 10px 28px rgba(120,75,40,.08);display:grid;place-items:center;margin:0 auto 27px;color:var(--accent-dark);font-size:2rem}
+    .eyebrow{color:var(--accent-dark);font-size:.77rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase}h1{font-size:clamp(2.5rem,7vw,4.5rem);line-height:1.04;letter-spacing:-.06em;margin:14px 0 18px}
+    .intro{max-width:570px;margin:0 auto;color:var(--muted);font-size:1.08rem}.connect{margin:36px auto 0;max-width:520px;background:white;border:1px solid var(--line);border-radius:20px;padding:25px;text-align:left;box-shadow:0 14px 38px rgba(120,75,40,.055)}
+    .connect h2{font-size:1.08rem;margin:0 0 7px}.connect p{margin:0;color:var(--muted);font-size:.93rem}.button{display:flex;align-items:center;justify-content:center;margin-top:20px;background:var(--accent);color:white;border-radius:11px;padding:13px 18px;font-weight:750}.button:hover{background:var(--accent-dark)}
+    .terms{margin:17px auto 0;max-width:520px;color:var(--muted);font-size:.8rem}.terms a{color:var(--accent-dark);text-decoration:underline;text-underline-offset:3px}
+    footer{padding:24px;text-align:center;color:var(--muted);font-size:.84rem}
+    @media(max-width:600px){.nav{padding:16px 20px}main{padding:56px 0}.connect{padding:21px}}
+  </style>
+</head>
+<body>
+  <header class="top"><nav class="nav"><a class="brand" href="#"><span class="mark">C</span><span>Campus <small>· Red universitaria</small></span></a><small>Acceso Wi-Fi</small></nav></header>
+  <main>
+    <div class="welcome-icon">⌁</div>
+    <div class="eyebrow">Conectados en el campus</div>
+    <h1>¡Qué bueno tenerte aquí!</h1>
+    <p class="intro">Te damos la bienvenida a la red del campus. Conéctate para acceder a tus recursos académicos y seguir disfrutando de tu experiencia universitaria.</p>
+    <section class="connect">
+      <h2>Acceso a la red Wi-Fi</h2>
+      <p>Para continuar, inicia el proceso de conexión con tus credenciales institucionales. Al conectarte, aceptas las condiciones de uso de la red.</p>
+      <a class="button" href="#">Conectarme a la red →</a>
+    </section>
+    <p class="terms">¿Necesitas ayuda para conectarte? Acude al área de soporte técnico. · <a href="#">Política de uso de red</a></p>
+  </main>
+  <footer>Campus · Red inalámbrica institucional</footer>
+</body>
+</html>

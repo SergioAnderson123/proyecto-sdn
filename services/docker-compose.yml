@@ -1,0 +1,24 @@
+services:
+  alumnos:
+    image: httpd:2.4
+    container_name: s-alumnos
+    ports:
+      - "8081:80"
+    volumes:
+      - ./servidor-alumnos:/usr/local/apache2/htdocs:ro
+
+  notas:
+    image: httpd:2.4
+    container_name: s-notas
+    ports:
+      - "8082:80"
+    volumes:
+      - ./servidor-notas:/usr/local/apache2/htdocs:ro
+
+  portal-cautivo:
+    image: httpd:2.4
+    container_name: s-cautivo
+    ports:
+      - "8083:80"
+    volumes:
+      - ./servidor-cautivo:/usr/local/apache2/htdocs:ro
