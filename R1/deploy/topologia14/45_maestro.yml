@@ -21,8 +21,17 @@
       changed_when: false
       tags: [maestro]
 
+    - name: Controladores actuales
+      ansible.builtin.command: ovs-vsctl get-controller {{ bridge }}
+      register: actuales
+      changed_when: false
+      tags: [maestro]
+
+    # Solo se reconfigura si cambia la lista: set-controller reinicia las conexiones OpenFlow y ONOS vuelve a elegir maestros,
+    # lo que deshacía el device-role justo después (ctrl-1 quedaba con 1 dispositivo de 5).
     - name: Controladores (los tres ONOS)
       ansible.builtin.command: ovs-vsctl set-controller {{ bridge }} {{ controladores_openflow | join(' ') }}
+      when: (actuales.stdout_lines | sort) != (controladores_openflow | sort)
       changed_when: true
       tags: [maestro]
 
@@ -66,16 +75,20 @@
       delay: 6
       tags: [maestro]
 
-    - name: device-role maestro = node-ctrl-1 ({{ ansible_host }}) para cada dispositivo
-      ansible.builtin.command: "{{ ssh_onos }} 'device-role {{ item }} {{ ansible_host }} master'"
-      loop: "{{ dev.json.devices | map(attribute='id') | list }}"
-      changed_when: true
-      tags: [maestro]
-
-    - name: Maestros por nodo (comando masters de ONOS)
-      ansible.builtin.command: "{{ ssh_onos }} masters"
+    - name: "device-role maestro = node-ctrl-1 para cada dispositivo, repetido hasta que ONOS lo asienta (el cambio de maestro es asíncrono)"
+      ansible.builtin.shell: |
+        for d in {{ dev.json.devices | map(attribute='id') | join(' ') }}; do
+          {{ ssh_onos }} "device-role $d {{ ansible_host }} master"
+        done
+        sleep 3
+        {{ ssh_onos }} masters
+      args:
+        executable: /bin/bash
       register: masters
-      changed_when: false
+      until: masters.stdout is search(ansible_host ~ ':\s*' ~ (dev.json.devices | length) ~ ' devices')
+      retries: 10
+      delay: 4
+      changed_when: true
       tags: [maestro]
 
     - name: Reparto de maestros
@@ -85,7 +98,7 @@
 
     - name: node-ctrl-1 es maestro de los 5 switches (si el formato de `masters` difiere, mira la salida de arriba)
       ansible.builtin.assert:
-        that: masters.stdout is search(ansible_host ~ ':\s*5 devices')
+        that: masters.stdout is search(ansible_host ~ ':\s*' ~ (dev.json.devices | length) ~ ' devices')
         fail_msg: "node-ctrl-1 no es maestro de los 5 dispositivos: revisa la salida de `masters`"
         quiet: true
       ignore_errors: true
