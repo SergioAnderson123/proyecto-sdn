@@ -14,7 +14,8 @@ r2:
   tablas: {docente: 10, alumno: 20, soporte: 40, invitado: 50}   # la 30 queda reservada a IoT/MAB
   portal_arp: 40002     # portal cautivo: ARP de quien no tiene sesión (R1 solo lo manda al controlador)
   portal_retorno: 40002 # portal cautivo: reescribe la respuesta del portal al destino original (sobre la confianza de la troncal)
-  portal: 35000         # portal cautivo: tráfico al portal y desvío del HTTP; bajo la sesión, así que con sesión nunca se desvía
+  reenvio_arp: 40003    # reenvío proactivo (topologia14): el ARP de la tabla 0 salta a la tabla 60 (difusión por árbol); sobre la sesión (40001) y el portal (40002)
+  portal: 35000        # portal cautivo: tráfico al portal y desvío del HTTP; bajo la sesión, así que con sesión nunca se desvía
   dhcp: 40500           # DHCP del cliente (UDP 68 -> 67) al controlador, con o sin sesión; sobre la sesión (40001) y bajo la lista negra (45000) y el DROP de R5 (42000)
   cuarentena: 1000      # sin sesión ni otra regla: push de la VLAN de cuarentena y salto a su tabla (solo ARP y portal)
   tabla_cuarentena: 99  # tabla/VLAN de cuarentena (policy.yaml: cuarentena.tabla)
