@@ -15,7 +15,7 @@ Un árbol no tiene ciclos. Si cada switch reenvía **solo con flujos unicast de 
 | Pieza | Qué hace | Estado |
 |---|---|---|
 | `caminos.py` | Grafo desde `GET /onos/v1/links`; árbol de caminos más cortos hacia un destino (desempate: core-1 antes que core-2); `es_arbol`; `flujos_que_inundan` | **hecho + 10 pruebas** |
-| Flujos unicast por host | Para cada host (MAC/IP conocida por `/hosts`), en cada switch: `eth_dst=MAC → output:<puerto del árbol>`; en el switch del host, el puerto de acceso | pendiente |
+| Flujos unicast por host | Para cada host (MAC/IP conocida por `/hosts`), en cada switch: `eth_dst=MAC → output:<puerto del árbol>`; en el switch del host, el puerto de acceso (`flujos_unicast`, + descarte explícito) | **hecho + pruebas** |
 | ARP (difusión) | **Árbol de difusión por flujos** (`flujos_difusion`): por switch y puerto de entrada, salida explícita por los puertos del árbol y de acceso, nunca por el de entrada ni por enlaces fuera del árbol. Un puerto con enlace jamás se trata como de acceso. 5 pruebas con simulador (llega 1 vez a cada switch, sobrevive a la caída de un enlace) | **hecho + pruebas** |
 | ARP (respuesta) | Unicast: la cubren los flujos por destino de la tabla 60 | hecho (mismo generador) |
 | DHCP | Ya va al controlador (prio 40500); la respuesta se devuelve con `packet-out` al puerto del cliente | pendiente |
@@ -38,8 +38,9 @@ Un árbol no tiene ciclos. Si cada switch reenvía **solo con flujos unicast de 
 - Tras las pruebas de failover los 5 switches quedaron con maestro ctrl-2; se devolvieron a ctrl-1 con `--tags maestro`.
 
 ## Puntos por verificar en el entorno real
-- Que ONOS descubra los `links` (LLDP) a través de VNRT; LLDP usa `01:80:c2:00:00:0e`, del mismo rango reservado que EAPOL/BPDU, y puede estar filtrado. Si `links` sale vacío, el árbol se construiría desde la topología declarada en un archivo.
+- (resuelto) ONOS sí descubre los 7 enlaces por LLDP a través de VNRT.
+- Hay que ejecutar `vista_previa.py` con `edge_ports.txt` real (salida de `edge-ports`) antes de instalar nada.
 - EAPOL (recomendación 1, VXLAN) sigue pendiente aparte.
 
 ## Siguiente incremento
-Generador `flujos_unicast(hosts, arboles)` en `policy_tables.py` bajo la bandera, con prueba del invariante sobre la topología de 14 VM; después, ARP desde el controlador.
+Cablear los generadores a `policy_tables.py` bajo la bandera `reenvio: proactivo`: las tablas de rol hacen `goto_table 60` en vez de `OUTPUT NORMAL`, y el ARP de la tabla 0 pasa a `goto_table 60`. Primero solo en `sw-acc-1`, con diagnóstico 95 antes y después. El DHCP sigue yendo al controlador.
