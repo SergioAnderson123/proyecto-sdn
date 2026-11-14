@@ -168,6 +168,15 @@ def descubrir():
 
 
 def main(argv):
+    if os.getenv("TOPOLOGIA"):
+        # Con topologia.yaml, los nodos ONOS salen de ahi (si ONOS_URL no esta definido), como en el integrador y r5ctl. Sin esto el
+        # contenedor `espejo`, que no recibe ONOS_URL, busca ONOS en localhost.
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "codigo"))
+        import topologia
+        try:
+            topologia.aplicar_entorno()
+        except (topologia.TopologiaInvalida, OSError) as e:
+            raise SystemExit(f"topología inválida: {e}")
     if "--descubrir" in argv:
         return descubrir()
     if "--quitar" in argv:

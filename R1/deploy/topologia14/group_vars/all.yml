@@ -6,7 +6,7 @@ onos_user: onos
 onos_pass: rocks
 
 repo_url: https://github.com/SergioAnderson123/proyecto-sdn.git
-repo_rama: master
+repo_rama: topologia14-deploy      # rama con el arreglo de R5/lab/espejo.py (ONOS_URL desde topologia.yaml); volver a master tras el merge
 repo_dir: /home/ubuntu/proyecto-sdn
 
 # Disco (los nodos de VNRT traen 5,9 GB con ~3,1 GB libres). El stack completo pide unos 3 GB.
