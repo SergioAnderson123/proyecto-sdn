@@ -1,0 +1,31 @@
+# Baja el stack de la fase 1 (ONOS de un solo nodo + LDAP + RADIUS + Policy Mapper en node-ctrl-1) antes de formar el clúster.
+#   PLAYBOOK=site_cluster.yml ./lanzar.sh --tags limpiar -e limpiar_clasico=true
+# Por seguridad NO hace nada si no se pasa -e limpiar_clasico=true. Conserva las imágenes de Docker, el repo, el .env y los datos de LDAP
+# (están en R1/shared/ldap/openldap-data, fuera de los contenedores). El estado del ONOS clásico vive dentro de su contenedor y se pierde.
+- name: Bajar el despliegue de un solo nodo
+  hosts: onos_inicial
+  gather_facts: false
+  tasks:
+    - name: Estado antes
+      ansible.builtin.command: docker ps -a --format '{{ '{{.Names}} {{.Status}}' }}'
+      register: antes
+      changed_when: false
+      when: limpiar_clasico | bool
+      tags: [limpiar]
+
+    - name: "docker compose down del proyecto clásico (sin -v: no borra volúmenes ni imágenes)"
+      ansible.builtin.command: docker compose down
+      args:
+        chdir: "{{ repo_dir }}/R1/deploy/controller"
+        removes: "{{ repo_dir }}/R1/deploy/controller/compose.yml"
+      when: limpiar_clasico | bool
+      changed_when: true
+      tags: [limpiar]
+
+    - name: Los puertos de ONOS quedan libres
+      ansible.builtin.shell: "! ss -ltn | grep -E ':(6653|8181|8101)\\s'"
+      args:
+        executable: /bin/bash
+      when: limpiar_clasico | bool
+      changed_when: false
+      tags: [limpiar]

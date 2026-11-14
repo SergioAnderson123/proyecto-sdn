@@ -1,7 +1,7 @@
-# Fase 1a: Docker en el nodo donde correra ONOS (solo node-ctrl-1 por ahora).
+# Fase 1a: Docker en los nodos de control (los tres: en el clúster cada uno lleva ONOS y Atomix).
 # Usa docker.io y docker-compose-v2 de los repos de Ubuntu 24.04 (mas livianos que docker-ce).
 - name: Instalar Docker y git
-  hosts: onos_inicial
+  hosts: ctrl
   become: true
   gather_facts: false
   tasks:

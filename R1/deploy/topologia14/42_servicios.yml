@@ -1,0 +1,104 @@
+# Fase 3b: servicios de R1/R2 (OpenLDAP, FreeRADIUS y Policy Mapper) junto al clúster ONOS, y configuración de ONOS (apps, SADIS, AAA, DHCP).
+#   PLAYBOOK=site_cluster.yml ./lanzar.sh --tags servicios
+# Primero solo en node-ctrl-1 (grupo [servicios]). ONOS corre en la red del host, así que ya no resuelve los nombres del compose:
+# el Policy Mapper llega a ONOS por la IP de gestión, y ONOS llega a SADIS (Policy Mapper) y a RADIUS por la IP de node-ctrl-1.
+# Requiere el clúster formado (40_cluster.yml). No levanta el ONOS del compose clásico (--no-deps).
+
+- name: Servicios R1/R2 en el nodo de servicios
+  hosts: servicios
+  gather_facts: false
+  vars:
+    compose_r1: "{{ repo_dir }}/R1/compose.yml"
+  tasks:
+    - name: Clonar o actualizar el repo
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ repo_dir }}"
+        version: "{{ repo_rama }}"
+        update: true
+        force: false
+      tags: [servicios]
+
+    - name: Scripts ejecutables
+      ansible.builtin.file:
+        path: "{{ repo_dir }}/{{ item }}"
+        mode: "0755"
+      loop:
+        - R1/deploy/controller/up.sh
+        - R1/deploy/controller/init-onos.sh
+      tags: [servicios]
+
+    - name: ".env (no se pisa si ya existe; guarda las claves AGENTE_TOKEN y PORTAL_TOKEN)"
+      ansible.builtin.copy:
+        dest: "{{ repo_dir }}/R1/deploy/.env"
+        mode: "0600"
+        force: false
+        content: |
+          CONTROLLER_IP={{ ansible_host }}
+          ONOS_USER={{ onos_user }}
+          ONOS_PASS={{ onos_pass }}
+      tags: [servicios]
+
+    - name: "LDAP, RADIUS y Policy Mapper (construye imágenes; --no-deps evita levantar el ONOS del compose clásico)"
+      ansible.builtin.shell: |
+        set -a; . {{ repo_dir }}/R1/deploy/.env; set +a
+        export ONOS_HOST={{ ansible_host }}
+        docker compose -p controller -f {{ compose_r1 }} up -d --build --no-deps ldap policy_mapper radius
+        docker update --restart unless-stopped ldap policy_mapper radius
+      args:
+        executable: /bin/bash
+        chdir: "{{ repo_dir }}/R1"
+      async: 2400
+      poll: 20
+      changed_when: true
+      tags: [servicios]
+
+    - name: Los tres contenedores están en marcha
+      ansible.builtin.shell: docker ps --filter name=ldap --filter name=policy_mapper --filter name=radius --format '{{ '{{.Names}} {{.Status}}' }}'
+      register: ps
+      changed_when: false
+      failed_when: ps.stdout_lines | length != 3
+      tags: [servicios]
+
+    - name: "Apps, SADIS, AAA y DHCP en ONOS (por la IP: ONOS ya no está en la red de Docker)"
+      ansible.builtin.command: bash init-onos.sh
+      args:
+        chdir: "{{ repo_dir }}/R1/deploy/controller"
+      environment:
+        ONOS_URL: "http://127.0.0.1:8181/onos/v1"
+        SADIS_URL: "http://{{ ansible_host }}:5000/sadis/%s"
+        RADIUS_IP: "{{ ansible_host }}"
+      register: init
+      failed_when: false
+      changed_when: true
+      async: 1800
+      poll: 20
+      tags: [servicios]
+
+    - name: Últimas líneas de init-onos.sh
+      ansible.builtin.debug:
+        msg: "{{ init.stdout_lines[-14:] }}"
+      tags: [servicios]
+
+    - name: Apps de ONOS
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8181/onos/v1/applications"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: apps
+      tags: [servicios]
+
+    - name: Las apps necesarias están ACTIVE (openflow, sadis, aaa y dhcp)
+      ansible.builtin.assert:
+        that: >-
+          item in (apps.json.applications | selectattr('state', 'equalto', 'ACTIVE') | map(attribute='name') | list)
+        fail_msg: "{{ item }} no está ACTIVE: revisa la salida de init-onos.sh de arriba"
+        quiet: true
+      loop:
+        - org.onosproject.openflow
+        - org.opencord.sadis
+        - org.opencord.aaa
+        - org.onosproject.dhcp
+      tags: [servicios]

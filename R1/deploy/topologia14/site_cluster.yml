@@ -1,0 +1,18 @@
+# Despliegue del clúster ONOS + Atomix de 3 nodos (fase 3). Se lanza con:  PLAYBOOK=site_cluster.yml ./lanzar.sh
+# Antes, una sola vez, bajar el stack de un solo nodo:  PLAYBOOK=site_cluster.yml ./lanzar.sh --tags limpiar -e limpiar_clasico=true
+- import_playbook: 00_comprobar.yml
+  tags: [comprobar]
+- import_playbook: 02_disco.yml
+  tags: [disco]
+- import_playbook: 01_limpiar_clasico.yml
+  tags: [limpiar]
+- import_playbook: 10_docker.yml
+  tags: [docker]
+- import_playbook: 40_cluster.yml
+  tags: [cluster]
+- import_playbook: 42_servicios.yml
+  tags: [servicios]
+- import_playbook: 45_maestro.yml
+  tags: [maestro]
+- import_playbook: 90_estado.yml
+  tags: [estado]

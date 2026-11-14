@@ -29,3 +29,25 @@
           - "Dispositivos: {{ dev.json.devices | length }} (esperados 5)"
           - "Disponibles: {{ dev.json.devices | selectattr('available') | map(attribute='id') | list }}"
           - "Enlaces: {{ lnk.json.links | length }}"
+
+# Clúster (solo informa: en la fase 1, con un solo ONOS, muestra 1 nodo).
+- name: Estado del clúster ONOS
+  hosts: onos_inicial
+  gather_facts: false
+  tasks:
+    - name: Nodos del clúster
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8181/onos/v1/cluster"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: cl
+      failed_when: false
+
+    - name: Resumen del clúster
+      ansible.builtin.debug:
+        msg:
+          - "Nodos: {{ cl.json.nodes | default([]) | map(attribute='id') | list }}"
+          - "Estados: {{ cl.json.nodes | default([]) | map(attribute='status') | list }}"
+          - "Esperados 3 nodos READY en el clúster; 1 si aún es la fase 1"

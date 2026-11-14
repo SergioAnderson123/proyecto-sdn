@@ -1,0 +1,10 @@
+{# /root/onos/config/cluster.json de este nodo ONOS (formato de tools/test/bin/onos-gen-config de ONOS 2.7: el id del nodo es su IP). #}
+{
+  "name": "{{ cluster_nombre }}",
+  "node": {"id": "{{ ansible_host }}", "ip": "{{ ansible_host }}", "port": {{ onos_cluster_puerto }}},
+  "storage": [
+{% for ip in onos_nodos %}
+    {"id": "atomix-{{ loop.index }}", "ip": "{{ ip }}", "port": {{ atomix_puerto }}}{{ "," if not loop.last else "" }}
+{% endfor %}
+  ]
+}

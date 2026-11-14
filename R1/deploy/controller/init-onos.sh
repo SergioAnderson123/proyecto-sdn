@@ -74,16 +74,19 @@ echo "[*] Instalando SADIS y AAA..."
 [ -s "oar/sadis-app-$SADIS_VER.oar" ] && instalar "oar/sadis-app-$SADIS_VER.oar"
 [ -s "oar/aaa-app-$AAA_VER.oar" ] && instalar "oar/aaa-app-$AAA_VER.oar"
 
-echo "[*] Configurando SADIS dinamico hacia policy_mapper:5000..."
+# En el clúster de la topología de 14 VM ONOS corre en la red del host: ya no resuelve los nombres del compose, y se pasan las IP
+# (SADIS_URL=http://192.168.201.1:5000/sadis/%s, RADIUS_IP=192.168.201.1). Sin variables, los nombres de siempre.
+SADIS_URL="${SADIS_URL:-http://policy_mapper:5000/sadis/%s}"; RADIUS_IP="${RADIUS_IP:-radius}"
+echo "[*] Configurando SADIS dinamico hacia $SADIS_URL..."
 curl -s -u "$AUTH" -X POST -H "Content-Type: application/json" "$ONOS_URL/network/configuration" -d '{
   "apps": {"org.opencord.sadis": {"sadis": {"integration": {
-    "url": "http://policy_mapper:5000/sadis/%s",
+    "url": "'"$SADIS_URL"'",
     "cache": {"enabled": true, "maxsize": 1000, "ttl": "PT1m"}}}}}}'
 
 echo "[*] Configurando AAA hacia radius:1812..."
 curl -s -u "$AUTH" -X POST -H "Content-Type: application/json" "$ONOS_URL/network/configuration" -d '{
   "apps": {"org.opencord.aaa": {"AAA": {
-    "radiusIp": "radius",
+    "radiusIp": "'"$RADIUS_IP"'",
     "radiusServerPort": "1812",
     "radiusServerUdpPort": "1812",
     "radiusSecret": "testing123",

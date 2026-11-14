@@ -5,6 +5,7 @@
 #       ./lanzar.sh --tags controller     # solo ONOS y compañia
 #       ./lanzar.sh --tags switches,estado
 #       ./lanzar.sh -e liberar_firmware=true    # purga linux-firmware si falta disco
+#       PLAYBOOK=site_cluster.yml ./lanzar.sh            # clúster ONOS + Atomix (fase 3); admite --tags igual
 # La contraseña de ubuntu se pide una vez y no se guarda: va a un archivo temporal en RAM que se borra al terminar.
 set -e
 cd "$(dirname "$0")"
@@ -22,4 +23,4 @@ chmod 600 "$VARS"
 printf 'ansible_password: "%s"\nansible_become_password: "%s"\n' "$PW" "$PW" > "$VARS"
 unset PW
 
-ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i inventario.ini site.yml -e "@$VARS" "$@"
+ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i inventario.ini "${PLAYBOOK:-site.yml}" -e "@$VARS" "$@"

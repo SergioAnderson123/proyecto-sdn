@@ -1,0 +1,35 @@
+{# Atomix 3.1 acepta JSON como configuración (mismo formato que genera tools/test/bin/atomix-gen-config de ONOS 2.7). Un miembro por nodo ctrl. #}
+{% set ips = onos_nodos %}
+{% set ids = [] %}
+{% for ip in ips %}{% set _ = ids.append('atomix-' ~ loop.index) %}{% endfor %}
+{% set yo = groups['ctrl'].index(inventory_hostname) %}
+{
+  "cluster": {
+    "clusterId": "{{ cluster_nombre }}",
+    "node": {"id": "{{ ids[yo] }}", "address": "{{ ips[yo] }}:{{ atomix_puerto }}"},
+    "discovery": {
+      "type": "bootstrap",
+      "nodes": [
+{% for ip in ips %}
+        {"id": "{{ ids[loop.index0] }}", "address": "{{ ip }}:{{ atomix_puerto }}"}{{ "," if not loop.last else "" }}
+{% endfor %}
+      ]
+    }
+  },
+  "managementGroup": {
+    "type": "raft",
+    "partitions": 1,
+    "partitionSize": {{ ips | length }},
+    "members": {{ ids | to_json }},
+    "storage": {"level": "mapped"}
+  },
+  "partitionGroups": {
+    "raft": {
+      "type": "raft",
+      "partitions": {{ ips | length }},
+      "partitionSize": 3,
+      "members": {{ ids | to_json }},
+      "storage": {"level": "mapped"}
+    }
+  }
+}

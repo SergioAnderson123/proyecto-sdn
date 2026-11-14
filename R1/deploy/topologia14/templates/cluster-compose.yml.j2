@@ -1,0 +1,26 @@
+# Generado por Ansible (40_cluster.yml): Atomix y ONOS de {{ inventory_hostname }} ({{ ansible_host }}). No editar a mano.
+# network_mode: host => ONOS y Atomix usan la IP de gestión del nodo (cluster 9876/5679, OpenFlow 6653, REST 8181, consola 8101).
+name: cluster
+services:
+  atomix:
+    image: {{ atomix_imagen }}
+    container_name: atomix
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - JAVA_OPTS={{ atomix_heap }}
+    volumes:
+      - {{ cluster_dir }}/atomix.conf:/opt/atomix/conf/atomix.conf:ro
+      - {{ cluster_dir }}/atomix-data:/var/lib/atomix
+
+  onos:
+    image: {{ onos_imagen }}
+    container_name: onos
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - JAVA_OPTS={{ onos_heap }}
+    volumes:
+      - {{ cluster_dir }}/cluster.json:/root/onos/config/cluster.json:ro
+    stdin_open: true
+    tty: true

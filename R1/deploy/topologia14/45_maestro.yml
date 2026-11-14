@@ -1,0 +1,92 @@
+# Fase 3c: los 5 switches apuntan a los TRES ONOS y node-ctrl-1 queda como maestro de todos.
+#   PLAYBOOK=site_cluster.yml ./lanzar.sh --tags maestro
+# Cada switch abre una conexión OpenFlow con cada controlador; ONOS elige UN maestro por switch (los otros quedan en espera). Fijamos el
+# maestro con `device-role` en la consola de ONOS. Ojo: si node-ctrl-1 cae otro toma el mando y, al volver, NO lo recupera solo:
+# repetir esta fase (--tags maestro) lo devuelve. El líder de Raft en Atomix no se puede fijar; lo que importa es el maestro de los switches.
+
+- name: Apuntar los switches a los tres controladores
+  hosts: switches
+  become: true
+  gather_facts: false
+  tasks:
+    - name: El bridge existe
+      ansible.builtin.command: ovs-vsctl br-exists {{ bridge }}
+      changed_when: false
+      tags: [maestro]
+
+    - name: Fail-mode secure y OpenFlow 1.3
+      ansible.builtin.shell: |
+        ovs-vsctl set-fail-mode {{ bridge }} secure
+        ovs-vsctl set bridge {{ bridge }} protocols=OpenFlow13
+      changed_when: false
+      tags: [maestro]
+
+    - name: Controladores (los tres ONOS)
+      ansible.builtin.command: ovs-vsctl set-controller {{ bridge }} {{ controladores_openflow | join(' ') }}
+      changed_when: true
+      tags: [maestro]
+
+    - name: Al menos una conexión OpenFlow establecida
+      ansible.builtin.shell: ovs-vsctl --bare --columns=is_connected find Controller | grep -c true
+      register: conectados
+      until: conectados.stdout | trim | int >= 1
+      retries: 10
+      delay: 3
+      changed_when: false
+      tags: [maestro]
+
+    - name: Conexiones establecidas de este switch
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ conectados.stdout | trim }} de {{ controladores_openflow | length }} controladores conectados"
+      tags: [maestro]
+
+- name: Fijar a node-ctrl-1 como maestro de todos los dispositivos
+  hosts: node-ctrl-1
+  gather_facts: false
+  vars:
+    ssh_onos: "sshpass -p {{ onos_pass }} ssh -p 8101 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR {{ onos_user }}@127.0.0.1"
+  tasks:
+    - name: sshpass (consola de ONOS por SSH)
+      become: true
+      ansible.builtin.apt:
+        name: sshpass
+        state: present
+      tags: [maestro]
+
+    - name: Dispositivos que ve ONOS
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8181/onos/v1/devices"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: dev
+      until: dev.status == 200 and (dev.json.devices | selectattr('available') | list | length) == 5
+      retries: 20
+      delay: 6
+      tags: [maestro]
+
+    - name: device-role maestro = node-ctrl-1 ({{ ansible_host }}) para cada dispositivo
+      ansible.builtin.command: "{{ ssh_onos }} 'device-role {{ item }} {{ ansible_host }} master'"
+      loop: "{{ dev.json.devices | map(attribute='id') | list }}"
+      changed_when: true
+      tags: [maestro]
+
+    - name: Maestros por nodo (comando masters de ONOS)
+      ansible.builtin.command: "{{ ssh_onos }} masters"
+      register: masters
+      changed_when: false
+      tags: [maestro]
+
+    - name: Reparto de maestros
+      ansible.builtin.debug:
+        msg: "{{ masters.stdout_lines }}"
+      tags: [maestro]
+
+    - name: node-ctrl-1 es maestro de los 5 switches (si el formato de `masters` difiere, mira la salida de arriba)
+      ansible.builtin.assert:
+        that: masters.stdout is search(ansible_host ~ ':\s*5 devices')
+        fail_msg: "node-ctrl-1 no es maestro de los 5 dispositivos: revisa la salida de `masters`"
+        quiet: true
+      ignore_errors: true
+      tags: [maestro]

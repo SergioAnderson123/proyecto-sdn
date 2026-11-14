@@ -1,0 +1,183 @@
+# Fase 3a: clúster ONOS de 3 nodos con Atomix (Raft de 3 miembros), uno de cada en node-ctrl-1, -2 y -3.
+#   PLAYBOOK=site_cluster.yml ./lanzar.sh --tags cluster
+#   PLAYBOOK=site_cluster.yml ./lanzar.sh --tags cluster_config      solo genera la configuración y descarga las imágenes (no arranca nada)
+# Orden: configuración -> Atomix en los 3 -> ONOS uno a uno (node-ctrl-1 primero) -> comprobación de los 3 nodos READY.
+# Las etiquetas van en cada tarea (las del play se heredan a todas y romperían cluster_config).
+
+- name: Preparar los tres nodos (Docker, reloj, configuración e imágenes)
+  hosts: ctrl
+  become: true
+  gather_facts: false
+  tasks:
+    - name: "Hay exactamente 3 nodos de control (Raft necesita mayoría: con 2 no hay tolerancia a fallos)"
+      ansible.builtin.assert:
+        that: groups['ctrl'] | length == 3
+        quiet: true
+      run_once: true
+      tags: [cluster, cluster_config]
+
+    - name: chrony (los relojes de los miembros de Raft deben coincidir)
+      ansible.builtin.apt:
+        name: chrony
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      tags: [cluster, cluster_config]
+
+    - name: chrony arrancado y habilitado
+      ansible.builtin.service:
+        name: chrony
+        state: started
+        enabled: true
+      tags: [cluster, cluster_config]
+
+    - name: Hora de cada nodo (segundos desde 1970)
+      ansible.builtin.command: date +%s.%N
+      register: hora
+      changed_when: false
+      tags: [cluster, cluster_config]
+
+    - name: Los relojes no difieren más de {{ cluster_desfase_max_s }} s
+      ansible.builtin.assert:
+        that: >-
+          (groups['ctrl'] | map('extract', hostvars, ['hora', 'stdout']) | map('float') | max)
+          - (groups['ctrl'] | map('extract', hostvars, ['hora', 'stdout']) | map('float') | min)
+          < cluster_desfase_max_s | float
+        fail_msg: "Los relojes de los ctrl difieren demasiado: arregla chrony/NTP antes de formar el clúster"
+        quiet: true
+      run_once: true
+      tags: [cluster, cluster_config]
+
+    - name: Carpetas del clúster
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: ubuntu
+        mode: "0755"
+      loop: ["{{ cluster_dir }}", "{{ cluster_dir }}/atomix-data"]
+      tags: [cluster, cluster_config]
+
+    - name: atomix.conf de este nodo
+      register: cfg_atomix
+      ansible.builtin.template:
+        src: atomix.conf.j2
+        dest: "{{ cluster_dir }}/atomix.conf"
+        owner: ubuntu
+        mode: "0644"
+      tags: [cluster, cluster_config]
+
+    - name: cluster.json de este nodo (ONOS)
+      register: cfg_onos
+      ansible.builtin.template:
+        src: cluster.json.j2
+        dest: "{{ cluster_dir }}/cluster.json"
+        owner: ubuntu
+        mode: "0644"
+      tags: [cluster, cluster_config]
+
+    - name: docker-compose.yml del clúster
+      register: cfg_compose
+      ansible.builtin.template:
+        src: cluster-compose.yml.j2
+        dest: "{{ cluster_dir }}/docker-compose.yml"
+        owner: ubuntu
+        mode: "0644"
+      tags: [cluster, cluster_config]
+
+    - name: Descargar las imágenes (ONOS ya está en node-ctrl-1; Atomix pesa poco)
+      ansible.builtin.command: docker compose pull
+      args:
+        chdir: "{{ cluster_dir }}"
+      async: 1800
+      poll: 15
+      changed_when: false
+      tags: [cluster, cluster_config]
+
+    - name: Cómo arranca la imagen de Atomix (entrypoint, cmd y carpetas)
+      ansible.builtin.shell: |
+        docker image inspect {{ atomix_imagen }} --format 'entrypoint={{ '{{json .Config.Entrypoint}}' }} cmd={{ '{{json .Config.Cmd}}' }} volumes={{ '{{json .Config.Volumes}}' }}'
+        docker run --rm --entrypoint ls {{ atomix_imagen }} /opt/atomix /opt/atomix/conf 2>&1 || true
+      register: sonda
+      changed_when: false
+      failed_when: false
+      tags: [cluster, cluster_config]
+
+    - name: Resultado de la sonda (si la ruta de configuración no es /opt/atomix/conf/atomix.conf hay que ajustar la plantilla del compose)
+      ansible.builtin.debug:
+        msg: "{{ sonda.stdout_lines }}"
+      run_once: true
+      tags: [cluster, cluster_config]
+
+- name: Arrancar Atomix en los tres nodos
+  hosts: ctrl
+  gather_facts: false
+  tasks:
+    - name: Atomix arriba (se recrea solo si cambió su configuración)
+      ansible.builtin.command: docker compose up -d --force-recreate atomix
+      args:
+        chdir: "{{ cluster_dir }}"
+      changed_when: true
+      tags: [cluster]
+
+    - name: El puerto de Atomix responde
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ atomix_puerto }}"
+        timeout: 90
+      tags: [cluster]
+
+    - name: Atomix sigue en marcha 10 s después (no se cae por configuración inválida)
+      ansible.builtin.shell: sleep 10; docker inspect -f '{{ '{{.State.Running}}' }}' atomix
+      register: atomix_vivo
+      changed_when: false
+      failed_when: atomix_vivo.stdout | trim != 'true'
+      tags: [cluster]
+
+- name: Arrancar ONOS, un nodo a la vez (node-ctrl-1 primero)
+  hosts: ctrl
+  serial: 1
+  gather_facts: false
+  tasks:
+    - name: ONOS arriba
+      ansible.builtin.command: docker compose up -d --force-recreate onos
+      args:
+        chdir: "{{ cluster_dir }}"
+      changed_when: true
+      tags: [cluster]
+
+    - name: "La API REST de este ONOS responde (tarda: carga sus apps y se une a Atomix)"
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:8181/onos/v1/applications"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: 200
+      register: rest
+      until: rest.status == 200
+      retries: 60
+      delay: 5
+      tags: [cluster]
+
+- name: Comprobar que los tres nodos forman el clúster
+  hosts: node-ctrl-1
+  gather_facts: false
+  tasks:
+    - name: Nodos del clúster según ONOS
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8181/onos/v1/cluster"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: cl
+      until: >-
+        cl.status == 200 and (cl.json.nodes | length) == 3 and
+        (cl.json.nodes | selectattr('status', 'equalto', 'READY') | list | length) == 3
+      retries: 30
+      delay: 6
+      tags: [cluster]
+
+    - name: Clúster formado
+      ansible.builtin.debug:
+        msg: "{{ cl.json.nodes | map(attribute='id') | list }} todos READY"
+      tags: [cluster]

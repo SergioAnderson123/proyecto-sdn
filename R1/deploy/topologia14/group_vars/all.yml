@@ -40,3 +40,20 @@ diseno:
   node-sec-2:   {vcpu: 2, vcpu_min: 2, ram_gb: 4, ram_min_gb: 2, disco_gb: 20, disco_min_gb: 10}
   h1-profesor:  {vcpu: 2, vcpu_min: 1, ram_gb: 2, ram_min_gb: 2, disco_gb: 10, disco_min_gb: 10}
   h2-alumno:    {vcpu: 1, vcpu_min: 1, ram_gb: 1, ram_min_gb: 1, disco_gb: 10, disco_min_gb: 8}
+
+# --- Clúster ONOS + Atomix (fase 3: playbooks 40, 42 y 45; se lanza con PLAYBOOK=site_cluster.yml ./lanzar.sh) ---
+# Los 3 nodos de control llevan ONOS y un miembro de Atomix (Raft de 3). ONOS y Atomix corren con network_mode: host, así que cada nodo
+# es su IP de gestión (192.168.201.x): Raft no se lleva bien con las direcciones NAT de Docker.
+cluster_nombre: onos                         # clusterId de Atomix y name de cluster.json (el mismo que genera onos-gen-config)
+onos_imagen: onosproject/onos:2.7-latest     # ya está descargada en node-ctrl-1 de la fase 1
+atomix_imagen: atomix/atomix:3.1.12          # última 3.1.x publicada (ONOS 2.7 usa Atomix 3.1)
+atomix_puerto: 5679
+onos_cluster_puerto: 9876
+onos_heap: "-Xms512m -Xmx2g"                 # los ctrl tienen 6 GB; ctrl-3 además llevará el monitoreo
+atomix_heap: "-Xmx512m"
+cluster_dir: /home/ubuntu/cluster
+onos_nodos: "{{ groups['ctrl'] | map('extract', hostvars, 'ansible_host') | list }}"
+controladores_openflow: "{{ onos_nodos | map('regex_replace', '^', 'tcp:') | map('regex_replace', '$', ':' ~ onos_port) | list }}"
+maestro: node-ctrl-1                         # nodo que debe ser maestro de todos los switches (device-role)
+cluster_desfase_max_s: 1.0                   # los relojes de los 3 ctrl no pueden diferir más (Raft)
+limpiar_clasico: false                       # true = 01_limpiar_clasico.yml baja el stack de la fase 1 (sin borrar imágenes ni LDAP)
