@@ -1,0 +1,68 @@
+# Diagnóstico de lazos y tormentas de broadcast. SOLO LECTURA: no cambia nada en ningún switch ni en ONOS.
+#   PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh
+# Para cada uno de los 5 switches muestra: (1) cuántos flujos con NORMAL, FLOOD o ALL tiene (son los que inundan y, con un lazo,
+# multiplican un broadcast), (2) los paquetes por segundo de cada puerto durante unos segundos, (3) si RSTP/STP está activo y (4) la CPU de
+# ovs-vswitchd. Falla (en rojo) si algún switch parece estar en tormenta. Úsalo ANTES y DESPUÉS de cualquier cambio que reenvíe tráfico.
+# Si hay tormenta: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true
+
+- name: Diagnóstico de lazos en los switches
+  hosts: switches
+  become: true
+  gather_facts: false
+  vars:
+    umbral_tormenta_pps: 2000        # un puerto por encima de esto, en dos o más puertos a la vez, se considera tormenta
+    segundos_muestra: 5
+  tasks:
+    - name: Flujos que inundan (NORMAL, FLOOD o ALL)
+      ansible.builtin.shell: ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} | grep -E 'NORMAL|FLOOD|ALL' | cut -c1-170
+      register: inundan
+      changed_when: false
+      failed_when: inundan.rc not in [0, 1]
+      tags: [lazos]
+
+    - name: Medir los paquetes por segundo de cada puerto
+      ansible.builtin.script:
+        cmd: "tasas_puertos.py {{ bridge }} {{ segundos_muestra }} {{ umbral_tormenta_pps }}"
+        executable: /usr/bin/python3
+      register: tasas
+      changed_when: false
+      tags: [lazos]
+
+    - name: RSTP y STP del bridge
+      ansible.builtin.shell: echo "rstp_enable=$(ovs-vsctl get Bridge {{ bridge }} rstp_enable) stp_enable=$(ovs-vsctl get Bridge {{ bridge }} stp_enable)"
+      register: stp
+      changed_when: false
+      tags: [lazos]
+
+    - name: CPU de ovs-vswitchd
+      ansible.builtin.shell: ps -o %cpu= -C ovs-vswitchd | head -1
+      register: cpu
+      changed_when: false
+      failed_when: false
+      tags: [lazos]
+
+    - name: Resultado de este switch
+      ansible.builtin.debug:
+        msg:
+          - "{{ inventory_hostname }}: {{ inundan.stdout_lines | length }} flujos con NORMAL/FLOOD/ALL; {{ stp.stdout | trim }}; ovs-vswitchd {{ cpu.stdout | trim }} % CPU"
+          - "{{ tasas.stdout_lines }}"
+      tags: [lazos]
+
+    - name: Guardar si este switch parece en tormenta
+      ansible.builtin.set_fact:
+        en_tormenta: "{{ 'tormenta=si' in tasas.stdout }}"
+      tags: [lazos]
+
+- name: Veredicto
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Ningún switch está en tormenta
+      ansible.builtin.assert:
+        that: groups['switches'] | map('extract', hostvars) | selectattr('en_tormenta') | list | length == 0
+        fail_msg: >-
+          TORMENTA probable en {{ groups['switches'] | map('extract', hostvars) | selectattr('en_tormenta') | map(attribute='inventory_hostname') | list }}.
+          Freno: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true
+        success_msg: "Sin tormenta: ningún switch supera el umbral en dos o más puertos"
+      tags: [lazos]

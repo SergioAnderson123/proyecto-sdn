@@ -1,0 +1,48 @@
+# FRENO DE EMERGENCIA contra una tormenta de broadcast. Solo actúa con -e confirmar=true.
+#   PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true
+# Qué hace, en este orden (todo reversible, nada destruye datos):
+#   1. Para el Policy Mapper (deja de instalar flujos de R1/R2 en los switches).
+#   2. Borra por REST los flujos que ese Policy Mapper y R2 instalaron (appId org.onosproject.rest y org.campus.r2): son los que llevan NORMAL.
+#      Los flujos propios de ONOS (LLDP, ARP al controlador) no se tocan.
+#   3. Muestra cuántos flujos con NORMAL/FLOOD/ALL quedan en cada switch.
+# Si la tormenta sigue, hay un lazo abierto por otro camino: baja los puertos del lazo a mano (ip link set <interfaz> down en un extremo).
+# Para volver a la normalidad: docker start policy_mapper (en node-ctrl-1) y el Policy Mapper reinstala sus tablas en unos segundos.
+
+- name: Parar el Policy Mapper y borrar sus flujos
+  hosts: node-ctrl-1
+  gather_facts: false
+  tasks:
+    - name: Pide confirmación explícita
+      ansible.builtin.assert:
+        that: confirmar | default(false) | bool
+        fail_msg: "Esto para el Policy Mapper y borra los flujos de R1/R2. Repite con -e confirmar=true"
+        quiet: true
+
+    - name: Parar el Policy Mapper
+      ansible.builtin.command: docker stop policy_mapper
+      changed_when: true
+
+    - name: Borrar los flujos instalados por R1 y R2
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8181/onos/v1/flows/application/{{ item }}"
+        method: DELETE
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 204, 404]
+      loop: [org.onosproject.rest, org.campus.r2]
+
+- name: Cuántos flujos que inundan quedan
+  hosts: switches
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Flujos con NORMAL, FLOOD o ALL
+      ansible.builtin.shell: ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} | grep -c -E 'NORMAL|FLOOD|ALL'
+      register: quedan
+      changed_when: false
+      failed_when: quedan.rc not in [0, 1]
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ quedan.stdout | trim }} flujos que inundan"
