@@ -1,0 +1,11 @@
+# Despliegue completo de la fase 1 (ONOS en un nodo + switches conectados). Se lanza con ./lanzar.sh
+- import_playbook: 00_comprobar.yml
+  tags: [comprobar]
+- import_playbook: 10_docker.yml
+  tags: [docker]
+- import_playbook: 20_controller.yml
+  tags: [controller]
+- import_playbook: 30_switches.yml
+  tags: [switches]
+- import_playbook: 90_estado.yml
+  tags: [estado]

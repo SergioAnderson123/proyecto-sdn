@@ -1,0 +1,31 @@
+# Estado: lo que ONOS ve (dispositivos, enlaces, hosts). Es evidencia para la rubrica (criterios 14 a 16).
+- name: Estado de ONOS
+  hosts: onos_inicial
+  gather_facts: false
+  vars:
+    api: "http://127.0.0.1:8181/onos/v1"
+  tasks:
+    - name: Dispositivos
+      ansible.builtin.uri:
+        url: "{{ api }}/devices"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: dev
+
+    - name: Enlaces
+      ansible.builtin.uri:
+        url: "{{ api }}/links"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: lnk
+
+    - name: Resumen
+      ansible.builtin.debug:
+        msg:
+          - "Dispositivos: {{ dev.json.devices | length }} (esperados 5)"
+          - "Disponibles: {{ dev.json.devices | selectattr('available') | map(attribute='id') | list }}"
+          - "Enlaces: {{ lnk.json.links | length }}"

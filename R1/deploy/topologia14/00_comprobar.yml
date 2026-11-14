@@ -1,0 +1,50 @@
+# Fase 0: comprobaciones antes de desplegar (no instala nada). Solo limpia cachés de apt y logs, que es seguro.
+- name: Comprobar que todas las VM responden y se llaman como en el inventario
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Ping
+      ansible.builtin.ping:
+
+    - name: Leer hostname
+      ansible.builtin.command: hostname
+      register: hn
+      changed_when: false
+
+    - name: El hostname coincide con el inventario
+      ansible.builtin.assert:
+        that: hn.stdout == inventory_hostname
+        fail_msg: "{{ inventory_hostname }}: el hostname real es '{{ hn.stdout }}'"
+        quiet: true
+
+- name: Disco en los nodos de control (ONOS necesita espacio)
+  hosts: ctrl
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Limpiar cachés de apt y recortar el journal (seguro)
+      ansible.builtin.shell: |
+        apt-get clean
+        apt-get autoremove -y --purge
+        journalctl --vacuum-size=20M
+      changed_when: true
+
+    - name: Quitar linux-firmware (solo si liberar_firmware=true)
+      ansible.builtin.apt:
+        name: linux-firmware
+        state: absent
+        purge: true
+      when: liberar_firmware | bool
+
+    - name: Espacio libre en /
+      ansible.builtin.shell: df --output=avail -m / | tail -1
+      register: libre
+      changed_when: false
+
+    - name: Hay espacio suficiente
+      ansible.builtin.assert:
+        that: libre.stdout | trim | int >= libre_minimo_mb
+        fail_msg: >-
+          {{ inventory_hostname }}: solo {{ libre.stdout | trim }} MB libres (minimo {{ libre_minimo_mb }}).
+          Libera espacio o repite con -e liberar_firmware=true.
+        success_msg: "{{ inventory_hostname }}: {{ libre.stdout | trim }} MB libres"

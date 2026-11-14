@@ -1,0 +1,28 @@
+# Fase 1a: Docker en el nodo donde correra ONOS (solo node-ctrl-1 por ahora).
+# Usa docker.io y docker-compose-v2 de los repos de Ubuntu 24.04 (mas livianos que docker-ce).
+- name: Instalar Docker y git
+  hosts: onos_inicial
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Paquetes
+      ansible.builtin.apt:
+        name: [docker.io, docker-compose-v2, git, curl, ca-certificates]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Docker arrancado y habilitado
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: El usuario ubuntu puede usar Docker sin sudo
+      ansible.builtin.user:
+        name: ubuntu
+        groups: docker
+        append: true
+
+    - name: Reiniciar la conexion para que tome el grupo docker
+      ansible.builtin.meta: reset_connection

@@ -1,0 +1,34 @@
+# Fase 1c: apuntar los 5 switches (switch-borde, sw-core-1/2, sw-acc-1/2) a ONOS por la red de gestion (roja).
+# Los bridges (br0) y sus puertos ya existen. Con fail-mode secure no hay reenvio hasta que ONOS conecte (evita tormentas con bucles).
+- name: Conectar los switches OVS al controlador
+  hosts: switches
+  become: true
+  gather_facts: false
+  tasks:
+    - name: El bridge existe
+      ansible.builtin.command: ovs-vsctl br-exists {{ bridge }}
+      changed_when: false
+
+    - name: Fail-mode secure
+      ansible.builtin.command: ovs-vsctl set-fail-mode {{ bridge }} secure
+      changed_when: false
+
+    - name: OpenFlow 1.3
+      ansible.builtin.command: ovs-vsctl set bridge {{ bridge }} protocols=OpenFlow13
+      changed_when: false
+
+    - name: Apuntar al controlador
+      ansible.builtin.command: ovs-vsctl set-controller {{ bridge }} tcp:{{ onos_ip }}:{{ onos_port }}
+      changed_when: true
+
+    - name: Esperar la conexion con ONOS
+      ansible.builtin.command: ovs-vsctl --bare --columns=is_connected find Controller 'target="tcp:{{ onos_ip }}:{{ onos_port }}"'
+      register: conectado
+      until: "'true' in conectado.stdout"
+      retries: 10
+      delay: 3
+      changed_when: false
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} conectado a {{ onos_ip }}:{{ onos_port }}"

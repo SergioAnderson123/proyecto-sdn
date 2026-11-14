@@ -1,0 +1,14 @@
+# Variables comunes de la topologia de 14 VM (VNRT).
+bridge: br0                      # bridge de Open vSwitch en los 5 switches
+onos_ip: 192.168.201.1           # fase 1: ONOS en node-ctrl-1 (red de gestion). Control por la red roja, fuera de banda
+onos_port: 6653                  # OpenFlow
+onos_user: onos
+onos_pass: rocks
+
+repo_url: https://github.com/SergioAnderson123/proyecto-sdn.git
+repo_rama: master
+repo_dir: /home/ubuntu/proyecto-sdn
+
+# Disco (los nodos de VNRT traen 5,9 GB con ~3,1 GB libres). El stack completo pide unos 3 GB.
+libre_minimo_mb: 2800            # el despliegue se detiene si hay menos libre que esto
+liberar_firmware: false          # true = purga linux-firmware (~600 MB). Es opcional: solo si falta espacio
