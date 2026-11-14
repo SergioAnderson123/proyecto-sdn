@@ -69,9 +69,16 @@
             seconds: "{{ espera_s }}"
           tags: [rstp_prueba]
 
-        - name: Capturar BPDU en el enlace entre cores (8 s o 3 BPDU)
-          ansible.builtin.shell: timeout 8 tcpdump -ni {{ nic_entre_cores }} -c 3 stp 2>&1
-          register: bpdu
+        - name: BPDU que LLEGAN por el enlace entre cores (solo entrantes: tcpdump sin -Q in también ve los que este mismo core envía)
+          ansible.builtin.shell: timeout 8 tcpdump -ni {{ nic_entre_cores }} -Q in -c 3 stp 2>&1
+          register: bpdu_in
+          changed_when: false
+          failed_when: false
+          tags: [rstp_prueba]
+
+        - name: BPDU que SALEN por el enlace entre cores (confirma que este core sí los envía)
+          ansible.builtin.shell: timeout 6 tcpdump -ni {{ nic_entre_cores }} -Q out -c 2 stp 2>&1
+          register: bpdu_out
           changed_when: false
           failed_when: false
           tags: [rstp_prueba]
@@ -92,7 +99,8 @@
 
         - name: Guardar qué se vio en este core
           ansible.builtin.set_fact:
-            vi_bpdu: "{{ bpdu.stdout is search('BPDU|STP|RSTP|Config|Root') }}"
+            vi_bpdu: "{{ 'STP 802.1w' in bpdu_in.stdout }}"
+            envia_bpdu: "{{ 'STP 802.1w' in bpdu_out.stdout }}"
             se_cree_raiz: "{{ 'This bridge is the root' in rstp.stdout }}"
             tormenta: "{{ 'tormenta=si' in despues.stdout }}"
           tags: [rstp_prueba]
@@ -114,10 +122,11 @@
     - name: Lo que se vio en cada core
       ansible.builtin.debug:
         msg:
-          - "sw-core-1: BPDU capturados={{ hostvars['sw-core-1'].vi_bpdu }}, se declara raíz={{ hostvars['sw-core-1'].se_cree_raiz }}, tormenta={{ hostvars['sw-core-1'].tormenta }}"
-          - "sw-core-2: BPDU capturados={{ hostvars['sw-core-2'].vi_bpdu }}, se declara raíz={{ hostvars['sw-core-2'].se_cree_raiz }}, tormenta={{ hostvars['sw-core-2'].tormenta }}"
+          - "sw-core-1: BPDU recibidos={{ hostvars['sw-core-1'].vi_bpdu }}, BPDU enviados={{ hostvars['sw-core-1'].envia_bpdu }}, se declara raíz={{ hostvars['sw-core-1'].se_cree_raiz }}, tormenta={{ hostvars['sw-core-1'].tormenta }}"
+          - "sw-core-2: BPDU recibidos={{ hostvars['sw-core-2'].vi_bpdu }}, BPDU enviados={{ hostvars['sw-core-2'].envia_bpdu }}, se declara raíz={{ hostvars['sw-core-2'].se_cree_raiz }}, tormenta={{ hostvars['sw-core-2'].tormenta }}"
           - "rstp/show de sw-core-2: {{ hostvars['sw-core-2'].rstp.stdout_lines }}"
-          - "tcpdump en sw-core-2: {{ hostvars['sw-core-2'].bpdu.stdout_lines[-4:] }}"
+          - "entrantes en sw-core-2: {{ hostvars['sw-core-2'].bpdu_in.stdout_lines[-4:] }}"
+          - "entrantes en sw-core-1: {{ hostvars['sw-core-1'].bpdu_in.stdout_lines[-4:] }}"
       tags: [rstp_prueba]
 
     - name: Sin tormenta durante la prueba
