@@ -22,4 +22,4 @@ chmod 600 "$VARS"
 printf 'ansible_password: "%s"\nansible_become_password: "%s"\n' "$PW" "$PW" > "$VARS"
 unset PW
 
-ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i inventory.ini site.yml -e "@$VARS" "$@"
+ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i inventario.ini site.yml -e "@$VARS" "$@"
