@@ -39,18 +39,52 @@
           ONOS_PASS={{ onos_pass }}
       tags: [servicios]
 
-    - name: "LDAP, RADIUS y Policy Mapper (construye imágenes; --no-deps evita levantar el ONOS del compose clásico)"
+    - name: "LDAP y Policy Mapper (construye imágenes; --no-deps evita levantar el ONOS del compose clásico)"
       ansible.builtin.shell: |
         set -a; . {{ repo_dir }}/R1/deploy/.env; set +a
         export ONOS_HOST={{ ansible_host }}
-        docker compose -p controller -f {{ compose_r1 }} up -d --build --no-deps ldap policy_mapper radius
-        docker update --restart unless-stopped ldap policy_mapper radius
+        docker compose -p controller -f {{ compose_r1 }} up -d --build --no-deps ldap policy_mapper
       args:
         executable: /bin/bash
         chdir: "{{ repo_dir }}/R1"
       async: 2400
       poll: 20
       changed_when: true
+      tags: [servicios]
+
+    - name: LDAP responde (RADIUS lo consulta al arrancar; si arranca antes, se cae)
+      ansible.builtin.shell: docker exec ldap ldapsearch -x -H ldap://localhost -D cn=admin,dc=example,dc=org -w admin -b dc=example,dc=org -s base dn
+      register: ldap_listo
+      until: ldap_listo.rc == 0
+      retries: 24
+      delay: 5
+      changed_when: false
+      tags: [servicios]
+
+    - name: FreeRADIUS (después de LDAP y del Policy Mapper)
+      ansible.builtin.shell: |
+        set -a; . {{ repo_dir }}/R1/deploy/.env; set +a
+        export ONOS_HOST={{ ansible_host }}
+        docker compose -p controller -f {{ compose_r1 }} up -d --build --no-deps radius
+        docker update --restart unless-stopped ldap policy_mapper radius
+      args:
+        executable: /bin/bash
+        chdir: "{{ repo_dir }}/R1"
+      async: 1800
+      poll: 15
+      changed_when: true
+      tags: [servicios]
+
+    - name: Log de RADIUS (si se cae al arrancar, aquí está el motivo)
+      ansible.builtin.shell: sleep 8; docker logs --tail 25 radius 2>&1
+      register: radius_log
+      changed_when: false
+      failed_when: false
+      tags: [servicios]
+
+    - name: Últimas líneas del log de RADIUS
+      ansible.builtin.debug:
+        msg: "{{ radius_log.stdout_lines }}"
       tags: [servicios]
 
     - name: Los tres contenedores están en marcha
