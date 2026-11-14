@@ -16,6 +16,33 @@
       run_once: true
       tags: [cluster, cluster_config]
 
+    # Docker va aquí y no solo en 10_docker.yml: con --tags cluster_config (o cluster) esa fase se omite y ctrl-2 y ctrl-3 se quedaban sin Docker.
+    - name: Docker, Compose y git en los tres nodos
+      ansible.builtin.apt:
+        name: [docker.io, docker-compose-v2, git, curl, ca-certificates]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      tags: [cluster, cluster_config]
+
+    - name: Docker arrancado y habilitado
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+      tags: [cluster, cluster_config]
+
+    - name: El usuario ubuntu puede usar Docker sin sudo (los siguientes plays corren como ubuntu)
+      ansible.builtin.user:
+        name: ubuntu
+        groups: docker
+        append: true
+      tags: [cluster, cluster_config]
+
+    - name: Reiniciar la conexión para que tome el grupo docker
+      ansible.builtin.meta: reset_connection
+      tags: [cluster, cluster_config]
+
     - name: chrony (los relojes de los miembros de Raft deben coincidir)
       ansible.builtin.apt:
         name: chrony
@@ -126,11 +153,18 @@
         timeout: 90
       tags: [cluster]
 
-    - name: Atomix sigue en marcha 10 s después (no se cae por configuración inválida)
-      ansible.builtin.shell: sleep 10; docker inspect -f '{{ '{{.State.Running}}' }}' atomix
-      register: atomix_vivo
+    - name: Esperar 10 s y ver el log de Atomix
+      ansible.builtin.shell: sleep 10; docker logs --tail 15 atomix 2>&1; docker inspect -f 'running={{ '{{.State.Running}}' }}' atomix
+      register: atomix_log
       changed_when: false
-      failed_when: atomix_vivo.stdout | trim != 'true'
+      failed_when: false
+      tags: [cluster]
+
+    - name: Atomix sigue en marcha (si se cae, el log de arriba dice por qué)
+      ansible.builtin.assert:
+        that: "'running=true' in atomix_log.stdout"
+        fail_msg: "Atomix se detuvo en {{ inventory_hostname }}: {{ atomix_log.stdout_lines[-16:] }}"
+        quiet: true
       tags: [cluster]
 
 - name: Arrancar ONOS, un nodo a la vez (node-ctrl-1 primero)

@@ -7,11 +7,12 @@ services:
     container_name: atomix
     network_mode: host
     restart: unless-stopped
+    command: ["--config", "/opt/atomix/conf/atomix.conf"]     # la imagen arranca ./bin/atomix-agent sin argumentos (sonda de cluster_config)
     environment:
       - JAVA_OPTS={{ atomix_heap }}
     volumes:
       - {{ cluster_dir }}/atomix.conf:/opt/atomix/conf/atomix.conf:ro
-      - {{ cluster_dir }}/atomix-data:/var/lib/atomix
+      - {{ cluster_dir }}/atomix-data:/opt/atomix/data          # carpeta de datos por defecto del agente (relativa a /opt/atomix)
 
   onos:
     image: {{ onos_imagen }}
