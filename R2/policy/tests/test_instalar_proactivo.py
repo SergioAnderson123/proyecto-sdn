@@ -93,3 +93,9 @@ def test_puertos_de_acceso_por_rest_excluye_troncales_local_y_deshabilitados():
     assert acceso[B] == [3]                                    # LOCAL fuera, 1 y 2 son troncales
     assert acceso[C1] == [1]                                   # 8 deshabilitado fuera
     assert C2 not in acceso                                    # sin puertos de acceso
+
+
+def test_get_y_delete_no_envian_content_type_pero_post_si():
+    o = ip.Onos("http://x:8181", "onos:rocks")
+    assert "Content-Type" not in o.cabeceras(False) and o.cabeceras(False)["Accept"] == "application/json"
+    assert o.cabeceras(True)["Content-Type"] == "application/json"

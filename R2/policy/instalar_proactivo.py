@@ -78,9 +78,16 @@ class Onos:
         self.url = url.rstrip("/") + "/onos/v1"
         self.auth = "Basic " + base64.b64encode(usuario.encode()).decode()
 
+    def cabeceras(self, con_cuerpo):
+        """Content-Type solo si hay cuerpo: ONOS responde 415 a un GET/DELETE que lo declare sin enviar nada."""
+        h = {"Authorization": self.auth, "Accept": "application/json"}
+        if con_cuerpo:
+            h["Content-Type"] = "application/json"
+        return h
+
     def _pedir(self, metodo, ruta, cuerpo=None):
         req = urllib.request.Request(self.url + ruta, method=metodo, data=None if cuerpo is None else json.dumps(cuerpo).encode(),
-                                     headers={"Authorization": self.auth, "Content-Type": "application/json"})
+                                     headers=self.cabeceras(cuerpo is not None))
         with urllib.request.urlopen(req, timeout=15) as r:
             t = r.read().decode()
             return json.loads(t) if t else {}
