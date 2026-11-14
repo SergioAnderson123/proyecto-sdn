@@ -69,7 +69,7 @@
             seconds: "{{ espera_s }}"
           tags: [rstp_prueba]
 
-        - name: BPDU que LLEGAN por el enlace entre cores (solo entrantes: tcpdump sin -Q in también ve los que este mismo core envía)
+        - name: "BPDU que LLEGAN por el enlace entre cores (solo entrantes: tcpdump sin -Q in también ve los que este mismo core envía)"
           ansible.builtin.shell: timeout 8 tcpdump -ni {{ nic_entre_cores }} -Q in -c 3 stp 2>&1
           register: bpdu_in
           changed_when: false
