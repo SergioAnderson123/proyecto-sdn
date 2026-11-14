@@ -1,0 +1,35 @@
+# Expande la particion raiz al tamaño real del disco del flavor (VNRT deja vda2 en ~6 GB aunque el disco sea de 7, 15 o 20 GB).
+# Seguro y repetible: growpart devuelve NOCHANGE si ya esta al maximo, y resize2fs crece el ext4 en caliente.
+#   ./lanzar.sh --tags disco
+- name: Expandir la particion raiz
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    disco: /dev/vda
+    particion: 2
+  tasks:
+    - name: cloud-guest-utils (growpart)
+      ansible.builtin.apt:
+        name: cloud-guest-utils
+        state: present
+
+    - name: Crecer la particion
+      ansible.builtin.command: growpart {{ disco }} {{ particion }}
+      register: gp
+      failed_when: gp.rc not in [0, 1]
+      changed_when: gp.rc == 0
+
+    - name: Crecer el sistema de archivos ext4
+      ansible.builtin.command: resize2fs {{ disco }}{{ particion }}
+      register: rs
+      changed_when: "'Nothing to do' not in rs.stderr and 'Nothing to do' not in rs.stdout"
+
+    - name: Espacio libre tras la expansion
+      ansible.builtin.shell: df -h / | tail -1
+      register: df
+      changed_when: false
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ df.stdout }}"
