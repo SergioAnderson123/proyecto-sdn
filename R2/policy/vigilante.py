@@ -130,6 +130,11 @@ class Vigilante:
             self._huella, self._desde = huella, ahora
             self._olvidar_avisos("simulacion", "intervalo")
             self.log(f"CAMBIO DETECTADO ({rc.resumen(dif, self.nombre)}). Raíz: {self.nombre(raiz)}. Espero {self.estable_s}s a que se estabilice.")
+            for tipo, flujos in (("sobra", dif["borrar"]), ("falta", dif["agregar"])):          # qué flujos exactos difieren (máx. 6 de cada tipo)
+                for f in flujos[:6]:
+                    self.log(f"    {tipo}: {rc.describir(f, self.nombre)}")
+                if len(flujos) > 6:
+                    self.log(f"    ... y {len(flujos) - 6} más que {tipo}n")
             return "esperando"
         if ahora - self._desde < self.estable_s:
             return "esperando"

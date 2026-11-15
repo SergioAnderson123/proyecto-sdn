@@ -72,6 +72,8 @@ def clave(f: dict) -> Tuple:
     criterios = tuple(sorted((cr["type"], _valor_criterio(cr)) for cr in f["selector"]["criteria"]))
     salidas, otras = [], []
     for i in f["treatment"].get("instructions", []):
+        if i["type"] == "NOACTION":                            # ONOS puede representar el descarte con NOACTION en vez de una lista vacía
+            continue
         if i["type"] == "OUTPUT":
             salidas.append(str(i["port"]))
         else:
@@ -105,3 +107,11 @@ def pasos_de_cambio(dif: Dict[str, List[dict]]) -> List[Tuple[str, List[dict]]]:
     if dif["agregar"]:
         pasos.append(("agregar", dif["agregar"]))
     return pasos
+
+
+def describir(f: dict, nombre=lambda d: d) -> str:
+    """Una línea legible de un flujo (para decir EXACTAMENTE cuál difiere): `acc-1 t60 p200 [ETH_TYPE=2054, IN_PORT=1] -> salidas [2]`."""
+    dev, tabla, prio, criterios, salidas, otras = clave(f)
+    crit = ", ".join(f"{t}={v}" for t, v in criterios) or "cualquiera"
+    extra = f" otras {list(otras)}" if otras else ""
+    return f"{nombre(dev)} t{tabla} p{prio} [{crit}] -> salidas {list(salidas) or 'ninguna (descarte)'}{extra}"

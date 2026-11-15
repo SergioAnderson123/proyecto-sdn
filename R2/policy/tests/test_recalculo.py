@@ -176,3 +176,22 @@ def test_ningun_estado_intermedio_del_cambio_duplica_el_broadcast_en_ningun_esce
             llegadas, _ = _difundir(nuevos, fisico, d, p)
             assert set(llegadas) == set(g2), (nombre, d, p, llegadas)
     assert comprobados > 1000
+
+
+def test_noaction_se_trata_como_descarte_vacio():
+    """ONOS puede devolver el descarte con una instrucción NOACTION: no debe verse como un flujo distinto del nuestro (falso positivo visto en vivo)."""
+    _, des = deseados(LINKS, DISP)
+    descarte = [f for f in des if f["priority"] == fp.PRIO_DESCARTE][0]
+    como_onos = _como_onos(descarte, "1")
+    como_onos["treatment"] = {"instructions": [{"type": "NOACTION"}], "deferred": []}
+    assert rc.clave(como_onos) == rc.clave(descarte)
+    assert rc.diferencia([descarte], [como_onos]) == {"borrar": [], "agregar": []}
+
+
+def test_describir_dice_exactamente_que_flujo_es():
+    _, des = deseados(LINKS, DISP)
+    d = [f for f in des if f["priority"] == fp.PRIO_DESCARTE][0]
+    assert "p1" in rc.describir(d) and "descarte" in rc.describir(d)
+    b = [f for f in des if f["priority"] == fp.PRIO_DIFUSION][0]
+    txt = rc.describir(b, nombre=lambda x: "sw")
+    assert txt.startswith("sw t60 p200") and "IN_PORT=" in txt and "salidas [" in txt

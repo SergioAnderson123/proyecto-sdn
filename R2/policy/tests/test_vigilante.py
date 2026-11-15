@@ -253,3 +253,10 @@ def test_cluster_sin_ningun_nodo_lanza_onos_no_disponible():
         assert "nodo 0" in str(e) and "nodo 1" in str(e)
     else:
         raise AssertionError("debía lanzar ONOSNoDisponible")
+
+
+def test_el_aviso_de_cambio_dice_que_flujos_exactos_difieren():
+    v, onos, reloj, logs = nuevo()
+    cae_el_cable_core1_acc1(onos)
+    v.ciclo()
+    assert any("sobra:" in x for x in logs) and any("falta:" in x for x in logs)
