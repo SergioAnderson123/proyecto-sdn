@@ -99,3 +99,42 @@ def test_get_y_delete_no_envian_content_type_pero_post_si():
     o = ip.Onos("http://x:8181", "onos:rocks")
     assert "Content-Type" not in o.cabeceras(False) and o.cabeceras(False)["Accept"] == "application/json"
     assert o.cabeceras(True)["Content-Type"] == "application/json"
+
+
+def test_los_puertos_de_monitoreo_se_excluyen_de_la_difusion():
+    acceso = {C1: [1, 8], A1: [1]}
+    limpio = ip.sin_monitoreo(acceso, {C1: [1]})
+    assert limpio == {C1: [8], A1: [1]}
+    assert ip.sin_monitoreo({C1: [1]}, {C1: [1]}) == {}                    # sin puertos de acceso no queda ni la clave
+    plan = _con_nombres(lambda: ip.construir_plan(LINKS, HOSTS, acceso, C1, "B", 14, {C1: [1]}))
+    salidas = {i["port"] for f in plan for i in f["treatment"]["instructions"]}
+    entradas = {cr["port"] for f in plan for cr in f["selector"]["criteria"] if cr["type"] == "IN_PORT"}
+    assert "1" not in salidas and 1 not in entradas and "8" in salidas      # el 8 (datos) sí; el 1 (sensor) no
+
+
+def test_los_sensores_reales_del_dibujo_estan_excluidos_por_defecto():
+    assert ip.MONITOREO["of:00007e3401ecd842"] == [1] and ip.MONITOREO["of:000076f83813d34e"] == [1]     # core-1 y core-2: ens4 -> sensor
+    assert ip.MONITOREO["of:000052ca28945241"] == [4, 5]                                                 # borde: ens8 y ens9 -> sensores
+    real = ip.sin_monitoreo({"of:00007e3401ecd842": [1, 5], "of:000052ca28945241": [1, 4, 5]})
+    assert real == {"of:00007e3401ecd842": [5], "of:000052ca28945241": [1]}                              # quedan el server y host-jhon
+
+
+class _OnosConFlujos:
+    def __init__(self, flujos):
+        self.flujos, self.borrados = flujos, []
+
+    def get(self, ruta):
+        return {"flows": self.flujos}
+
+    def _pedir(self, metodo, ruta, cuerpo=None):
+        self.borrados.append((metodo, ruta))
+
+
+def test_vaciar_tabla_borra_solo_los_flujos_de_este_appid_en_esa_tabla():
+    f = [{"id": "11", "appId": "r2.proactivo", "tableId": 60}, {"id": "12", "appId": "r2.proactivo", "tableId": 0},
+         {"id": "13", "appId": "org.onosproject.core", "tableId": 60}, {"id": "14", "appId": "r2.proactivo", "tableId": 60}]
+    o = _OnosConFlujos(f)
+    # Onos.vaciar_tabla usa self.flujos_de_app y self._pedir: se enlazan al simulador
+    o.flujos_de_app = lambda dpid, tabla=None: ip.Onos.flujos_de_app(o, dpid, tabla)
+    n = ip.Onos.vaciar_tabla(o, "of:x", 60)
+    assert n == 2 and o.borrados == [("DELETE", "/flows/of:x/11"), ("DELETE", "/flows/of:x/14")]

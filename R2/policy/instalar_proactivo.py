@@ -19,6 +19,7 @@ import argparse
 import base64
 import json
 import sys
+import urllib.error
 import urllib.request
 
 import caminos as c
@@ -28,6 +29,18 @@ from vista_previa import hosts_de_onos, puertos_acceso_de
 
 APP_ID = "r2.proactivo"
 PRIO_ARP_TABLA0 = 40003          # sobre la sesión (40001) y el portal (40002); bajo el DHCP (40500). Ver R5/deploy/prioridades.yaml
+
+
+# Puertos de la RED DE MONITOREO (sensores node-sec-1/2): reciben solo la copia del espejo de R5, nunca difusión de la red de datos.
+# Según el dibujo oficial: ens4 de cada core -> su sensor, y ens8/ens9 del borde -> los dos sensores.
+MONITOREO = {"of:00007e3401ecd842": [1], "of:000076f83813d34e": [1], "of:000052ca28945241": [4, 5]}
+
+
+def sin_monitoreo(acceso, monitoreo=None):
+    """Quita de los puertos de acceso los de la red de monitoreo (la difusión ARP no debe entrar a esa red)."""
+    monitoreo = MONITOREO if monitoreo is None else monitoreo
+    limpio = {d: [p for p in ps if p not in monitoreo.get(d, [])] for d, ps in acceso.items()}
+    return {d: ps for d, ps in limpio.items() if ps}
 
 
 class Detener(Exception):
@@ -46,8 +59,9 @@ def flujo_arp_tabla0(dpid: str) -> dict:
             "selector": {"criteria": [{"type": "ETH_TYPE", "ethType": "0x0806"}]}}
 
 
-def construir_plan(links, hosts, acceso, dpid, fase, enlaces_esperados=14):
+def construir_plan(links, hosts, acceso, dpid, fase, enlaces_esperados=14, monitoreo=None):
     """Los flujos que se instalarían en `dpid` en esa fase. Lanza Detener si alguna comprobación de seguridad falla."""
+    acceso = sin_monitoreo(acceso, monitoreo)
     grafo = c.grafo_desde_links(links)
     dirigidos = sum(len(v) for v in grafo.values())
     if dirigidos != enlaces_esperados:
@@ -101,6 +115,18 @@ class Onos:
     def quitar_todo(self):
         return self._pedir("DELETE", f"/flows/application/{APP_ID}")
 
+    def flujos_de_app(self, dpid, tabla=None):
+        """Los flujos de este appId en el switch (opcionalmente solo los de una tabla)."""
+        return [f for f in self.get(f"/flows/{dpid}").get("flows", [])
+                if f.get("appId") == APP_ID and (tabla is None or f.get("tableId") == tabla)]
+
+    def vaciar_tabla(self, dpid, tabla):
+        """Borra los flujos de este appId en esa tabla del switch (para reinstalar sin dejar reglas viejas). Devuelve cuántos."""
+        viejos = self.flujos_de_app(dpid, tabla)
+        for f in viejos:
+            self._pedir("DELETE", f"/flows/{dpid}/{f['id']}")
+        return len(viejos)
+
 
 def puertos_acceso_rest(onos, links):
     """{dispositivo: [puertos]} sin pedir nada a mano: los puertos numéricos habilitados de cada switch menos los que tienen un enlace."""
@@ -146,7 +172,8 @@ def main(argv=None):
         links = onos.get("/links")["links"]
         hosts = hosts_de_onos(onos.get("/hosts"))
         acceso = puertos_acceso_de(arg.edge) if arg.edge else puertos_acceso_rest(onos, links)
-        print("Puertos de acceso:", {NOMBRES.get(d, d): sorted(p) for d, p in acceso.items()})
+        print("Puertos de acceso (red de datos):", {NOMBRES.get(d, d): sorted(p) for d, p in sin_monitoreo(acceso).items()})
+        print("Puertos de monitoreo excluidos de la difusión:", {NOMBRES.get(d, d): sorted(p) for d, p in MONITOREO.items()})
         plan = construir_plan(links, hosts, acceso, dpid, arg.fase, arg.enlaces)
         if arg.fase == "C":
             b = construir_plan(links, hosts, acceso, dpid, "B", arg.enlaces)
@@ -156,6 +183,15 @@ def main(argv=None):
         for f in plan:
             print("  tabla", f["tableId"], "prio", f["priority"], json.dumps(f["selector"]["criteria"]), "->", json.dumps(f["treatment"]["instructions"]))
         if arg.aplicar:
+            if arg.fase == "B":
+                try:
+                    borrados = onos.vaciar_tabla(dpid, fp.TABLA_REENVIO)
+                except urllib.error.HTTPError as e:
+                    raise Detener(f"No se pudieron borrar los flujos anteriores (HTTP {e.code}). Nada nuevo se instaló. Alternativa: "
+                                  "--fase quitar --aplicar y volver a instalar las fases en orden.")
+                if borrados:
+                    print(f"Se sustituyen {borrados} flujos anteriores de la tabla {fp.TABLA_REENVIO} de este switch (si su fase C está activa, el ARP "
+                          "se descarta unos instantes: no inunda).")
             onos.instalar(plan)
             print("Instalado. Ahora ejecuta el diagnóstico 95 y mira la CPU de ovs-vswitchd.")
         return 0

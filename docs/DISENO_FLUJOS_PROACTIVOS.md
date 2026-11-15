@@ -37,6 +37,8 @@ Un árbol no tiene ciclos. Si cada switch reenvía **solo con flujos unicast de 
 - `org.onosproject.proxyarp` (ONOS 2.7) **no respondió ni inundó** ARP: el contador de la regla ARP→CONTROLLER subía, pero no hubo ningún `Reply` ni `Request` saliente (tcpdump en `sw-acc-2` y en el sensor). Por código inunda solo por edge points, pero no se pudo hacer funcionar. Se descarta y se resuelve con el árbol de difusión por flujos.
 - Tras las pruebas de failover los 5 switches quedaron con maestro ctrl-2; se devolvieron a ctrl-1 con `--tags maestro`.
 
+- **Red de monitoreo fuera de la difusión (15-nov-2026):** los sensores (node-sec-1/2) viven en una red de monitoreo y solo reciben la copia del espejo de R5. Los puertos que van a ellos (ens4 de core-1 y core-2, ens8/ens9 del borde) se excluyen de la difusión ARP (`MONITOREO` en `instalar_proactivo.py`). Quedan como puertos de acceso solo hosts y server.
+
 ## Puntos por verificar en el entorno real
 - (resuelto) ONOS sí descubre los 7 enlaces por LLDP a través de VNRT.
 - Hay que ejecutar `vista_previa.py` con `edge_ports.txt` real (salida de `edge-ports`) antes de instalar nada.
