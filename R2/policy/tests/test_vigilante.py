@@ -260,3 +260,60 @@ def test_el_aviso_de_cambio_dice_que_flujos_exactos_difieren():
     cae_el_cable_core1_acc1(onos)
     v.ciclo()
     assert any("sobra:" in x for x in logs) and any("falta:" in x for x in logs)
+
+
+# ---------- respaldo ----------
+def test_el_servidor_de_salud_y_la_consulta_funcionan_de_verdad():
+    import time
+    srv = vg.servir_salud(0, lambda: {"ultimo_ciclo": time.time(), "rol": "principal"})
+    try:
+        url = f"http://127.0.0.1:{srv.server_address[1]}/salud"
+        assert vg.consultar_salud(url) is True
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert vg.consultar_salud(url, timeout=1) is False                           # ya no hay nadie escuchando
+    viejo = vg.servir_salud(0, lambda: {"ultimo_ciclo": time.time() - 120})
+    try:
+        assert vg.consultar_salud(f"http://127.0.0.1:{viejo.server_address[1]}/salud", max_edad_s=30) is False    # responde, pero su último ciclo es viejo
+    finally:
+        viejo.shutdown()
+        viejo.server_close()
+
+
+def test_el_respaldo_espera_mientras_el_principal_vive_asume_si_se_calla_y_cede_cuando_vuelve():
+    estado = {"ok": True}
+    v, onos, reloj, logs = nuevo(salud_principal=lambda: estado["ok"], muerto_s=45)
+    cae_el_cable_core1_acc1(onos)
+    assert v.ciclo() == "en espera"
+    reloj.pasar(20)
+    assert v.ciclo() == "en espera" and onos.borrados == 0                       # el principal vive: no toca nada aunque haya un cambio
+    estado["ok"] = False                                                          # el principal se calla (última respuesta: t=20)
+    reloj.pasar(30)
+    assert v.ciclo() == "en espera"                                               # 30 s de silencio < 45 s
+    reloj.pasar(20)
+    assert v.ciclo() == "esperando" and any("asumo el mando" in x for x in logs)  # 50 s: asume y detecta el cambio
+    reloj.pasar(16)
+    assert v.ciclo() == "aplicado" and onos.borrados > 0
+    estado["ok"] = True                                                           # el principal vuelve
+    reloj.pasar(5)
+    assert v.ciclo() == "en espera" and any("dejo el mando" in x for x in logs)
+
+
+def test_si_el_principal_ya_estaba_caido_al_arrancar_el_respaldo_espera_el_plazo_completo():
+    v, onos, reloj, logs = nuevo(salud_principal=lambda: False, muerto_s=45)
+    cae_el_cable_core1_acc1(onos)
+    assert v.ciclo() == "en espera"
+    reloj.pasar(30)
+    assert v.ciclo() == "en espera" and onos.borrados == 0
+    reloj.pasar(20)
+    assert v.ciclo() == "esperando"
+
+
+def test_el_principal_publica_la_hora_de_su_ultimo_ciclo():
+    import time
+    v, onos, reloj, _ = nuevo()
+    assert v.ultimo_ciclo is None
+    antes = time.time()
+    v.ciclo()
+    assert v.ultimo_ciclo >= antes

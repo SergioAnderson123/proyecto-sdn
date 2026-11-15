@@ -18,11 +18,14 @@ Los puertos de acceso salen de un archivo fijo (hecho con la red completa); adem
 (activo o no) se trata siempre como troncal: un cable caído NUNCA convierte sus puertos en "de acceso".
 """
 import argparse
+import http.server
 import json
 import os
 import sys
+import threading
 import time
 import urllib.error
+import urllib.request
 
 import caminos
 import flujos_proactivos as fp
@@ -39,9 +42,40 @@ def _nombre(d):
     return NOMBRES.get(d, d)
 
 
+# ---- respaldo: salud del principal ----
+def servir_salud(puerto, info):
+    """Servidor HTTP mínimo (GET /salud -> JSON de `info()`), en un hilo. Devuelve el servidor; `puerto=0` elige uno libre (para las pruebas)."""
+    class Manejador(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            cuerpo = json.dumps(info()).encode()
+            self.send_response(200 if self.path.startswith("/salud") else 404)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(cuerpo)))
+            self.end_headers()
+            self.wfile.write(cuerpo)
+
+        def log_message(self, *args):                          # no ensuciar el journal con cada consulta
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("0.0.0.0", puerto), Manejador)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def consultar_salud(url, timeout=3, max_edad_s=30):
+    """¿Está vivo el principal? Responde y su último ciclo es reciente. Cualquier error cuenta como 'no responde'."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            datos = json.loads(r.read().decode())
+        ultimo = datos.get("ultimo_ciclo")
+        return ultimo is not None and time.time() - float(ultimo) <= max_edad_s
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class Vigilante:
     def __init__(self, onos, preferidos, acceso, aplicar=False, estable_s=15, min_intervalo_s=60, max_cambios=200,
-                 interruptor=None, log=print, nombre=_nombre, reloj=time.monotonic, monitoreo=None):
+                 interruptor=None, log=print, nombre=_nombre, reloj=time.monotonic, monitoreo=None, salud_principal=None, muerto_s=45):
         self.onos, self.preferidos, self.aplicar = onos, list(preferidos), aplicar
         self.estable_s, self.min_intervalo_s, self.max_cambios = estable_s, min_intervalo_s, max_cambios
         self.interruptor, self.log, self.nombre, self.reloj = interruptor, log, nombre, reloj
@@ -50,6 +84,11 @@ class Vigilante:
         self.hosts = {}                        # MAC -> host; un host que ONOS deja de listar no se olvida
         self._huella = self._desde = self._ultimo_cambio = None
         self._avisos = set()
+        self.salud_principal, self.muerto_s = salud_principal, muerto_s     # solo en el respaldo: callable() -> ¿responde el principal?
+        self._activo = salud_principal is None                             # el principal siempre actúa; el respaldo, solo si el principal se calla
+        self._ultimo_ok = None
+        self.ultimo_ciclo = None                                           # hora (epoch) del último ciclo: lo publica /salud
+        self.ultimo_estado = "iniciando"
 
     # ---- ayudas ----
     def _aviso(self, clave, texto):
@@ -65,13 +104,35 @@ class Vigilante:
     def _reiniciar_espera(self):
         self._huella = self._desde = None
 
+    def _soy_activo(self):
+        """El principal siempre actúa. El respaldo solo si el principal lleva `muerto_s` segundos sin responder; en cuanto vuelve, cede."""
+        if self.salud_principal is None:
+            return True
+        ahora = self.reloj()
+        if self.salud_principal():
+            self._ultimo_ok = ahora
+            if self._activo:
+                self.log("El principal volvió a responder: dejo el mando y paso a espera.")
+                self._activo = False
+                self._reiniciar_espera()
+            return False
+        if self._ultimo_ok is None:
+            self._ultimo_ok = ahora                       # empieza a contar desde que lo vimos callado por primera vez
+        if not self._activo and ahora - self._ultimo_ok >= self.muerto_s:
+            self.log(f"El principal no responde desde hace {int(ahora - self._ultimo_ok)} s: asumo el mando.")
+            self._activo = True
+        return self._activo
+
     # ---- un ciclo ----
     def ciclo(self):
         """Hace una comprobación y devuelve una palabra que dice qué pasó (para el log y para las pruebas)."""
+        self.ultimo_ciclo = time.time()
         if self.interruptor and os.path.exists(self.interruptor):
             self._aviso("pausado", f"PAUSADO: existe {self.interruptor}; no se hace nada hasta que se borre.")
             return "pausado"
         self._olvidar_avisos("pausado")
+        if not self._soy_activo():
+            return "en espera"
         try:
             dispositivos = self.onos.get("/devices")["devices"]
             links = self.onos.get("/links")["links"]
@@ -191,6 +252,9 @@ def main(argv=None):
     a.add_argument("--interruptor", default="/etc/vigilante/desactivar")
     a.add_argument("--aplicar", action="store_true", help="sin esta bandera solo avisa")
     a.add_argument("--una-vez", action="store_true", help="hace un solo ciclo y termina (para pruebas)")
+    a.add_argument("--salud-puerto", type=int, default=0, help="publica GET /salud en este puerto (0 = no) para que el respaldo vea si el principal vive")
+    a.add_argument("--respaldo-de", metavar="URL", help="modo RESPALDO: solo actúa si esta URL /salud del principal deja de responder")
+    a.add_argument("--muerto", type=float, default=45, help="segundos sin respuesta del principal antes de que el respaldo asuma el mando")
     arg = a.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -214,9 +278,14 @@ def main(argv=None):
             return 2
         log(f"AVISO: no hay {arg.acceso}; sin él no se pueden calcular los flujos de difusión. Solo se vigila la conexión.")
         acceso = {}
+    salud = (lambda: consultar_salud(arg.respaldo_de)) if arg.respaldo_de else None
     v = Vigilante(onos, PREFERIDOS, acceso, aplicar=arg.aplicar, estable_s=arg.estable, min_intervalo_s=arg.min_intervalo,
-                  max_cambios=arg.max_cambios, interruptor=arg.interruptor, log=log)
-    log(f"Vigilante iniciado: nodos {arg.onos}; {'APLICA CAMBIOS' if arg.aplicar else 'solo avisa'}; cada {arg.intervalo}s.")
+                  max_cambios=arg.max_cambios, interruptor=arg.interruptor, log=log, salud_principal=salud, muerto_s=arg.muerto)
+    rol = f"RESPALDO de {arg.respaldo_de} (asume el mando tras {arg.muerto:g}s sin respuesta)" if arg.respaldo_de else "PRINCIPAL"
+    if arg.salud_puerto:
+        servir_salud(arg.salud_puerto, lambda: {"rol": "respaldo" if arg.respaldo_de else "principal", "ultimo_ciclo": v.ultimo_ciclo,
+                                                  "estado": v.ultimo_estado, "aplica": arg.aplicar, "activo": v._activo})
+    log(f"Vigilante iniciado ({rol}): nodos {arg.onos}; {'APLICA CAMBIOS' if arg.aplicar else 'solo avisa'}; cada {arg.intervalo}s.")
     try:
         while True:
             try:
@@ -224,6 +293,7 @@ def main(argv=None):
             except Exception as e:  # noqa: BLE001  - un fallo inesperado no debe matar al servicio
                 log(f"ERROR inesperado en el ciclo: {e!r}")
                 estado = "error"
+            v.ultimo_estado = estado
             if arg.una_vez:
                 log(f"estado: {estado}")
                 return 0

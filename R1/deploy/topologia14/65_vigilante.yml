@@ -1,7 +1,9 @@
-# Vigilante de la topología en node-ctrl-3: si cae un enlace o un switch, recalcula la tabla 60 de los switches (por la API de ONOS).
+# Vigilante de la topología: si cae un enlace o un switch, recalcula la tabla 60 de los switches (por la API de ONOS).
+# Hay dos instancias: el PRINCIPAL en node-ctrl-3 y un RESPALDO en node-ctrl-2 que solo actúa si el principal lleva 45 s sin responder.
 #   PLAYBOOK=65_vigilante.yml ./lanzar.sh                       # instala y arranca el servicio en modo SOLO AVISAR
 #   PLAYBOOK=65_vigilante.yml ./lanzar.sh -e aplicar=true       # el servicio también CAMBIA los flujos
-#   PLAYBOOK=65_vigilante.yml ./lanzar.sh -e accion=parar       # para y deshabilita el servicio
+#   PLAYBOOK=65_vigilante.yml ./lanzar.sh -e accion=parar       # para y deshabilita el servicio en las dos VM
+#   PLAYBOOK=65_vigilante.yml ./lanzar.sh --limit node-ctrl-3   # solo el principal (o --limit node-ctrl-2: solo el respaldo)
 #   PLAYBOOK=65_vigilante.yml ./lanzar.sh -e regenerar_acceso=true   # vuelve a guardar los puertos de acceso (solo con la red completa)
 #
 # Cómo funciona (diseño: docs/DISENO_FLUJOS_PROACTIVOS.md):
@@ -10,17 +12,23 @@
 #     diferencia borrando primero y montando después, para no formar nunca un lazo.
 #   - No hace nada si ningún ONOS responde, si /links viene vacío, si la red está partida o si existe /etc/vigilante/desactivar.
 #
-# Servicio: `systemctl status vigilante` y `journalctl -u vigilante -f` en node-ctrl-3.
+# Respaldo: el principal publica su estado en http://<ctrl-3>:8099/salud; el respaldo lo consulta cada ciclo. Si no responde (o su último ciclo es viejo)
+# durante 45 s, el respaldo asume el mando; en cuanto el principal vuelve, lo cede. Así no hay dos instancias cambiando flujos a la vez.
+#
+# Servicio: `systemctl status vigilante` y `journalctl -u vigilante -f` en node-ctrl-3 (y en node-ctrl-2).
 # Interruptor de emergencia (sin tocar el servicio):  sudo touch /etc/vigilante/desactivar     (para reanudar: sudo rm /etc/vigilante/desactivar)
 #
 # Los puertos de acceso (hosts y server, sin la red de monitoreo) se guardan UNA VEZ en /etc/vigilante/acceso.json y solo con los 14 enlaces
 # vivos: con un cable caído sus puertos parecerían de acceso y la difusión podría entrar en un lazo.
-- name: Vigilante de la topología en node-ctrl-3
-  hosts: node-ctrl-3
+- name: Vigilante de la topología (principal en node-ctrl-3, respaldo en node-ctrl-2)
+  hosts: node-ctrl-3:node-ctrl-2
   become: true
   gather_facts: false
   vars:
     accion: instalar                 # instalar | parar
+    rol: "{{ 'principal' if inventory_hostname == 'node-ctrl-3' else 'respaldo' }}"
+    puerto_salud: 8099
+    url_principal: "http://{{ hostvars['node-ctrl-3'].ansible_host }}:{{ puerto_salud }}/salud"
     aplicar: false
     regenerar_acceso: false
     carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
@@ -92,7 +100,7 @@
 
           [Service]
           WorkingDirectory={{ destino }}
-          ExecStart=/usr/bin/python3 {{ destino }}/vigilante.py --acceso {{ config }}/acceso.json --onos {{ nodos_onos }}{{ ' --aplicar' if (aplicar | bool) else '' }}
+          ExecStart=/usr/bin/python3 {{ destino }}/vigilante.py --acceso {{ config }}/acceso.json --onos {{ nodos_onos }} --salud-puerto {{ puerto_salud }}{{ (' --respaldo-de ' ~ url_principal) if rol == 'respaldo' else '' }}{{ ' --aplicar' if (aplicar | bool) else '' }}
           Restart=always
           RestartSec=5
 
