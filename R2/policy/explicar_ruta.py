@@ -14,6 +14,7 @@ import sys
 
 import caminos as c
 import flujos_proactivos as fp
+import puertos as pr
 from plan_arboles import NOMBRES, PREFERIDOS
 
 POR_NOMBRE = {v: k for k, v in NOMBRES.items()}
@@ -47,14 +48,18 @@ def derivar(grafo, origen, destino, preferidos):
             "saltos": len(ruta) - 1, "arbol_valido": c.es_arbol(arbol, destino)}
 
 
-def lineas(grafo, d, origen, destino, preferidos, mac=None, puerto_host=None):
-    """El informe en texto."""
+def lineas(grafo, d, origen, destino, preferidos, mac=None, puerto_host=None, nombres=None):
+    """El informe en texto. `nombres` ({(deviceId, puerto): interfaz}) añade la interfaz a cada puerto: p4[ens7]."""
     o = []
-    cables = sorted({tuple(sorted([(nombre(a), p) for a, p in ((x, pa), (y, pb))])) for x, pa, y, pb in
-                     [(a, p, b, next((q for v, q in grafo.get(b, []) if v == a), "?")) for a, sal in grafo.items() for b, p in sal]})
+    cables = set()
+    for a, sal in grafo.items():
+        for b, pa in sal:
+            pb = next((q for v, q in grafo.get(b, []) if v == a), "?")
+            cables.add(tuple(sorted([(nombre(a), a, pa), (nombre(b), b, pb)])))
+    cables = sorted(cables)
     o.append("PASO 1. Topología leída de ONOS (GET /onos/v1/links): %d switches, %d cables" % (len(grafo), len(cables)))
-    for (a, pa), (b, pb) in cables:
-        o.append(f"    {a} p{pa}  <->  {b} p{pb}")
+    for (na, a, pa), (nb, b, pb) in cables:
+        o.append(f"    {na} {pr.etiqueta(nombres, a, pa)}  <->  {nb} {pr.etiqueta(nombres, b, pb)}")
     if "error" in d:
         o.append(d["error"])
         return o
@@ -66,17 +71,18 @@ def lineas(grafo, d, origen, destino, preferidos, mac=None, puerto_host=None):
     o.append("PASO 3. Decisión en cada switch del camino (regla: vecino un salto más cerca; a igualdad, el preferido; luego el de nombre menor)")
     o.append(f"    preferidos, en orden: {', '.join(nombre(p) for p in preferidos)}")
     for p in d["pasos"]:
-        cands = ", ".join(f"{nombre(u)} (por p{pt})" for u, pt in p["candidatos"])
+        cands = ", ".join(f"{nombre(u)} (por {pr.etiqueta(nombres, p['switch'], pt)})" for u, pt in p["candidatos"])
+        sale = pr.etiqueta(nombres, p["switch"], p["puerto"])
         if p["empate"]:
             o.append(f"    {nombre(p['switch'])} está a {saltos(p['nivel'])}. Candidatos: {cands}.")
-            o.append(f"        EMPATE -> gana {nombre(p['elegido'])}, el más preferido. Sale por p{p['puerto']}.")
+            o.append(f"        EMPATE -> gana {nombre(p['elegido'])}, el más preferido. Sale por {sale}.")
         else:
-            o.append(f"    {nombre(p['switch'])} está a {saltos(p['nivel'])}. Único candidato: {cands}. Sale por p{p['puerto']}.")
+            o.append(f"    {nombre(p['switch'])} está a {saltos(p['nivel'])}. Único candidato: {cands}. Sale por {sale}.")
     o.append("")
     o.append("PASO 4. Ruta resultante (%s)" % saltos(d["saltos"]))
     partes = []
     for p in d["pasos"]:
-        partes.append(f"{nombre(p['switch'])} --p{p['puerto']}-->")
+        partes.append(f"{nombre(p['switch'])} --{pr.etiqueta(nombres, p['switch'], p['puerto'])}-->")
     o.append("    " + " ".join(partes) + f" {nombre(destino)}")
     o.append("    Sin ciclos: la distancia al destino baja en cada salto (%s). Árbol válido: " % " > ".join([str(x["nivel"]) for x in d["pasos"]] + ["0"])
              + ("sí" if d["arbol_valido"] else "NO"))
@@ -86,7 +92,8 @@ def lineas(grafo, d, origen, destino, preferidos, mac=None, puerto_host=None):
         host = [{"mac": mac, "device": destino, "port": puerto_host}]
         flujos = fp.flujos_unicast(host, grafo, [p["switch"] for p in d["pasos"]] + [destino], preferidos)
         for f in flujos:
-            o.append(f"    {nombre(f['deviceId']):8s} eth_dst={mac} -> output:{f['treatment']['instructions'][0]['port']}")
+            salida = f["treatment"]["instructions"][0]["port"]
+            o.append(f"    {nombre(f['deviceId']):8s} eth_dst={mac} -> salida {pr.etiqueta(nombres, f['deviceId'], salida)}")
     return o
 
 
@@ -151,7 +158,8 @@ def main(argv=None):
             print(f"{dev} no está en la topología de ONOS.")
             return 2
     d = derivar(grafo, origen, destino, PREFERIDOS)
-    print("\n".join(lineas(grafo, d, origen, destino, PREFERIDOS, mac, puerto_host)))
+    nombres = pr.nombres_de_puertos(onos, grafo.keys()) if onos else None      # interfaz de cada puerto (solo si hay ONOS)
+    print("\n".join(lineas(grafo, d, origen, destino, PREFERIDOS, mac, puerto_host, nombres)))
     if arg.comparar and "error" not in d:
         print("\n".join(comparar_onos(onos, origen, destino, d["ruta"])))
     return 0

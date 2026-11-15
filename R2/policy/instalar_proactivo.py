@@ -24,6 +24,7 @@ import urllib.request
 
 import caminos as c
 import flujos_proactivos as fp
+import puertos as pr
 from plan_arboles import NOMBRES, PREFERIDOS
 from vista_previa import hosts_de_onos, puertos_acceso_de
 
@@ -179,6 +180,9 @@ def main(argv=None):
             b = construir_plan(links, hosts, acceso, dpid, "B", arg.enlaces)
             if not fase_b_instalada(onos, dpid, len(b)):
                 raise Detener(f"La fase B de {dpid} no está instalada ({len(b)} flujos en la tabla 60). Instálala antes de la C.")
+        nombres = pr.nombres_de_puertos(onos, [dpid])
+        if nombres:
+            print(f"Puertos de {NOMBRES.get(dpid, dpid)} (número = interfaz): {pr.resumen(nombres, dpid)}")
         print(f"Fase {arg.fase} en {dpid}: {len(plan)} flujos ({'SE INSTALAN' if arg.aplicar else 'simulación'})")
         for f in plan:
             print("  tabla", f["tableId"], "prio", f["priority"], json.dumps(f["selector"]["criteria"]), "->", json.dumps(f["treatment"]["instructions"]))
