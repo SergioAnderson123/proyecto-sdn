@@ -1,0 +1,133 @@
+# Vigilante de la topología en node-ctrl-3: si cae un enlace o un switch, recalcula la tabla 60 de los switches (por la API de ONOS).
+#   PLAYBOOK=65_vigilante.yml ./lanzar.sh                       # instala y arranca el servicio en modo SOLO AVISAR
+#   PLAYBOOK=65_vigilante.yml ./lanzar.sh -e aplicar=true       # el servicio también CAMBIA los flujos
+#   PLAYBOOK=65_vigilante.yml ./lanzar.sh -e accion=parar       # para y deshabilita el servicio
+#   PLAYBOOK=65_vigilante.yml ./lanzar.sh -e regenerar_acceso=true   # vuelve a guardar los puertos de acceso (solo con la red completa)
+#
+# Cómo funciona (diseño: docs/DISENO_FLUJOS_PROACTIVOS.md):
+#   - Habla con ONOS por REST: primero node-ctrl-1 (el maestro de los switches) y, si no responde, node-ctrl-2 y node-ctrl-3.
+#   - Cada pocos segundos compara los flujos que DEBERÍA haber con la topología viva y los que HAY; si difieren de forma estable, aplica la
+#     diferencia borrando primero y montando después, para no formar nunca un lazo.
+#   - No hace nada si ningún ONOS responde, si /links viene vacío, si la red está partida o si existe /etc/vigilante/desactivar.
+#
+# Servicio: `systemctl status vigilante` y `journalctl -u vigilante -f` en node-ctrl-3.
+# Interruptor de emergencia (sin tocar el servicio):  sudo touch /etc/vigilante/desactivar     (para reanudar: sudo rm /etc/vigilante/desactivar)
+#
+# Los puertos de acceso (hosts y server, sin la red de monitoreo) se guardan UNA VEZ en /etc/vigilante/acceso.json y solo con los 14 enlaces
+# vivos: con un cable caído sus puertos parecerían de acceso y la difusión podría entrar en un lazo.
+- name: Vigilante de la topología en node-ctrl-3
+  hosts: node-ctrl-3
+  become: true
+  gather_facts: false
+  vars:
+    accion: instalar                 # instalar | parar
+    aplicar: false
+    regenerar_acceso: false
+    carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
+    destino: /opt/vigilante
+    config: /etc/vigilante
+    nodos_onos: "{{ onos_nodos | map('regex_replace', '^', 'http://') | map('regex_replace', '$', ':8181') | join(',') }}"
+    archivos:
+      - caminos.py
+      - flujos_proactivos.py
+      - plan_arboles.py
+      - puertos.py
+      - recalculo.py
+      - onos_multi.py
+      - instalar_proactivo.py
+      - vista_previa.py
+      - vigilante.py
+  tasks:
+    - name: Parar y deshabilitar el servicio
+      ansible.builtin.systemd:
+        name: vigilante
+        state: stopped
+        enabled: false
+      when: accion == 'parar'
+      failed_when: false
+      tags: [vigilante]
+
+    - name: Preparar las carpetas
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: ["{{ destino }}", "{{ config }}"]
+      when: accion == 'instalar'
+      tags: [vigilante]
+
+    - name: Copiar el código (solo biblioteca estándar de Python 3)
+      ansible.builtin.copy:
+        src: "{{ carpeta_codigo }}/{{ item }}"
+        dest: "{{ destino }}/{{ item }}"
+        mode: "0644"
+      loop: "{{ archivos }}"
+      register: codigo
+      when: accion == 'instalar'
+      tags: [vigilante]
+
+    - name: Guardar los puertos de acceso (exige los 14 enlaces vivos)
+      ansible.builtin.command:
+        cmd: "python3 {{ destino }}/vigilante.py --generar-acceso {{ config }}/acceso.json --onos {{ nodos_onos }}"
+        chdir: "{{ destino }}"
+        creates: "{{ config }}/acceso.json"
+      when: accion == 'instalar' and not (regenerar_acceso | bool)
+      tags: [vigilante]
+
+    - name: Volver a guardar los puertos de acceso
+      ansible.builtin.command:
+        cmd: "python3 {{ destino }}/vigilante.py --generar-acceso {{ config }}/acceso.json --onos {{ nodos_onos }}"
+        chdir: "{{ destino }}"
+      when: accion == 'instalar' and (regenerar_acceso | bool)
+      tags: [vigilante]
+
+    - name: Servicio systemd
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/vigilante.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Vigilante de la topologia (reenvio proactivo, recalculo ante caidas)
+          After=network-online.target docker.service
+
+          [Service]
+          WorkingDirectory={{ destino }}
+          ExecStart=/usr/bin/python3 {{ destino }}/vigilante.py --acceso {{ config }}/acceso.json --onos {{ nodos_onos }}{{ ' --aplicar' if (aplicar | bool) else '' }}
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      register: unidad
+      when: accion == 'instalar'
+      tags: [vigilante]
+
+    - name: Arrancar el servicio (se reinicia si cambió el código o la configuración)
+      ansible.builtin.systemd:
+        name: vigilante
+        daemon_reload: true
+        enabled: true
+        state: "{{ 'restarted' if ((codigo is defined and codigo.changed) or unidad.changed) else 'started' }}"
+      when: accion == 'instalar'
+      tags: [vigilante]
+
+    - name: Esperar unos segundos y mirar el registro
+      ansible.builtin.shell: sleep 8; systemctl is-active vigilante; journalctl -u vigilante -n 12 --no-pager
+      register: registro
+      changed_when: false
+      when: accion == 'instalar'
+      tags: [vigilante]
+
+    - name: Estado del vigilante
+      ansible.builtin.debug:
+        var: registro.stdout_lines
+      when: accion == 'instalar'
+      tags: [vigilante]
+
+    - name: El servicio debe estar activo
+      ansible.builtin.assert:
+        that: "registro.stdout_lines[0] == 'active'"
+        fail_msg: "El vigilante no arrancó: journalctl -u vigilante -n 30 en node-ctrl-3"
+        quiet: true
+      when: accion == 'instalar'
+      tags: [vigilante]

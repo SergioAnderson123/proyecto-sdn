@@ -29,6 +29,8 @@ def grafo_desde_links(links: Iterable[dict]) -> Grafo:
     no se usa. Con enlaces paralelos entre los mismos dos switches se conserva el de menor puerto (resultado estable)."""
     mejor: Dict[Tuple[str, str], int] = {}
     for e in links:
+        if e.get("state", "ACTIVE") != "ACTIVE":         # un enlace que ONOS no da por activo no se usa
+            continue
         origen, destino = e["src"]["device"], e["dst"]["device"]
         if origen == destino:
             continue

@@ -39,6 +39,17 @@ Un árbol no tiene ciclos. Si cada switch reenvía **solo con flujos unicast de 
 
 - **Red de monitoreo fuera de la difusión (15-nov-2026):** los sensores (node-sec-1/2) viven en una red de monitoreo y solo reciben la copia del espejo de R5. Los puertos que van a ellos (ens4 de core-1 y core-2, ens8/ens9 del borde) se excluyen de la difusión ARP (`MONITOREO` en `instalar_proactivo.py`). Quedan como puertos de acceso solo hosts y server.
 
+## Recálculo ante caídas de enlaces o switches (vigilante)
+Vive en `node-ctrl-3` como servicio `systemd` (`R1/deploy/topologia14/65_vigilante.yml`) y trabaja por la API REST de ONOS; ONOS empuja los flujos a los switches por la red de gestión.
+- **Qué compara:** cada ciclo (5 s) calcula los flujos que DEBERÍA haber en la tabla 60 con la topología viva (`/devices` disponibles, `/links` ACTIVE en los dos sentidos) y los compara con los que HAY (`GET /flows`). Sirve igual para un cable caído, un switch caído o un host nuevo.
+- **Qué nodos usa:** primero `node-ctrl-1` (maestro de los switches) y, si no responde, `.2` y `.3`. Se queda con el que respondió y reintenta el preferido cada minuto. Un 4xx es una respuesta real; un 5xx, un tiempo agotado o una conexión rechazada hacen pasar al siguiente.
+- **Cambio sin lazos ("romper antes de montar"):** primero se BORRAN los flujos que sobran o cambian y después se AÑADEN los nuevos. Mientras se borra, cada switch tiene flujos del árbol viejo o ninguno (reenvío dentro del árbol viejo); mientras se añade, los switches sin cambios y los ya actualizados reenvían solo por aristas del árbol nuevo. Probado con un simulador sobre cada cable, cada switch y cada par de cables caídos, en cientos de estados intermedios al azar: ningún switch recibe el broadcast dos veces.
+- **Raíz:** core-1; si cae, core-2 (orden de `PREFERIDOS`).
+- **Cuándo NO actúa:** interruptor (`/etc/vigilante/desactivar`); ningún ONOS responde o `/links` viene vacío con switches vivos (ONOS reiniciando, no una caída); la red queda partida; el cambio no lleva 15 s estable; hubo otro cambio hace menos de 60 s; el cambio supera 200 flujos (datos incompletos); sin `--aplicar` solo escribe lo que haría.
+- **Puertos de acceso:** salen de un archivo fijo (`acceso.json`) generado UNA VEZ con los 14 enlaces vivos. Además, todo puerto que alguna vez salió en un enlace (activo o no) se trata siempre como troncal: un cable caído nunca convierte sus puertos en "de acceso".
+- **Hosts:** un host que ONOS deja de listar no se olvida (ONOS puede tardar en volver a listarlos tras reiniciar).
+- **Limitaciones:** una sola instancia (si cae `node-ctrl-3` nadie recalcula, aunque los flujos instalados siguen funcionando; respaldo en `ctrl-2` pendiente); si la red queda partida no hace nada; los flujos de la tabla 0 (fase C) no los gestiona.
+
 ## Puntos por verificar en el entorno real
 - (resuelto) ONOS sí descubre los 7 enlaces por LLDP a través de VNRT.
 - Hay que ejecutar `vista_previa.py` con `edge_ports.txt` real (salida de `edge-ports`) antes de instalar nada.

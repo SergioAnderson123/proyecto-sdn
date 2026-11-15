@@ -89,9 +89,10 @@ def construir_plan(links, hosts, acceso, dpid, fase, enlaces_esperados=14, monit
 
 
 class Onos:
-    def __init__(self, url, usuario):
+    def __init__(self, url, usuario, timeout=15):
         self.url = url.rstrip("/") + "/onos/v1"
         self.auth = "Basic " + base64.b64encode(usuario.encode()).decode()
+        self.timeout = timeout
 
     def cabeceras(self, con_cuerpo):
         """Content-Type solo si hay cuerpo: ONOS responde 415 a un GET/DELETE que lo declare sin enviar nada."""
@@ -103,7 +104,7 @@ class Onos:
     def _pedir(self, metodo, ruta, cuerpo=None):
         req = urllib.request.Request(self.url + ruta, method=metodo, data=None if cuerpo is None else json.dumps(cuerpo).encode(),
                                      headers=self.cabeceras(cuerpo is not None))
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with urllib.request.urlopen(req, timeout=self.timeout) as r:
             t = r.read().decode()
             return json.loads(t) if t else {}
 
@@ -115,6 +116,9 @@ class Onos:
 
     def quitar_todo(self):
         return self._pedir("DELETE", f"/flows/application/{APP_ID}")
+
+    def borrar(self, dpid, flow_id):
+        return self._pedir("DELETE", f"/flows/{dpid}/{flow_id}")
 
     def flujos_de_app(self, dpid, tabla=None):
         """Los flujos de este appId en el switch (opcionalmente solo los de una tabla)."""
