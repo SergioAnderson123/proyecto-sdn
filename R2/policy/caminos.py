@@ -43,31 +43,58 @@ def grafo_desde_links(links: Iterable[dict]) -> Grafo:
     return grafo
 
 
-def arbol_hacia(grafo: Grafo, destino: str, preferidos: Iterable[str] = ()) -> Arbol:
-    """Árbol de caminos más cortos HACIA `destino`: para cada dispositivo, el siguiente salto y el puerto local por el que sale.
-
-    Búsqueda en anchura desde el destino por los enlaces inversos: cada dispositivo se fija una sola vez, así que el resultado es un árbol
-    (sin ciclos) por construcción. Ante dos caminos igual de cortos gana el que pasa por el dispositivo más preferido (`preferidos`, por
-    ejemplo [sw-core-1, sw-core-2]: el tráfico va por core-1 mientras pueda) y, después, el de nombre menor. Los dispositivos sin camino
-    al destino no figuran en el resultado."""
-    rango = {d: i for i, d in enumerate(preferidos)}
-    por_nombre = lambda d: (rango.get(d, len(rango)), d)  # noqa: E731
-    entrantes: Dict[str, List[Tuple[str, int]]] = {}      # u -> [(v, puerto de v hacia u)]
+def niveles_hacia(grafo: Grafo, destino: str) -> Dict[str, int]:
+    """Saltos que separan a cada dispositivo del destino (búsqueda en anchura por los enlaces inversos). Los que no llegan no figuran."""
+    entrantes: Dict[str, List[str]] = {}
     for v, salidas in grafo.items():
-        for u, puerto in salidas:
-            entrantes.setdefault(u, []).append((v, puerto))
-    arbol: Arbol = {}
-    visto = {destino}
+        for u, _ in salidas:
+            entrantes.setdefault(u, []).append(v)
+    dist = {destino: 0}
     cola = deque([destino])
     while cola:
         u = cola.popleft()
-        for v, puerto in sorted(entrantes.get(u, []), key=lambda e: (por_nombre(e[0]), e[1])):
-            if v in visto:
-                continue
-            visto.add(v)
-            arbol[v] = (u, puerto)
-            cola.append(v)
+        for v in sorted(entrantes.get(u, [])):
+            if v not in dist:
+                dist[v] = dist[u] + 1
+                cola.append(v)
+    return dist
+
+
+def _clave(preferidos: Iterable[str]):
+    rango = {d: i for i, d in enumerate(preferidos)}
+    return lambda e: (rango.get(e[0], len(rango)), e[0], e[1])      # e = (vecino, puerto)
+
+
+def arbol_hacia(grafo: Grafo, destino: str, preferidos: Iterable[str] = ()) -> Arbol:
+    """Árbol de caminos más cortos HACIA `destino`: para cada dispositivo, el siguiente salto y el puerto local por el que sale.
+
+    Regla: cada dispositivo elige, entre sus vecinos que están UN SALTO MÁS CERCA del destino, el más preferido (`preferidos`, por ejemplo
+    [sw-core-1, sw-core-2]: el tráfico va por core-1 mientras pueda) y, a igualdad, el de nombre menor. Como la distancia al destino baja en
+    cada salto, es imposible volver a un dispositivo ya visitado: el resultado es un árbol (sin ciclos) por construcción. Los dispositivos
+    sin camino al destino no figuran en el resultado."""
+    dist = niveles_hacia(grafo, destino)
+    clave = _clave(preferidos)
+    arbol: Arbol = {}
+    for v, salidas in grafo.items():
+        if v == destino or v not in dist:
+            continue
+        candidatos = [(u, p) for u, p in salidas if dist.get(u) == dist[v] - 1]
+        u, p = min(candidatos, key=clave)
+        arbol[v] = (u, p)
     return arbol
+
+
+def decisiones(grafo: Grafo, destino: str, preferidos: Iterable[str] = ()) -> Dict[str, dict]:
+    """Por qué cada dispositivo sale por donde sale: su distancia, los candidatos (vecinos un salto más cerca, ya ordenados por preferencia),
+    el elegido y si hubo empate. Es la misma regla que `arbol_hacia`, expuesta para poder explicarla y demostrarla."""
+    dist = niveles_hacia(grafo, destino)
+    arbol = arbol_hacia(grafo, destino, preferidos)
+    clave = _clave(preferidos)
+    res = {}
+    for v, (elegido, puerto) in arbol.items():
+        cands = sorted([(u, p) for u, p in grafo[v] if dist.get(u) == dist[v] - 1], key=clave)
+        res[v] = {"nivel": dist[v], "candidatos": cands, "elegido": elegido, "puerto": puerto, "empate": len(cands) > 1}
+    return res
 
 
 def camino(arbol: Arbol, origen: str, destino: str) -> Optional[List[str]]:
