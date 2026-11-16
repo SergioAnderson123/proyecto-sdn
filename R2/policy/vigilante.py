@@ -81,7 +81,7 @@ class Vigilante:
         self.onos, self.preferidos, self.aplicar = onos, list(preferidos), aplicar
         self.estable_s, self.min_intervalo_s, self.max_cambios = estable_s, min_intervalo_s, max_cambios
         self.interruptor, self.log, self.nombre, self.reloj = interruptor, log, nombre, reloj
-        self.acceso_fijo = sin_monitoreo(acceso, monitoreo)
+        self.acceso_fijo = sin_monitoreo(acceso or {}, monitoreo)        # capa 3 no necesita los puertos de acceso (acceso.json); sin el archivo llega None
         self.troncales = set()                 # (switch, puerto) que alguna vez salió en un enlace
         self.plan, self.nucleo = plan, (list(nucleo) if nucleo else None)     # capa 3: plan de subredes (capa3.Plan) y switches con rutas completas; sin plan, capa 2
         self.hosts_fijos, self.copiar_arp = list(hosts_fijos), copiar_arp     # hosts que ONOS no aprende solos; copia del ARP de acceso al controlador

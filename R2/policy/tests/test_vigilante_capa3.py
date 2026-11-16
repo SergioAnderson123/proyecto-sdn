@@ -230,3 +230,12 @@ def test_un_plan_inexistente_o_invalido_impide_arrancar(tmp_path, capsys):
     malo.write_text(json.dumps({"gw_mac": "xx", "subredes": []}), encoding="utf-8")
     assert vg.main(["--subredes", str(malo), "--acceso", str(tmp_path / "x.json"), "--una-vez"]) == 2
     assert "NO ARRANCO" in capsys.readouterr().out
+
+
+def test_la_linea_de_comandos_arranca_en_capa_3_sin_archivo_de_acceso(tmp_path, capsys):
+    """Regresion del 16-nov: sin --acceso (capa 3 no lo necesita) el vigilante se caia con AttributeError al construirse."""
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"gw_mac": "02:00:5E:00:00:FE", "subredes": [
+        {"nombre": "servicios", "dispositivo": "core-1", "prefijo": "10.0.0.0/24", "gateway": "10.0.0.254", "puertos": [5]}]}), encoding="utf-8")
+    assert vg.main(["--onos", "http://127.0.0.1:1", "--subredes", str(plan), "--acceso", str(tmp_path / "no_existe.json"), "--una-vez"]) == 0
+    assert "MODO CAPA 3" in capsys.readouterr().out
