@@ -17,6 +17,8 @@
     plan: "{{ repo }}/R2/policy/planes/vnrt_topologia14.json"
     config: /tmp/gateway_arp_config.json
     esperados: 4
+    reinstalar: false     # -e reinstalar=true: desinstala la app y sube el .oar de nuevo (para actualizar una version)
+    karaf: [sshpass, -p, "{{ onos_pass }}", ssh, -p, "8101", -o, StrictHostKeyChecking=no, -o, UserKnownHostsFile=/dev/null, "{{ onos_user }}@{{ onos_ip }}"]
   tasks:
     - name: Comprobar que el .oar y el plan estan en este clon del repositorio (hay que hacer git pull antes)
       ansible.builtin.stat:
@@ -65,10 +67,27 @@
       register: existente
       tags: [instalar]
 
-    - name: Subir el .oar y activarla (solo si no estaba instalada)
+    - name: Desinstalar la version anterior (solo con -e reinstalar=true)
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}"
+        method: DELETE
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 204]
+      when: existente.status == 200 and reinstalar | bool
+      tags: [instalar]
+
+    - name: Esperar 8 s tras desinstalar
+      ansible.builtin.pause:
+        seconds: 8
+      when: existente.status == 200 and reinstalar | bool
+      tags: [instalar]
+
+    - name: Subir el .oar y activarla (si no estaba instalada o se reinstala)
       ansible.builtin.command:
         argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/octet-stream", --data-binary, "@{{ oar }}", "{{ api }}/applications?activate=true"]
-      when: existente.status == 404
+      when: existente.status == 404 or reinstalar | bool
       changed_when: true
       tags: [instalar]
 
@@ -81,6 +100,19 @@
         force_basic_auth: true
         status_code: [200, 201, 204]
       when: existente.status == 200 and existente.json.state | default('') != 'ACTIVE'
+      tags: [instalar]
+
+    - name: Esperar 5 s y asegurar el feature en Karaf (ONOS puede dejar la app ACTIVE con el feature Uninstalled; instalarlo es idempotente)
+      ansible.builtin.pause:
+        seconds: 5
+      tags: [instalar]
+
+    - name: Instalar el feature gateway-arp en Karaf
+      ansible.builtin.command:
+        argv: "{{ karaf + ['feature:install gateway-arp'] }}"
+      register: feature
+      changed_when: "'Adding features' in feature.stdout"
+      failed_when: false
       tags: [instalar]
 
     - name: Esperar 6 s a que el componente OSGi de la app arranque

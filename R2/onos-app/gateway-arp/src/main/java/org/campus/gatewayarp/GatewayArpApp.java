@@ -17,6 +17,10 @@ import org.onosproject.net.config.basics.SubjectFactories;
 import org.onosproject.net.device.DeviceEvent;
 import org.onosproject.net.device.DeviceListener;
 import org.onosproject.net.device.DeviceService;
+import org.onosproject.net.driver.DefaultDriverData;
+import org.onosproject.net.driver.DefaultDriverHandler;
+import org.onosproject.net.driver.Driver;
+import org.onosproject.net.driver.DriverService;
 import org.onosproject.net.flow.DefaultFlowRule;
 import org.onosproject.net.flow.DefaultTrafficSelector;
 import org.onosproject.net.flow.DefaultTrafficTreatment;
@@ -64,6 +68,9 @@ public class GatewayArpApp {
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected NetworkConfigRegistry configRegistry;
+
+    @Reference(cardinality = ReferenceCardinality.MANDATORY)
+    protected DriverService driverService;
 
     private ApplicationId appId;
 
@@ -135,11 +142,13 @@ public class GatewayArpApp {
                 log.info("Gateway ARP: {} aún no está disponible; se instalará cuando aparezca", g.device);
                 continue;
             }
-            ExtensionTreatmentResolver resolutor = dispositivo.is(ExtensionTreatmentResolver.class) ? dispositivo.as(ExtensionTreatmentResolver.class) : null;
-            if (resolutor == null) {
-                log.error("Gateway ARP: {} no soporta extensiones de tratamiento (¿no es Open vSwitch?); se omite", g.device);
+            Driver driver = driverService.getDriver(g.device);
+            if (driver == null || !driver.hasBehaviour(ExtensionTreatmentResolver.class)) {
+                log.error("Gateway ARP: el driver de {} ({}) no tiene ExtensionTreatmentResolver; se omite", g.device, driver == null ? "sin driver" : driver.name());
                 continue;
             }
+            DefaultDriverHandler manejador = new DefaultDriverHandler(new DefaultDriverData(driver, g.device));
+            ExtensionTreatmentResolver resolutor = driver.createBehaviour(manejador, ExtensionTreatmentResolver.class);
             ExtensionTreatment ethSrcADst = resolutor.getExtensionInstruction(NICIRA_MOV_ETH_SRC_TO_DST.type());
             ExtensionTreatment shaATha = resolutor.getExtensionInstruction(NICIRA_MOV_ARP_SHA_TO_THA.type());
             ExtensionTreatment spaATpa = resolutor.getExtensionInstruction(NICIRA_MOV_ARP_SPA_TO_TPA.type());
