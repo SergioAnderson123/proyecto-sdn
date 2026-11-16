@@ -1,0 +1,9 @@
+# Prepara h1-profesor como suplicante 802.1X (usa el playbook de R1/deploy/hosts/hosts.yml sobre el grupo [hosts] de inventario.ini).
+#   PLAYBOOK=72_suplicante.yml ./lanzar.sh                                   # instala wpa_supplicant, certificados y el reescrito de EAPOL; NO autentica
+#   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true                  # además arranca el agente: se autentica solo (ES EL LOGIN: ver el protocolo, paso E)
+#   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e parar=true                     # para el agente (el suplicante envía el logoff)
+# Lo que cambia en el host: paquetes (wpasupplicant, tcpdump), /home/ubuntu/supp, el servicio r1-eapol-bcast (un filtro tc de salida en ens4 que cambia el
+# destino del EAPOL 01:80:c2:00:00:03, que la red virtual de VNRT descarta, a broadcast) y el servicio r1-agente (habilitado, no arrancado). La red no cambia:
+# el EAPOL va al controlador por la regla de ONOS (prioridad 40000, tipo 0x888e) y nunca se inunda.
+- name: Preparar h1-profesor como suplicante 802.1X
+  ansible.builtin.import_playbook: ../hosts/hosts.yml
