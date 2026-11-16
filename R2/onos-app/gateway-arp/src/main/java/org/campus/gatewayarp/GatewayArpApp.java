@@ -33,9 +33,9 @@ import org.osgi.service.component.annotations.ReferenceCardinality;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static org.onosproject.net.flow.instructions.ExtensionTreatmentType.ExtensionTreatmentTypes.NICIRA_MOVE_ARP_SHA_TO_THA;
-import static org.onosproject.net.flow.instructions.ExtensionTreatmentType.ExtensionTreatmentTypes.NICIRA_MOVE_ARP_SPA_TO_TPA;
-import static org.onosproject.net.flow.instructions.ExtensionTreatmentType.ExtensionTreatmentTypes.NICIRA_MOVE_ETH_SRC_TO_DST;
+import static org.onosproject.net.flow.instructions.ExtensionTreatmentType.ExtensionTreatmentTypes.NICIRA_MOV_ARP_SHA_TO_THA;
+import static org.onosproject.net.flow.instructions.ExtensionTreatmentType.ExtensionTreatmentTypes.NICIRA_MOV_ARP_SPA_TO_TPA;
+import static org.onosproject.net.flow.instructions.ExtensionTreatmentType.ExtensionTreatmentTypes.NICIRA_MOV_ETH_SRC_TO_DST;
 
 /**
  * Gateway ARP: en cada switch de acceso, contesta el ARP del gateway virtual de la subred SIN controlador (la petición se convierte en respuesta dentro del propio switch) con flujos que instala
@@ -140,9 +140,9 @@ public class GatewayArpApp {
                 log.error("Gateway ARP: {} no soporta extensiones de tratamiento (¿no es Open vSwitch?); se omite", g.device);
                 continue;
             }
-            ExtensionTreatment ethSrcADst = resolutor.getExtensionInstruction(NICIRA_MOVE_ETH_SRC_TO_DST.type());
-            ExtensionTreatment shaATha = resolutor.getExtensionInstruction(NICIRA_MOVE_ARP_SHA_TO_THA.type());
-            ExtensionTreatment spaATpa = resolutor.getExtensionInstruction(NICIRA_MOVE_ARP_SPA_TO_TPA.type());
+            ExtensionTreatment ethSrcADst = resolutor.getExtensionInstruction(NICIRA_MOV_ETH_SRC_TO_DST.type());
+            ExtensionTreatment shaATha = resolutor.getExtensionInstruction(NICIRA_MOV_ARP_SHA_TO_THA.type());
+            ExtensionTreatment spaATpa = resolutor.getExtensionInstruction(NICIRA_MOV_ARP_SPA_TO_TPA.type());
             for (PortNumber puerto : g.ports) {
                 TrafficSelector seleccion = DefaultTrafficSelector.builder()
                         .matchInPort(puerto)

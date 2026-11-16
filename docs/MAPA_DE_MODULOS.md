@@ -14,10 +14,9 @@ Un módulo es una pieza con una responsabilidad, su propia carpeta o conjunto de
 | R1 | OpenLDAP | `R1/shared/ldap/` | usuarios y roles que consulta FreeRADIUS | en vivo |
 | R1 | Policy Mapper | `R1/shared/policy_mapper/`, `R1/policy_mapper/` | traduce rol a flujos de ONOS; solo añade flujos (se limpia con `limpiar_r2.py`) | en vivo |
 | R2 | Tablas por rol | `R2/policy/policy_tables.py`, `policy.yaml`, `portal_auth.py` | tablas de rol, cuarentena, portal, DHCP, prioridades R2 | en vivo |
-| R2 | Reenvío proactivo (L2) | `R2/policy/flujos_proactivos.py`, `caminos.py`, `plan_arboles.py`, `puertos.py`, `instalar_proactivo.py`, `explicar_ruta.py`, `vista_previa.py` | ver §4 | en vivo |
-| R2 | Vigilante | `R2/policy/vigilante.py`, `recalculo.py`, `hosts_fijos.py`, `consultar_hosts.py`, `onos_multi.py` | observa enlaces y hosts de ONOS, recalcula el árbol y repara flujos. Modo L2 en vivo; modo capa 3 (`--subredes`, `--nucleo`) solo en simulación | L2 en vivo, L3 offline |
+| R2 | Vigilante y reenvío proactivo | `R2/policy/vigilante.py`, `recalculo.py`, `hosts_fijos.py`, `consultar_hosts.py`, `onos_multi.py` y la base que comparten con la instalación inicial: `flujos_proactivos.py`, `caminos.py`, `plan_arboles.py`, `puertos.py`, `instalar_proactivo.py`, `explicar_ruta.py`, `vista_previa.py` (ver §4) | genera e instala los flujos de la tabla 60 y el vigilante los mantiene: observa enlaces y hosts de ONOS, recalcula el árbol y repara. Modo L2 en vivo; modo capa 3 (`--subredes`, `--nucleo`) solo en simulación | L2 en vivo, L3 offline |
 | R2 | Capa 3 por subredes | `R2/policy/capa3.py`, `ovs_formato.py`, `planes/` (+ `viabilidad_capa3.py`, `spike_capa3.py`, `benchmark_capa3.py`) | un prefijo por switch de acceso, gateway virtual, rutas por árbol, entrega /32 con MAC y TTL | V1–V4 en vivo; vigilante L3 offline |
-| R2 | App ONOS Gateway ARP (Java) | `R2/onos-app/gateway-arp/`, `R2/policy/generar_config_gateway_arp.py` | instala como flujos propios de ONOS la respuesta ARP del gateway; permite `allowExtraneousRules=false` | escrita, sin compilar |
+| R2 | App ONOS Gateway ARP (Java) | `R2/onos-app/gateway-arp/`, `R2/policy/generar_config_gateway_arp.py` | instala como flujos propios de ONOS la respuesta ARP del gateway; permite `allowExtraneousRules=false` | compila (.oar de 13 KB); sin probar en ONOS |
 | R2 | Portal cautivo | `R2/portal_cautivo/` | invitados y portal | sin desplegar en la slice |
 | R2 | Panel de accesos | `R2/panel_accesos/` | vista de accesos | laboratorio |
 | R2 | MAB de respaldo | `R2/mab_vm/`, `R2/fallback/` | MAB cuando no hay 802.1X | laboratorio |
@@ -47,7 +46,7 @@ Fuera de la lista (no son módulos): playbooks de la slice (`R1/deploy/topologia
 | Plataforma | `DESPLIEGUE_UBUNTU.md`, `CERTIFICADOS_Y_ESCALABILIDAD.md`, `topologia-v4-14vms.drawio` |
 | Equipo/curso | `avance-01-roles.md`, `plan-avance-R5.md`, `pendientes-entrega-1.md`, `entrega-1/` |
 
-## 4. Qué hay dentro del reenvío proactivo
+## 4. Qué hay dentro del módulo de reenvío proactivo y vigilante
 
 | Archivo | Función |
 |---|---|
@@ -71,7 +70,7 @@ La app Java no importa nada de Python: solo lee la configuración que genera `ge
 
 ## 6. Huecos e incoherencias (ordenados por urgencia)
 
-1. **App Java sin compilar.** Los nombres de la API de ONOS están escritos de memoria; falta `construir.ps1` con Docker Desktop abierto y probarla con `allowExtraneousRules=false` (playbook `76`, aún por escribir).
+1. **App Java compilada pero sin probar en ONOS** (los nombres de Nicira eran `NICIRA_MOV_*`, corregidos al compilar). Falta instalarla con `allowExtraneousRules=false` (playbook `76`, aún por escribir).
 2. **Vigilante en modo capa 3 solo en simulación.** No se ha probado en vivo con la app Java ni con los hosts fijos con IP.
 3. **Plan de direccionamiento sin aplicar.** h1/h2 siguen en 10.0.0.201/.202; el plan A los pasa a 10.0.1.x / 10.0.2.x y exige DHCP por subred (hoy solo hay uno).
 4. **R5 vs. slice.** `R5/deploy/README` supone un enlace de subida por acceso y control en banda; `topologia14` tiene dos enlaces y gestión fuera de banda. Además: `HOME_NET` debe ser el agregado (10.0.0.0/16), bloquear por `IPV4_SRC`, revocar por (switch, puerto, MAC) y el espejo `NORMAL` debe pasar a la tabla 60.

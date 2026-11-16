@@ -4,7 +4,7 @@ Instala, **como flujos propios de ONOS**, los flujos estáticos con los que cada
 Por qué una app y no el REST: el REST de ONOS 2.7 no acepta los criterios `ARP_OP`/`ARP_TPA`, las instrucciones `ARP_OP/SHA/SPA` ni las extensiones de copia de campos (medido en vivo, `docs/DISENO_CAPA3.md` §6, V1); la API Java sí
 (así lo hace `openstacknetworking`). Los flujos de una app llevan su appId, así que **no se borran como "extraños"** (`allowExtraneousRules` puede seguir en `false`) y **ONOS los reinstala cuando el switch se reconecta** (los de `ovs-ofctl` se perderían).
 
-**Estado:** escrita contra la API de ONOS 2.7 (`FlowRuleService`, `ExtensionTreatmentResolver`, `NetworkConfigRegistry`); ver en el pie de este archivo si ya se compiló y probó en vivo.
+**Estado:** compila contra ONOS 2.7.0 (16-nov, `dist/gateway-arp-1.0.0.oar`, 13 KB; en ONOS 2.7 las constantes de Nicira se llaman `NICIRA_MOV_*`). Aún no se ha instalado ni probado en el clúster.
 
 ## Qué hace
 Por cada `(switch, puerto de acceso, gateway)` de su configuración instala, en la tabla 60 con prioridad 300:
