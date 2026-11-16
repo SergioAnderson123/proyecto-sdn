@@ -1,0 +1,91 @@
+# Hace PERSISTENTE la IP única de los servicios (10.0.0.10/24 en ens4 del server). Hasta ahora 70_fase_e.yml -e preparar_ip=true la ponía con `ip addr add` y se perdía
+# al reiniciar la VM, con lo que dejaban de funcionar el portal y todos los servicios (todo depende de esa IP).
+#   PLAYBOOK=75_server_ip_persistente.yml ./lanzar.sh                      # SOLO LEE: IP actual, archivos de netplan y quién configura ens4
+#   PLAYBOOK=75_server_ip_persistente.yml ./lanzar.sh -e aplicar=true      # escribe /etc/netplan/60-datos-ens4.yaml, lo valida (`netplan generate`) y lo aplica
+# Qué toca: solo la interfaz de datos ens4 (la de gestión ens3, por la que entra Ansible, no se menciona en el archivo nuevo). `netplan generate` falla sin cambiar nada si el YAML
+# fuera inválido. La IP ya puesta a mano coincide con la del archivo, así que no hay corte. Marcha atrás: borrar el archivo y `sudo netplan apply` (la IP volvería a faltar tras reiniciar).
+- name: IP de datos persistente en el server
+  hosts: server
+  become: true
+  gather_facts: false
+  vars:
+    aplicar: false
+    iface: ens4
+    ip_server: 10.0.0.10
+    prefijo: 24
+    archivo: /etc/netplan/60-datos-ens4.yaml
+  tasks:
+    - name: Estado actual
+      ansible.builtin.shell:
+        cmd: |
+          echo "ip -br: $(ip -br addr show {{ iface }} | tr -s ' ')"
+          echo "archivos netplan: $(ls /etc/netplan | tr '\n' ' ')"
+          echo "¿algún archivo menciona {{ iface }}?: $(grep -l '{{ iface }}' /etc/netplan/*.yaml 2>/dev/null | tr '\n' ' ' || true)"
+          [ -f {{ archivo }} ] && echo "{{ archivo }} YA EXISTE" || echo "{{ archivo }} no existe"
+      register: estado
+      changed_when: false
+      tags: [ip]
+
+    - name: Mostrar
+      ansible.builtin.debug:
+        msg: "{{ estado.stdout_lines }}"
+      tags: [ip]
+
+    - name: Otro archivo ya configura la interfaz (no se pisa)
+      ansible.builtin.shell:
+        cmd: "grep -l '{{ iface }}' /etc/netplan/*.yaml 2>/dev/null | grep -v '{{ archivo }}' || true"
+      register: otros
+      changed_when: false
+      tags: [ip]
+
+    - name: Detener si otro archivo ya define la interfaz
+      ansible.builtin.assert:
+        that: otros.stdout | trim | length == 0
+        fail_msg: "Ya hay otro archivo de netplan que menciona {{ iface }}: {{ otros.stdout | trim }}. Revísalo a mano antes de añadir el nuestro."
+        quiet: true
+      when: aplicar | bool
+      tags: [ip]
+
+    - name: Escribir la configuración de la interfaz de datos
+      ansible.builtin.copy:
+        dest: "{{ archivo }}"
+        mode: "0600"
+        owner: root
+        content: |
+          # IP única de los servicios de la topología de 14 VM (fase E). La pone 75_server_ip_persistente.yml.
+          network:
+            version: 2
+            ethernets:
+              {{ iface }}:
+                dhcp4: false
+                dhcp6: false
+                addresses: ["{{ ip_server }}/{{ prefijo }}"]
+      register: escrito
+      when: aplicar | bool
+      tags: [ip]
+
+    - name: Validar sin aplicar (falla sin cambiar nada si es inválido)
+      ansible.builtin.command: netplan generate
+      changed_when: false
+      when: aplicar | bool
+      tags: [ip]
+
+    - name: Aplicar
+      ansible.builtin.command: netplan apply
+      when: (aplicar | bool) and escrito.changed
+      tags: [ip]
+
+    - name: Comprobar que la IP sigue puesta
+      ansible.builtin.shell:
+        cmd: "ip -br addr show {{ iface }} | tr -s ' '"
+      register: despues
+      changed_when: false
+      failed_when: ip_server ~ '/' ~ prefijo not in despues.stdout
+      when: aplicar | bool
+      tags: [ip]
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ despues.stdout_lines }}"
+      when: aplicar | bool
+      tags: [ip]

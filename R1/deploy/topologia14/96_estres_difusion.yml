@@ -1,0 +1,163 @@
+# PRUEBA DE ESTRÉS anti-tormentas: un host genera difusión a ritmo controlado y se mide cada puerto de los 5 switches durante y después.
+# En vez de esperar a que algo se rompa, fuerza el caso peor: si hubiera un lazo, el tráfico se multiplicaría y los pps se dispararían.
+#   PLAYBOOK=96_estres_difusion.yml ./lanzar.sh -e modo=arp                  # difusión ARP: lo único que la red reparte, por el árbol (una copia por puerto)
+#   PLAYBOOK=96_estres_difusion.yml ./lanzar.sh -e modo=eth                  # difusión de un tipo de trama desconocido: debe morir en el switch de entrada
+#   PLAYBOOK=96_estres_difusion.yml ./lanzar.sh -e modo=desconocido          # TCP permitido a una MAC que nadie tiene: debe morir en el descarte de la tabla 60
+# Opciones: -e pps=500 (máx. 1000 aquí) -e segundos=25 -e emisor=h2-alumno -e switch_emisor=sw-acc-2
+# Seguridad: el generador limita a 2000 pps y 120 s, esta orquestación a 1000 pps, y se corta con Ctrl+C. Si algo sale mal: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true
+# Criterio: durante la prueba ningún puerto supera 1,5 veces el ritmo inyectado (sin multiplicación) y 3 s después de parar todos están por debajo de 20 pps (no queda
+# nada circulando). En eth/desconocido, además, los demás switches deben quedar por debajo de 20 pps (el tráfico no sale del switch de entrada).
+# Hace falta una sesión activa del emisor para eth y desconocido (si no, la cuarentena descarta igual, pero no se prueba el descarte de la tabla 60).
+- name: Estrés, paso 1 - arrancar el generador en el emisor
+  hosts: "{{ emisor | default('h2-alumno') }}"
+  become: true
+  gather_facts: false
+  vars:
+    modo: arp
+    pps: 500
+    segundos: 25
+    iface: ens4
+  tasks:
+    - name: Parámetros dentro de los límites
+      ansible.builtin.assert:
+        that:
+          - modo in ['arp', 'eth', 'desconocido']
+          - pps | int >= 1 and pps | int <= 1000
+          - segundos | int >= 15 and segundos | int <= 60
+        fail_msg: "modo arp|eth|desconocido, pps 1-1000 y segundos 15-60"
+        quiet: true
+      tags: [estres]
+
+    - name: Copiar el generador
+      ansible.builtin.copy:
+        src: files/estres_difusion.py
+        dest: /tmp/estres_difusion.py
+        mode: "0755"
+      tags: [estres]
+
+    - name: Arrancar el generador en segundo plano
+      ansible.builtin.command:
+        cmd: "python3 /tmp/estres_difusion.py --iface {{ iface }} --ip {{ ip_datos }} --modo {{ modo }} --pps {{ pps }} --segundos {{ segundos }}"
+      async: "{{ (segundos | int) + 40 }}"
+      poll: 0
+      register: trabajo
+      tags: [estres]
+
+    - name: Recordar el trabajo
+      ansible.builtin.set_fact:
+        trabajo_id: "{{ trabajo.ansible_job_id }}"
+      tags: [estres]
+
+- name: Estrés, paso 2 - medir los 5 switches DURANTE la inyección
+  hosts: switches
+  become: true
+  gather_facts: false
+  vars:
+    ventana: 10
+  tasks:
+    - name: Dejar que el generador alcance su ritmo
+      ansible.builtin.pause:
+        seconds: 3
+      run_once: true
+      become: false
+      delegate_to: localhost
+      tags: [estres]
+
+    - name: Medir pps por puerto durante la prueba
+      ansible.builtin.script:
+        cmd: "tasas_puertos.py {{ bridge }} {{ ventana }} 999999"
+        executable: /usr/bin/python3
+      register: durante
+      changed_when: false
+      tags: [estres]
+
+    - name: Guardar el máximo
+      ansible.builtin.set_fact:
+        max_durante: "{{ (durante.stdout | regex_search('maximo=([0-9]+)', '\\1') | first) | int }}"
+      tags: [estres]
+
+- name: Estrés, paso 3 - esperar a que el generador termine
+  hosts: "{{ emisor | default('h2-alumno') }}"
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Esperar el final
+      ansible.builtin.async_status:
+        jid: "{{ trabajo_id }}"
+      register: fin
+      until: fin.finished
+      retries: 40
+      delay: 3
+      tags: [estres]
+
+    - name: Lo que el generador dice haber enviado
+      ansible.builtin.debug:
+        msg: "{{ fin.stdout_lines | default([]) }}"
+      tags: [estres]
+
+- name: Estrés, paso 4 - medir los switches DESPUÉS de parar
+  hosts: switches
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Dejar que se vacíen las colas
+      ansible.builtin.pause:
+        seconds: 3
+      run_once: true
+      become: false
+      delegate_to: localhost
+      tags: [estres]
+
+    - name: Medir pps por puerto tras parar
+      ansible.builtin.script:
+        cmd: "tasas_puertos.py {{ bridge }} 5 999999"
+        executable: /usr/bin/python3
+      register: despues
+      changed_when: false
+      tags: [estres]
+
+    - name: Guardar el máximo y mostrar el resumen de este switch
+      ansible.builtin.set_fact:
+        max_despues: "{{ (despues.stdout | regex_search('maximo=([0-9]+)', '\\1') | first) | int }}"
+      tags: [estres]
+
+    - name: Resumen de este switch
+      ansible.builtin.debug:
+        msg:
+          - "{{ inventory_hostname }}: máximo durante = {{ max_durante }} pps; máximo después de parar = {{ max_despues }} pps"
+          - "durante:  {{ durante.stdout_lines }}"
+      tags: [estres]
+
+- name: Estrés, veredicto
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    modo: arp
+    pps: 500
+    switch_emisor: sw-acc-2
+  tasks:
+    - name: Ningún puerto multiplicó el ritmo inyectado
+      ansible.builtin.assert:
+        that: groups['switches'] | map('extract', hostvars, 'max_durante') | map('int') | max <= (pps | int * 1.5)
+        fail_msg: >-
+          MULTIPLICACIÓN: algún puerto superó {{ (pps | int * 1.5) | int }} pps con {{ pps }} pps inyectados. Máximos por switch (en el orden de groups.switches): {{ groups['switches'] | map('extract', hostvars, 'max_durante') | list }}.
+          Freno: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true
+        success_msg: "Sin multiplicación: ningún puerto superó 1,5 veces los {{ pps }} pps inyectados"
+      tags: [estres]
+
+    - name: Tras parar no queda tráfico circulando
+      ansible.builtin.assert:
+        that: groups['switches'] | map('extract', hostvars, 'max_despues') | map('int') | max < 20
+        fail_msg: "Quedó tráfico tras parar el generador (máximo {{ groups['switches'] | map('extract', hostvars, 'max_despues') | map('int') | max }} pps): posible lazo. Freno: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true"
+        success_msg: "Al parar el generador todos los puertos vuelven a menos de 20 pps: nada queda circulando"
+      tags: [estres]
+
+    - name: En eth y desconocido el tráfico no sale del switch de entrada
+      ansible.builtin.assert:
+        that: >-
+          groups['switches'] | reject('equalto', switch_emisor) | map('extract', hostvars, 'max_durante') | map('int') | max < 20
+        fail_msg: "El tráfico de modo {{ modo }} salió del switch de entrada: debería haberse descartado allí."
+        success_msg: "El tráfico de modo {{ modo }} murió en {{ switch_emisor }}: los demás switches quedaron por debajo de 20 pps"
+      when: modo in ['eth', 'desconocido']
+      tags: [estres]
