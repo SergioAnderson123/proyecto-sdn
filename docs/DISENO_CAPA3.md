@@ -107,6 +107,19 @@ el ARP cuya IP objetivo es un gateway de prueba (`10.99.x.254`) y el IPv4 cuya M
 **Resultado de la primera corrida de V2 (16-nov, en vivo, sin `allowExtraneousRules`):** `ovs-ofctl` instaló los flujos sin error en los 5 switches, pero **ONOS los borra por "extraños" en pocos segundos**: justo tras instalar (3 s) solo quedaban los de `sw-core-2` (5 de 5); a los 30 s, ninguno. Por eso la parte funcional (V3 y V4) falló con 100 % de pérdida: no era
 un fallo del diseño sino que los flujos ya no estaban. La limpieza funcionó (0 flujos de prueba y solo la IP de producción en los hosts) y la producción no se alteró (el ARP al server siguió respondiendo). Consecuencia: los flujos estáticos del ARP del gateway **exigen `allowExtraneousRules=true`** en ONOS; el playbook 97 ahora lo pone por defecto durante la prueba y lo revierte.
 
+**Resultado de V2–V4 con `allowExtraneousRules=true` (16-nov, en vivo): PASAN.**
+| Prueba | Resultado medido |
+|---|---|
+| ONOS conoce la propiedad | `FlowRuleManager` lista `allowExtraneousRules: "true"` tras el POST (el nombre es correcto; también `importExtraneousRules=false`, `purgeOnDisconnection=false`, `fallbackFlowPollFrequency=30`) |
+| V2: supervivencia a ONOS | los flujos de `ovs-ofctl` sobreviven 30 s en los 5 switches: `[5, 8, 5, 8, 8]` de `[5, 8, 5, 8, 8]` |
+| V3: ARP del gateway | h1 y h2 resuelven `10.99.x.254` con la MAC de prueba `02:00:5e:99:99:fe` (la acepta Linux) |
+| V4: enrutamiento | h1→h2 sin pérdida y **TTL 61**; h1→server sin pérdida y **TTL 62**; server→h1 y h2→h1 sin pérdida (el TTL coincide con lo predicho: un decremento por salto de ruta y otro al entregar) |
+| IP inexistente (`10.99.2.77`) | 100 % de pérdida: se descarta sin inundar |
+| Producción | el ARP al server (`10.0.0.10`) siguió contestando (2 de 2) y el 95 salió limpio antes y después |
+| Limpieza | 0 flujos de prueba en los 5 switches, hosts solo con su IP de producción, la opción de ONOS revertida |
+Salvedades: la prueba usó ping (ICMP) con la política de R2 esquivada a propósito (la entrada de la tabla 0 va antes de la sesión), así que **no** probó TCP con tablas de rol; y en el server el vecino del gateway apareció como `FAILED` en la primera lectura aunque el ping posterior funcionó (se resolvió después; no entendido del todo).
+**Qué demuestra:** que Open vSwitch acepta el ARP del gateway con copia de campos, la reescritura de MAC y `dec_ttl`; que los hosts lo aceptan; que ONOS convive con los flujos estáticos si se le permite; y que el enrutamiento por prefijo entre tres switches funciona con el TTL y las MAC previstos. **Qué no demuestra aún:** los flujos dinámicos por REST (solo se probó que ONOS acepta `DEC_TTL`), la integración con el vigilante ni la política por rol sobre capa 3.
+
 **Decisión (tras V1):** V1 rechazó el ARP, así que queda el camino de los flujos de ARP estáticos con `ovs-ofctl` (más `allowExtraneousRules=true` si ONOS los borra: `-e permitir_extranos=true`), **si V2 y V4 funcionan**. Si V2 falla (Open vSwitch no acepta algo o ONOS no tolera los flujos) → app de ONOS en Java.
 
 ## 7. Estado, pruebas y siguiente
