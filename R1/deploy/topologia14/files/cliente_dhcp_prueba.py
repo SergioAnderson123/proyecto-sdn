@@ -137,15 +137,18 @@ def main():
         else:
             resultado = {"mac": arg.mac, "estado": "ACK", "ip": final["yiaddr"], "router": final.get("router"), "mascara": final.get("mascara"),
                          "servidor": final.get("servidor"), "lease": final.get("lease")}
+    print(time.strftime("%H:%M:%S"), "resultado:", json.dumps(resultado), flush=True)
     with open(arg.salida, "w") as f:
         json.dump(resultado, f)
     if resultado["estado"] == "ACK" and arg.mantener:
         fin = time.time() + arg.mantener
         while time.time() < fin and not parar:
             time.sleep(0.2)
+        print(time.strftime("%H:%M:%S"), "enviando RELEASE de", resultado["ip"], "(senal de parada)" if parar else "(fin de la concesion de prueba)", flush=True)
         ip = socket.inet_aton(resultado["ip"])
         sock.send(trama(mac, random.getrandbits(32), RELEASE, ip, socket.inet_aton(resultado["servidor"]), oferta["origen_mac"], ip,
                         [(54, socket.inet_aton(resultado["servidor"]))]))
+        print(time.strftime("%H:%M:%S"), "RELEASE enviado", flush=True)
     return 0
 
 

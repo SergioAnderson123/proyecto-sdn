@@ -18,6 +18,16 @@ Reemplaza a la app DHCP estándar (hay que desactivar `org.onosproject.dhcp`: do
 | Seguir con la app de ONOS y todos en una subred | No sirve en capa 3. |
 | Copiar el ARP al controlador | Resuelve el aprendizaje de IP pero no el DHCP por subred, y mete tráfico al controlador. |
 
+## 2 bis. Cómo decide la app la subred de un host
+
+**No usa un inventario de equipos: usa el lugar por el que entra la petición.** La configuración de la app (`campusdhcp`) trae una lista de ámbitos, y cada uno dice **en qué switch y en qué puertos de acceso** vive (`device`, `puertos`). Cuando llega un DHCP, ONOS dice por qué (switch, puerto) entró; la app busca el ámbito que atiende ese par y entrega una IP de él. Nada del cliente interviene en esa decisión (ni su MAC, ni lo que él pida), así que no se puede falsificar desde el equipo: es el cable por donde entra.
+- Esa lista sale del **mismo plan de subredes** que usan la app Gateway ARP y el vigilante (`R2/policy/planes/*.json`), con `generar_config_dhcp.py`: es un inventario de **puertos y subredes**, no de hosts.
+- Un puerto que no está en ninguna subred (por ejemplo los de servicios y externa, que no llevan DHCP) **no se atiende** y se deja pasar a otras apps: falla cerrado.
+- Lo que sí cambia por equipo es el **rol** (docente, alumno, invitado...), y eso lo decide 802.1X, MAB o el portal, no el DHCP.
+- Agregar un switch de acceso = una línea en el plan y regenerar la configuración (igual que con el ARP del gateway). Quitar un switch o cambiar un puerto, lo mismo.
+- Si un equipo cambia de puerto o de switch, recibe IP de la subred del nuevo lugar en su siguiente petición; la concesión anterior sigue en su ámbito hasta vencer (o hasta su RELEASE).
+- Si un puerto de acceso alimenta un pequeño switch con varios equipos, todos comparten la subred y la **cuota por puerto** (`maxPorPuerto`, ajustable).
+
 ## 3. Flujo (cliente en `acc-1`, puerto 1, subred `10.0.1.0/24`)
 1. DISCOVER (0.0.0.0 a broadcast) entra por acc-1/1; R2 lo sube al controlador (40500), con o sin sesión 802.1X.
 2. La app mira (acc-1, 1), encuentra la subred `10.0.1.0/24`, elige una IP libre del ámbito (por ejemplo `.100-.199`), la reserva unos segundos y envía el OFFER por un packet-out al mismo puerto (a broadcast; todo cliente en INIT lo acepta).

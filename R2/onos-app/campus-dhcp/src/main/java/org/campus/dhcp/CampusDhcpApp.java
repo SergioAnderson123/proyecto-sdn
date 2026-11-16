@@ -231,7 +231,7 @@ public class CampusDhcpApp {
 
     /** Registro de lo ignorado, como mucho una vez cada 10 s por motivo y puerto (una inundacion no llena el log). */
     private void avisar(String motivo, String puerto) {
-        if (motivo == null || motivo.equals("oferta")) {
+        if (motivo == null || motivo.equals("oferta") || motivo.equals("liberada") || motivo.equals("decline")) {
             return;
         }
         String clave = motivo + "@" + puerto;

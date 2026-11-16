@@ -43,7 +43,7 @@
       ansible.builtin.shell:
         cmd: |
           for i in $(seq {{ n }}); do
-            nohup python3 /tmp/cliente_dhcp_prueba.py --iface dhc$i --mac 02:aa:bb:00:01:0$i --salida /tmp/dhcp_prueba_dhc$i.json --mantener {{ mantener }} > /tmp/dhc$i.log 2>&1 &
+            setsid nohup python3 /tmp/cliente_dhcp_prueba.py --iface dhc$i --mac 02:aa:bb:00:01:0$i --salida /tmp/dhcp_prueba_dhc$i.json --mantener {{ mantener }} < /dev/null > /tmp/dhc$i.log 2>&1 &
           done
           for s in $(seq 30); do
             listos=0
@@ -110,6 +110,16 @@
           pkill -TERM -f '[c]liente_dhcp_prueba.py' 2>/dev/null; sleep 2
           true
       changed_when: false
+
+    - name: Registro de cada cliente (debe decir que envio el RELEASE)
+      ansible.builtin.shell:
+        cmd: "for i in 1 2 3 4 5 6; do [ -f /tmp/dhc$i.log ] && echo \"dhc$i: $(tr '\n' '|' < /tmp/dhc$i.log)\"; done; true"
+      register: registros
+      changed_when: false
+
+    - name: Lo que hizo cada cliente
+      ansible.builtin.debug:
+        msg: "{{ registros.stdout_lines }}"
 
     - name: Borrar las interfaces y archivos de prueba
       ansible.builtin.shell:
