@@ -1,0 +1,68 @@
+# PRUEBA de meters POR EL REST DE ONOS (lo que necesita el Policy Mapper para los meters de R1): ONOS crea un meter y un flujo inerte de la tabla 61 que lo usa, se comprueba en el switch y se limpia SIEMPRE.
+#   PLAYBOOK=84_prueba_meters_onos.yml ./lanzar.sh                           # en sw-acc-2 (of:0000766a0c84c741)
+# Es aislado como el 81: el flujo es de la tabla 61 y de un EtherType experimental (0x88b5), al que ningun paquete real llega. Si ONOS rechaza los campos, la salida trae las respuestas tal cual para ajustarlos.
+# Antes: el 81 debe haber salido bien (Open vSwitch acepta meters).
+- name: Meters por REST de ONOS, paso 1 - crear meter y flujo (switch-borde)
+  hosts: borde
+  gather_facts: false
+  vars:
+    device: "of:0000766a0c84c741"
+  tasks:
+    - name: Crear el meter y el flujo por REST
+      ansible.builtin.command:
+        cmd: "python3 {{ playbook_dir }}/files/prueba_meters_onos.py crear --onos http://{{ onos_ip }}:8181 --usuario {{ onos_user }}:{{ onos_pass }} --device {{ device }}"
+      register: crear
+      changed_when: true
+      failed_when: false
+
+    - name: Respuestas de ONOS
+      ansible.builtin.debug:
+        msg: "{{ crear.stdout_lines }}"
+
+- name: Meters por REST de ONOS, paso 2 - lo que hay en el switch
+  hosts: sw-acc-2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Meters y flujos de la tabla 61 en Open vSwitch
+      ansible.builtin.shell:
+        cmd: "ovs-ofctl -O OpenFlow13 dump-meters {{ bridge }}; echo ---; ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=61"
+      register: ovs
+      changed_when: false
+
+    - name: Lo que ve OVS
+      ansible.builtin.debug:
+        msg: "{{ ovs.stdout_lines }}"
+
+- name: Meters por REST de ONOS, paso 3 - limpiar (siempre)
+  hosts: borde
+  gather_facts: false
+  vars:
+    device: "of:0000766a0c84c741"
+  tasks:
+    - name: Borrar el flujo y el meter creados
+      ansible.builtin.command:
+        cmd: "python3 {{ playbook_dir }}/files/prueba_meters_onos.py limpiar --onos http://{{ onos_ip }}:8181 --usuario {{ onos_user }}:{{ onos_pass }} --device {{ device }}"
+      register: limpiar
+      changed_when: true
+      failed_when: false
+
+    - name: Estado tras limpiar
+      ansible.builtin.debug:
+        msg: "{{ limpiar.stdout_lines }}"
+
+- name: Meters por REST de ONOS, paso 4 - el switch debe quedar limpio
+  hosts: sw-acc-2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Meters y flujos de la tabla 61 tras limpiar (deben ser 0 y 0)
+      ansible.builtin.shell:
+        cmd: "echo meters=$(ovs-ofctl -O OpenFlow13 dump-meters {{ bridge }} | grep -c 'meter='); echo flujos61=$(ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=61 | grep -c 'cookie=')"
+      register: final
+      changed_when: false
+      failed_when: false
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ final.stdout_lines }}"

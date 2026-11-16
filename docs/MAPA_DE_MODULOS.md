@@ -34,7 +34,7 @@ Fuera de la lista (no son módulos): playbooks de la slice (`R1/deploy/topologia
 | Plano de control | `20_controller`, `30_switches`, `40_cluster`, `42_servicios`, `45_maestro`, `50_sensores` | ONOS, OVS, clúster, servicios, nodo maestro, sensores |
 | R2 | `60_proactivo`, `65_vigilante`, `70_fase_e`, `71_consulta_hosts`, `72_suplicante`, `73_radius_red_docker`, `74_token_agente`, `75_server_ip_persistente` | reenvío proactivo, vigilante, tablas R2, consulta de hosts, autenticación de prueba |
 | Seguridad de la operación | `90_estado`, `95_diagnostico_lazos`, `96_estres_difusion`, `96_prueba_rstp`, `99_freno_emergencia` | estado, detector de lazos, estrés, freno |
-| Capa 3 | `97_viabilidad_capa3`, `76_gateway_arp`, `98_prueba_vigilante_capa3` (solo lectura), `77_prueba_vigilante_aislado`, `66_preflight_conmutacion` (solo lectura), `67_hosts_plan_a`, `68_vigilante_capa3_servicio`, `69_conmutacion_hosts`, `80_caida_cable`, `81_prueba_meters`, `82_dhcp_app`, `83_prueba_dhcp`; diseño pendiente `docs/DISENO_DHCP_POR_SUBRED.md` | viabilidad, app Java, simulación y prueba aplicada del vigilante en la tabla 62 con subredes de prueba |
+| Capa 3 | `97_viabilidad_capa3`, `76_gateway_arp`, `98_prueba_vigilante_capa3` (solo lectura), `77_prueba_vigilante_aislado`, `66_preflight_conmutacion` (solo lectura), `67_hosts_plan_a`, `68_vigilante_capa3_servicio`, `69_conmutacion_hosts`, `80_caida_cable`, `81_prueba_meters`, `82_dhcp_app`, `83_prueba_dhcp`, `84_prueba_meters_onos`; diseño pendiente `docs/DISENO_DHCP_POR_SUBRED.md` | viabilidad, app Java, simulación y prueba aplicada del vigilante en la tabla 62 con subredes de prueba |
 
 ## 3. Documentos
 
