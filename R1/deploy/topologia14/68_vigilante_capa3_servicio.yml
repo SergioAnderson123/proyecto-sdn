@@ -1,0 +1,104 @@
+# SERVICIO del vigilante en MODO CAPA 3 (principal en node-ctrl-3, respaldo en node-ctrl-2), en una unidad aparte `vigilante-capa3`. Complementa a 65_vigilante.yml (el L2, que no se toca).
+#   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh                       # instala y arranca en modo SOLO AVISAR (no cambia ningun flujo)
+#   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e aplicar=true       # APLICA en la tabla 60: SOLO durante la conmutacion (docs/PLAN_CONMUTACION_CAPA3.md), con el vigilante L2 ya parado
+#   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e accion=parar       # para y deshabilita el servicio en las dos VM
+# Solo avisando es inocuo: lee ONOS y escribe en el registro lo que cambiaria (journalctl -u vigilante-capa3 -f). Los dos vigilantes no se pelean mientras el de capa 3 no aplique. NUNCA con aplicar=true y el L2 aplicando a la vez.
+# Respaldo: igual que el L2 (asume el mando si el principal lleva 45 s sin responder en :8098/salud).
+- name: Vigilante en modo capa 3 como servicio (principal en node-ctrl-3, respaldo en node-ctrl-2)
+  hosts: node-ctrl-3:node-ctrl-2
+  become: true
+  gather_facts: false
+  vars:
+    accion: instalar                 # instalar | parar
+    rol: "{{ 'principal' if inventory_hostname == 'node-ctrl-3' else 'respaldo' }}"
+    puerto_salud: 8098
+    url_principal: "http://{{ hostvars['node-ctrl-3'].ansible_host }}:{{ puerto_salud }}/salud"
+    aplicar: false
+    nucleo: "core-1,core-2,borde"
+    carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
+    destino: /opt/vigilante
+    config: /etc/vigilante
+    nodos_onos: "{{ onos_nodos | map('regex_replace', '^', 'http://') | map('regex_replace', '$', ':8181') | join(',') }}"
+    archivos: [caminos.py, capa3.py, flujos_proactivos.py, plan_arboles.py, puertos.py, recalculo.py, hosts_fijos.py, onos_multi.py, instalar_proactivo.py, vista_previa.py, vigilante.py]
+  tasks:
+    - name: Parar y deshabilitar el servicio
+      ansible.builtin.systemd:
+        name: vigilante-capa3
+        state: stopped
+        enabled: false
+      when: accion == 'parar'
+      failed_when: false
+
+    - name: Preparar las carpetas
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: ["{{ destino }}", "{{ config }}"]
+      when: accion == 'instalar'
+
+    - name: Copiar el codigo (el mismo que usa el servicio L2; capa3.py incluido)
+      ansible.builtin.copy:
+        src: "{{ carpeta_codigo }}/{{ item }}"
+        dest: "{{ destino }}/{{ item }}"
+        mode: "0644"
+      loop: "{{ archivos }}"
+      register: codigo
+      when: accion == 'instalar'
+
+    - name: Copiar el plan de subredes y los hosts fijos con IP del plan A
+      ansible.builtin.copy:
+        src: "{{ item.origen }}"
+        dest: "{{ config }}/{{ item.destino }}"
+        mode: "0644"
+      loop:
+        - {origen: "{{ carpeta_codigo }}/planes/vnrt_topologia14.json", destino: plan_capa3.json}
+        - {origen: "{{ carpeta_codigo }}/planes/hosts_fijos_capa3.json", destino: hosts_fijos_capa3.json}
+      register: planes
+      when: accion == 'instalar'
+
+    - name: Servicio systemd (vigilante-capa3)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/vigilante-capa3.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Vigilante de la topologia en modo capa 3 (subredes)
+          After=network-online.target docker.service
+
+          [Service]
+          WorkingDirectory={{ destino }}
+          ExecStart=/usr/bin/python3 {{ destino }}/vigilante.py --subredes {{ config }}/plan_capa3.json --nucleo {{ nucleo }} --hosts-fijos {{ config }}/hosts_fijos_capa3.json --onos {{ nodos_onos }} --salud-puerto {{ puerto_salud }} --interruptor {{ config }}/desactivar{{ (' --respaldo-de ' ~ url_principal) if rol == 'respaldo' else '' }}{{ ' --aplicar' if (aplicar | bool) else '' }}
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      register: unidad
+      when: accion == 'instalar'
+
+    - name: Arrancar el servicio (se reinicia si cambio el codigo, el plan o la configuracion)
+      ansible.builtin.systemd:
+        name: vigilante-capa3
+        daemon_reload: true
+        enabled: true
+        state: "{{ 'restarted' if ((codigo is defined and codigo.changed) or (planes is defined and planes.changed) or unidad.changed) else 'started' }}"
+      when: accion == 'instalar'
+
+    - name: Esperar unos segundos y mirar el registro
+      ansible.builtin.shell: "sleep 8; systemctl is-active vigilante-capa3; journalctl -u vigilante-capa3 -n 8 --no-pager | cut -c1-220"
+      register: registro
+      changed_when: false
+      when: accion == 'instalar'
+
+    - name: Estado
+      ansible.builtin.debug:
+        var: registro.stdout_lines
+      when: accion == 'instalar'
+
+    - name: El servicio debe estar activo
+      ansible.builtin.assert:
+        that: "registro.stdout_lines[0] == 'active'"
+        fail_msg: "vigilante-capa3 no arranco: journalctl -u vigilante-capa3 -n 30 en node-ctrl-3"
+        quiet: true
+      when: accion == 'instalar'

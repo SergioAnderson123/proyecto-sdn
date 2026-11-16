@@ -1,0 +1,65 @@
+# IP del plan A en los hosts (docs/PLAN_CONMUTACION_CAPA3.md, condicion previa 2) como direcciones SECUNDARIAS: no quitan la IP actual ni cambian el reenvio. NO persisten: se pierden al reiniciar el host.
+#   PLAYBOOK=67_hosts_plan_a.yml ./lanzar.sh                     # pone la IP del plan A (secundaria) y las rutas hacia las otras subredes
+#   PLAYBOOK=67_hosts_plan_a.yml ./lanzar.sh -e accion=quitar    # las quita
+# Mientras la capa 3 no este en la tabla 60 estas IP no hablan entre subredes (no hay rutas en los switches); lo unico que se comprueba aqui es que el gateway de la subred contesta el ARP (app Gateway ARP).
+# Retroceso: -e accion=quitar, o reiniciar el host. Solo agrega una direccion y rutas a prefijos 10.0.1.0/24 o 10.0.2.0/24 (o 10.0.0.0/24 en el server para devolver); no toca la IP ni las rutas actuales.
+- name: IP del plan A en los hosts (secundaria, no persistente)
+  hosts: h1-profesor:h2-alumno:server
+  become: true
+  gather_facts: false
+  vars:
+    accion: poner
+    datos:
+      h1-profesor: {ip: "10.0.1.101", gw: "10.0.1.254", rutas: ["10.0.2.0/24"]}
+      h2-alumno: {ip: "10.0.2.102", gw: "10.0.2.254", rutas: ["10.0.1.0/24"]}
+      server: {ip: "10.0.0.10", gw: "10.0.0.254", rutas: ["10.0.1.0/24", "10.0.2.0/24"]}
+    yo: "{{ datos[inventory_hostname] }}"
+  tasks:
+    - name: Poner la IP del plan A como secundaria (solo h1 y h2; el server ya tiene la suya)
+      ansible.builtin.shell:
+        cmd: |
+          ip addr show dev ens4 | grep -q "{{ yo.ip }}/" || ip addr add {{ yo.ip }}/24 dev ens4
+      when: accion == 'poner' and inventory_hostname != 'server'
+      changed_when: true
+
+    - name: Rutas hacia las otras subredes por el gateway de la subred
+      ansible.builtin.shell:
+        cmd: |
+          for r in {{ yo.rutas | join(' ') }}; do ip route replace $r via {{ yo.gw }} dev ens4{{ (' src ' ~ yo.ip) if inventory_hostname != 'server' else '' }}; done
+      when: accion == 'poner'
+      changed_when: true
+
+    - name: Quitar rutas y la IP secundaria
+      ansible.builtin.shell:
+        cmd: |
+          for r in {{ yo.rutas | join(' ') }}; do ip route del $r 2>/dev/null || true; done
+          {% if inventory_hostname != 'server' %}ip addr del {{ yo.ip }}/24 dev ens4 2>/dev/null || true{% endif %}
+      when: accion == 'quitar'
+      changed_when: true
+
+    - name: Comprobar que el gateway de su subred contesta el ARP (app Gateway ARP)
+      ansible.builtin.shell:
+        cmd: |
+          if command -v arping >/dev/null 2>&1; then
+            arping -c 2 -w 3 -I ens4 {{ yo.gw }} 2>&1 | grep -i 'reply from' | head -1
+          else
+            ip neigh del {{ yo.gw }} dev ens4 2>/dev/null
+            ping -c 2 -W 1 -I ens4 {{ yo.gw }} >/dev/null 2>&1
+            ip neigh show {{ yo.gw }} dev ens4 | grep -i lladdr | head -1
+          fi
+      register: gw
+      changed_when: false
+      failed_when: false
+      when: accion == 'poner'
+
+    - name: Estado final de ens4 y rutas 10.0.x
+      ansible.builtin.shell:
+        cmd: "ip -4 -o addr show dev ens4 | awk '{print $4}' | tr '\\n' ' '; echo; ip route | grep -E '^10\\.0\\.' | tr '\\n' ';'"
+      register: estado
+      changed_when: false
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg:
+          - "{{ inventory_hostname }} ({{ accion }}): {{ estado.stdout_lines }}"
+          - "gateway {{ yo.gw }}: {{ (gw.stdout | default('') | trim) or 'sin respuesta o no aplica' }}"

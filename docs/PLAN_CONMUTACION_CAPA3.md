@@ -47,5 +47,9 @@ Hosts nuevos sin IP conocida por ONOS (no reciben reglas: falla cerrado), R5 (`H
 Tiempo esperado: menos de un minuto. Si el vigilante L2 no repusiera por algún motivo: `70_fase_e.yml` / `60_proactivo.yml` reinstalan el reenvío proactivo desde cero.
 
 ## 6. Qué se automatiza y qué es manual
-- **Hecho:** comprobación previa de solo lectura (`66_preflight_conmutacion.yml`), plan y archivos de hosts fijos del plan A, el servicio del vigilante L2 con el código completo (se corrigió que `65_vigilante.yml` no copiaba `capa3.py`).
-- **Por hacer, tras revisar este plan:** playbook de hosts (IP secundaria y luego primaria, con retroceso), servicio del vigilante en modo capa 3 y el playbook de conmutación con `-e confirmar=true`. No se ejecutan sin tu decisión.
+- **Hecho y seguro de ejecutar ya:**
+  - `66_preflight_conmutacion.yml`: solo lectura (ejecutado el 16-nov: 14 enlaces, app con 4 flujos, 30 sobran y 15 faltan, servicio L2 activo en ctrl-3 y ctrl-2).
+  - `67_hosts_plan_a.yml`: IP del plan A como secundaria en los hosts y rutas hacia las otras subredes; no persiste y se quita con `-e accion=quitar`.
+  - `68_vigilante_capa3_servicio.yml`: servicio `vigilante-capa3` en ctrl-3 (principal) y ctrl-2 (respaldo) en modo **solo avisar**, en una unidad aparte; no toca el L2. Con `-e aplicar=true` aplica en la tabla 60: solo durante la conmutación y con el L2 parado.
+  - `65_vigilante.yml` corregido (copiaba sin `capa3.py`).
+- **Por hacer, tras ver 67 y 68 funcionando:** el playbook de conmutación (`-e confirmar=true`: parar el L2 en las dos VM, `68 -e aplicar=true`, quitar la IP vieja de h1 y h2, verificar con TTL, y el retroceso en sentido inverso). No se ejecuta sin tu decisión.
