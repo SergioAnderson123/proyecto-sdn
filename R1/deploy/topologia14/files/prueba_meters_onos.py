@@ -2,15 +2,17 @@
 """Prueba si ONOS 2.7 puede CREAR un meter y un flujo que lo use por su REST (lo que necesitaria el Policy Mapper para poner los meters de R1: EAPOL 20 pps, MAB y DHCP 10 pps).
 
     python3 prueba_meters_onos.py crear   --onos http://192.168.201.1:8181 --usuario onos:rocks --device of:0000766a0c84c741
-    python3 prueba_meters_onos.py limpiar --onos ... --usuario ... --device ...
+    python3 prueba_meters_onos.py limpiar --onos ... --usuario ... --device ... [--meter 1]
 
-`crear` hace un POST de un meter (10 pps, rafaga 20, banda DROP) y un POST de un flujo INERTE en la tabla 61 (EtherType experimental 0x88b5, al que ningun paquete real llega) con la instruccion METER,
-e imprime TODAS las respuestas tal cual (para ajustar los campos si ONOS los rechaza). `limpiar` borra el flujo y el meter creados. Si algo falla en `crear`, intenta limpiar lo que alcanzo a crear.
+`crear` hace un POST de un meter (10 pps, rafaga 20, banda DROP) y toma su identificador del encabezado Location de la respuesta (ONOS lo registra de forma asincrona: la lista GET puede tardar), y un POST de un
+flujo INERTE en la tabla 61 (EtherType experimental 0x88b5, al que ningun paquete real llega) con la instruccion METER. Imprime TODAS las respuestas tal cual. El estado se guarda en cuanto se conoce el meter,
+asi que `limpiar` siempre puede borrar lo creado; con `--meter ID` borra ese meter aunque no haya estado (por ejemplo, uno que dejo una ejecucion anterior).
 """
 import argparse
 import base64
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -45,22 +47,31 @@ def listar(arg):
         return []
 
 
+def guardar(estado):
+    with open(ESTADO, "w") as f:
+        json.dump(estado, f)
+
+
 def crear(arg):
-    antes = {str(m.get("id")) for m in listar(arg)}
     meter = {"deviceId": arg.device, "unit": "PKTS_PER_SEC", "burst": True, "bands": [{"type": "DROP", "rate": 10, "burstSize": 20}]}
     resp = pedir(arg, "POST", "/meters/" + arg.device, meter)
     mostrar("POST /meters", resp)
-    nuevos = [m for m in listar(arg) if str(m.get("id")) not in antes]
-    print("meters nuevos segun GET /meters:", json.dumps(nuevos)[:500])
-    if not nuevos:
-        print("RESULTADO: ONOS no creo el meter (ver la respuesta de arriba).")
+    loc = resp[1].get("Location", "")
+    if resp[0] not in (200, 201) or not loc:
+        print("RESULTADO: ONOS no acepto el meter (ver la respuesta de arriba).")
         return 1
-    meter_id = nuevos[0]["id"]
+    meter_id = loc.rstrip("/").split("/")[-1]
     estado = {"meter_id": meter_id, "flow_id": None}
-    with open(ESTADO, "w") as f:
-        json.dump(estado, f)
+    guardar(estado)                                       # desde aqui `limpiar` siempre puede borrarlo
+    visto = []
+    for _ in range(10):                                   # ONOS lo registra de forma asincrona: se mira hasta 5 s, solo para informar
+        visto = [m for m in listar(arg) if str(m.get("id")) == meter_id]
+        if visto:
+            break
+        time.sleep(0.5)
+    print("meter", meter_id, "segun GET /meters:", json.dumps(visto)[:400] if visto else "(aun no aparece en la lista de ONOS; se continua con el identificador del Location)")
     try:
-        mid = int(str(meter_id), 0)
+        mid = int(meter_id, 0)
     except ValueError:
         print("RESULTADO: no se pudo interpretar el id del meter:", meter_id)
         return 1
@@ -71,23 +82,28 @@ def crear(arg):
     mostrar("POST /flows con METER", resp)
     loc = resp[1].get("Location", "")
     estado["flow_id"] = loc.rstrip("/").split("/")[-1] if loc else None
-    with open(ESTADO, "w") as f:
-        json.dump(estado, f)
+    guardar(estado)
     print(f"RESULTADO: meter {meter_id} creado; flujo HTTP {resp[0]}, id {estado['flow_id']}. Comprobar en el switch con ovs-ofctl dump-meters y dump-flows table=61.")
     return 0 if resp[0] in (200, 201) else 1
 
 
 def limpiar(arg):
-    if not os.path.exists(ESTADO):
-        print("nada que limpiar (no hay estado)")
+    estado = {}
+    if os.path.exists(ESTADO):
+        with open(ESTADO) as f:
+            estado = json.load(f)
+    if arg.meter and not estado.get("meter_id"):
+        estado["meter_id"] = arg.meter
+    if not estado:
+        print("nada que limpiar (no hay estado; usar --meter ID para borrar un meter concreto)")
         return 0
-    with open(ESTADO) as f:
-        e = json.load(f)
-    if e.get("flow_id"):
-        mostrar("DELETE flujo", pedir(arg, "DELETE", f"/flows/{arg.device}/{e['flow_id']}"))
-    mostrar("DELETE meter", pedir(arg, "DELETE", f"/meters/{arg.device}/{e['meter_id']}"))
-    os.remove(ESTADO)
-    print("meters que quedan en ONOS en ese switch:", json.dumps(listar(arg))[:300])
+    if estado.get("flow_id"):
+        mostrar("DELETE flujo", pedir(arg, "DELETE", f"/flows/{arg.device}/{estado['flow_id']}"))
+    if estado.get("meter_id"):
+        mostrar("DELETE meter", pedir(arg, "DELETE", f"/meters/{arg.device}/{estado['meter_id']}"))
+    if os.path.exists(ESTADO):
+        os.remove(ESTADO)
+    print("meters que ONOS lista ahora en ese switch:", json.dumps(listar(arg))[:300])
     return 0
 
 
@@ -97,6 +113,7 @@ def main():
     a.add_argument("--onos", default="http://192.168.201.1:8181")
     a.add_argument("--usuario", default="onos:rocks")
     a.add_argument("--device", default="of:0000766a0c84c741")
+    a.add_argument("--meter", help="limpiar: borrar este meter aunque no haya estado")
     arg = a.parse_args()
     if arg.accion == "crear":
         try:
