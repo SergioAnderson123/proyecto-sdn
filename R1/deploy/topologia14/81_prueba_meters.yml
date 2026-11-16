@@ -1,0 +1,91 @@
+# PRUEBA DE METERS (medidores OpenFlow) en UN switch, aislada de la produccion: comprueba que Open vSwitch los acepta Y que de verdad descartan el exceso.
+#   PLAYBOOK=81_prueba_meters.yml ./lanzar.sh                       # en sw-acc-2 (por defecto)
+#   PLAYBOOK=81_prueba_meters.yml ./lanzar.sh -e switch=sw-acc-1    # en otro switch
+# Antes de poner meters a los flujos reales de R1 y R2 (EAPOL 20 pps / ráfaga 20, MAB y DHCP 10 pps / ráfaga 10, ver R1/flujos_R1_R2.md y docs/DESPLIEGUE_UBUNTU.md) hay que saber si este OVS los soporta.
+# Que hace, todo en la TABLA 61 (a la que ningun flujo de produccion salta) y con el meter 99: (1) crea el meter con `ovs-ofctl add-meter` (10 paquetes por segundo, rafaga 20, banda DROP);
+# (2) pone un flujo en la tabla 61 para tramas de un EtherType experimental (0x88b5) que pasan por el meter; (3) inyecta 200 tramas con packet-out y mira las estadisticas del meter (cuantas pasaron
+# y cuantas descarto); (4) limpia SIEMPRE (flujo de la tabla 61 y meter 99). Nada de esto sale a la red ni toca los flujos de usuarios.
+- name: Prueba de meters en un switch
+  hosts: "{{ switch | default('sw-acc-2') }}"
+  become: true
+  gather_facts: false
+  vars:
+    meter: 99
+    tabla: 61
+    tramas: 200
+    trama_hex: "ffffffffffff020000000099{{ '88b5' }}{{ '00' * 46 }}"
+  tasks:
+    - name: Version de Open vSwitch
+      ansible.builtin.command:
+        cmd: ovs-vsctl --version
+      register: version
+      changed_when: false
+
+    - name: Estado antes (no debe haber meter 99 ni flujos en la tabla 61)
+      ansible.builtin.shell:
+        cmd: "ovs-ofctl -O OpenFlow13 dump-meters {{ bridge }} 2>&1 | grep -c 'meter={{ meter }}' || true; ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table={{ tabla }} | grep -c 'cookie=' || true"
+      register: antes
+      changed_when: false
+
+    - name: Probar con limpieza garantizada
+      block:
+        - name: Crear el meter (10 paquetes por segundo, rafaga 20, banda DROP)
+          ansible.builtin.command:
+            cmd: "ovs-ofctl -O OpenFlow13 add-meter {{ bridge }} 'meter={{ meter }},pktps,burst,band=type=drop,rate=10,burst_size=20'"
+          register: crear
+          changed_when: true
+
+        - name: Listar los meters (debe aparecer el 99 con su banda)
+          ansible.builtin.command:
+            cmd: "ovs-ofctl -O OpenFlow13 dump-meters {{ bridge }}"
+          register: listado
+          changed_when: false
+
+        - name: Flujo de prueba en la tabla 61 que pasa por el meter
+          ansible.builtin.command:
+            cmd: "ovs-ofctl -O OpenFlow13 add-flow {{ bridge }} 'table={{ tabla }},priority=1,dl_type=0x88b5,actions=meter:{{ meter }},drop'"
+          changed_when: true
+
+        - name: Inyectar {{ tramas }} tramas de prueba por packet-out (resubmit a la tabla 61)
+          ansible.builtin.shell:
+            cmd: |
+              for i in $(seq {{ tramas }}); do
+                ovs-ofctl -O OpenFlow13 packet-out {{ bridge }} none 'resubmit(,{{ tabla }})' {{ trama_hex }} >/dev/null 2>&1
+              done
+          changed_when: true
+
+        - name: Estadisticas del meter (paquetes que llegaron y paquetes descartados por la banda)
+          ansible.builtin.command:
+            cmd: "ovs-ofctl -O OpenFlow13 meter-stats {{ bridge }} meter={{ meter }}"
+          register: estadisticas
+          changed_when: false
+
+        - name: Resultado
+          ansible.builtin.debug:
+            msg:
+              - "{{ version.stdout_lines | first }}"
+              - "meters listados: {{ listado.stdout_lines }}"
+              - "estadisticas: {{ estadisticas.stdout_lines }}"
+              - "Lo esperado: packet_in_count cercano a {{ tramas }} y la banda con packet_count > 0 (descarto el exceso sobre 10 pps con rafaga 20)."
+      always:
+        - name: Limpiar el flujo de la tabla 61
+          ansible.builtin.command:
+            cmd: "ovs-ofctl -O OpenFlow13 del-flows {{ bridge }} table={{ tabla }}"
+          changed_when: true
+          failed_when: false
+
+        - name: Borrar el meter 99
+          ansible.builtin.command:
+            cmd: "ovs-ofctl -O OpenFlow13 del-meter {{ bridge }} meter={{ meter }}"
+          changed_when: true
+          failed_when: false
+
+    - name: Estado despues (debe quedar igual que antes)
+      ansible.builtin.shell:
+        cmd: "ovs-ofctl -O OpenFlow13 dump-meters {{ bridge }} 2>&1 | grep -c 'meter={{ meter }}' || true; ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table={{ tabla }} | grep -c 'cookie=' || true"
+      register: despues
+      changed_when: false
+
+    - name: Limpieza
+      ansible.builtin.debug:
+        msg: "antes {{ antes.stdout_lines }} / despues {{ despues.stdout_lines }} (meter 99 y flujos de la tabla 61: deben ser 0 y 0)"
