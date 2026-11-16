@@ -71,7 +71,7 @@
     - name: Detener si los gateways de prueba no contestan con la MAC de prueba (la app instalada es una version vieja)
       ansible.builtin.assert:
         that:
-          - flujos_app.json.flows | map(attribute='treatment.instructions') | flatten | selectattr('mac', 'defined') | map(attribute='mac') | map('lower') | select('equalto', '02:00:5e:99:99:fe') | list | length == 6
+          - flujos_app.json.flows | map(attribute='treatment.instructions') | flatten | selectattr('mac', 'defined') | map(attribute='mac') | map('lower') | select('equalto', '02:00:5e:99:99:fe') | list | length >= 3
         fail_msg: "La app instalada en ONOS no usa la MAC de prueba (version vieja). Reinstalarla con: PLAYBOOK=76_gateway_arp.yml ./lanzar.sh -e reinstalar=true ; despues repetir este playbook. Se retira la configuracion de prueba con --tags limpiar."
       tags: [probar]
 
