@@ -1,0 +1,232 @@
+# APP DE ONOS "Gateway ARP" (R2/onos-app/gateway-arp): instala en ONOS la app, publica su configuracion (sacada del plan de subredes) y comprueba que los flujos del ARP del gateway quedan
+# instalados Y SE QUEDAN con allowExtraneousRules=false (esa es la razon de ser de la app: los flujos de ovs-ofctl eran borrados por ONOS, los de una app no).
+#   PLAYBOOK=76_gateway_arp.yml ./lanzar.sh                       # instala, configura y comprueba (sin cambiar nada del reenvio actual)
+#   PLAYBOOK=76_gateway_arp.yml ./lanzar.sh --tags quitar         # desactiva la app: ONOS retira sus flujos (rollback)
+# Que toca: solo 4 flujos de ARP (tabla 60, prioridad 300) que coinciden con las IP de gateway 10.0.0.254, 10.0.1.254, 10.0.2.254 y 203.0.113.254. Nadie usa esas IP hoy, asi que el trafico de
+# produccion no cambia. La comprobacion con hosts hace arping a esos gateways desde h1, h2 y el server SIN tocar sus IP ni rutas, y arping al server de siempre (10.0.0.10) para ver que sigue igual.
+# Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh . Freno: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true
+# No desactivar y activar la app muchas veces seguidas: en el cluster una desactivacion rapida seguida de activacion dejo una app AAA ACTIVE con su caracteristica sin instalar.
+- name: Gateway ARP, paso 1 - instalar y configurar la app desde switch-borde
+  hosts: borde
+  gather_facts: false
+  vars:
+    app: org.campus.gatewayarp
+    api: "http://{{ onos_ip }}:8181/onos/v1"
+    repo: "{{ playbook_dir }}/../../.."
+    oar: "{{ repo }}/R2/onos-app/gateway-arp/dist/gateway-arp-1.0.0.oar"
+    plan: "{{ repo }}/R2/policy/planes/vnrt_topologia14.json"
+    config: /tmp/gateway_arp_config.json
+    esperados: 4
+  tasks:
+    - name: Comprobar que el .oar y el plan estan en este clon del repositorio (hay que hacer git pull antes)
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: ["{{ oar }}", "{{ plan }}"]
+      register: archivos
+      failed_when: not archivos.results | map(attribute='stat.exists') | min
+      tags: [instalar]
+
+    - name: Generar la configuracion de la app desde el plan de subredes
+      ansible.builtin.command:
+        cmd: "python3 generar_config_gateway_arp.py --plan {{ plan }} --salida {{ config }}"
+        chdir: "{{ repo }}/R2/policy"
+      changed_when: true
+      tags: [instalar]
+
+    - name: Estado de allowExtraneousRules en ONOS (debe seguir en false; es la condicion de la prueba)
+      ansible.builtin.uri:
+        url: "{{ api }}/configuration/org.onosproject.net.flow.impl.FlowRuleManager"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: extranos
+      ignore_errors: true
+      tags: [instalar]
+
+    - name: Propiedades de FlowRuleManager
+      ansible.builtin.debug:
+        msg: "{{ extranos.json | default({}) | to_json }}"
+      tags: [instalar]
+
+    - name: Ver si la app ya esta instalada
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+        return_content: true
+      register: existente
+      tags: [instalar]
+
+    - name: Subir el .oar y activarla (solo si no estaba instalada)
+      ansible.builtin.command:
+        argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/octet-stream", --data-binary, "@{{ oar }}", "{{ api }}/applications?activate=true"]
+      when: existente.status == 404
+      changed_when: true
+      tags: [instalar]
+
+    - name: Activarla (si estaba instalada pero no activa)
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}/active"
+        method: POST
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 201, 204]
+      when: existente.status == 200 and existente.json.state | default('') != 'ACTIVE'
+      tags: [instalar]
+
+    - name: Esperar 6 s a que el componente OSGi de la app arranque
+      ansible.builtin.pause:
+        seconds: 6
+      tags: [instalar]
+
+    - name: Publicar la configuracion (clave gatewayarp en apps/org.campus.gatewayarp)
+      ansible.builtin.command:
+        argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/json", --data-binary, "@{{ config }}", "{{ api }}/network/configuration/apps/{{ app }}"]
+      changed_when: true
+      tags: [instalar]
+
+    - name: Esperar 5 s a que la app instale los flujos
+      ansible.builtin.pause:
+        seconds: 5
+      tags: [instalar, comprobar]
+
+    - name: Estado de la app
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: estado_app
+      tags: [instalar, comprobar]
+
+    - name: Flujos de la app justo tras instalar
+      ansible.builtin.uri:
+        url: "{{ api }}/flows/application/{{ app }}"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: flujos1
+      tags: [instalar, comprobar]
+
+    - name: Resumen tras instalar
+      ansible.builtin.debug:
+        msg:
+          - "app: estado={{ estado_app.json.state | default('?') }}"
+          - "flujos de la app: {{ flujos1.json.flows | default([]) | length }} en total, {{ flujos1.json.flows | default([]) | selectattr('state', 'equalto', 'ADDED') | list | length }} en estado ADDED (esperados {{ esperados }})"
+          - "por switch: {{ flujos1.json.flows | default([]) | map(attribute='deviceId') | list }}"
+      tags: [instalar, comprobar]
+
+    - name: Esperar 40 s (mas de un ciclo de revision de ONOS) con allowExtraneousRules=false
+      ansible.builtin.pause:
+        seconds: 40
+      tags: [instalar, comprobar]
+
+    - name: Flujos de la app tras 40 s
+      ansible.builtin.uri:
+        url: "{{ api }}/flows/application/{{ app }}"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: flujos2
+      tags: [instalar, comprobar]
+
+    - name: Guardar el numero de flujos ADDED
+      ansible.builtin.set_fact:
+        n_added: "{{ flujos2.json.flows | default([]) | selectattr('state', 'equalto', 'ADDED') | list | length }}"
+      tags: [instalar, comprobar]
+
+    - name: Resumen tras 40 s
+      ansible.builtin.debug:
+        msg: "flujos ADDED tras 40 s: {{ n_added }} de {{ esperados }}. {{ 'SE QUEDAN: ONOS los reconoce como suyos.' if n_added | int == esperados else 'REVISAR: faltan flujos (config sin publicar, switch no disponible o la app no los acepto; ver el log de la app en ONOS: log:tail | grep gatewayarp).' }}"
+      tags: [instalar, comprobar]
+
+- name: Gateway ARP, paso 2 - los switches tienen el flujo de la app (tabla 60, prioridad 300, ARP por IP del gateway)
+  hosts: switches
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Flujos de ARP del gateway en este switch (esperado 1 en core-1, acc-1, acc-2 y borde; 0 en core-2)
+      ansible.builtin.shell:
+        cmd: "ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=60,priority=300,arp | grep -c 'arp_tpa=' || true"
+      register: en_switch
+      changed_when: false
+      tags: [comprobar]
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ en_switch.stdout | trim }} flujo(s) de ARP del gateway"
+      tags: [comprobar]
+
+- name: Gateway ARP, paso 3 - arping a los gateways desde los hosts (no se cambia ninguna IP ni ruta)
+  hosts: h1-profesor:h2-alumno:server
+  become: true
+  gather_facts: false
+  vars:
+    gateways:
+      h1-profesor: ["10.0.1.254"]
+      h2-alumno: ["10.0.2.254"]
+      server: ["10.0.0.254"]
+  tasks:
+    - name: arping al gateway de su subred (debe contestar el switch con la MAC 02:00:5E:00:00:FE)
+      ansible.builtin.shell:
+        cmd: |
+          for gw in {{ gateways[inventory_hostname] | join(' ') }}; do
+            r=$(arping -c 2 -w 3 -I ens4 "$gw" 2>&1 | grep -i 'reply from' | head -1)
+            echo "$gw -> ${r:-SIN RESPUESTA}"
+          done
+      register: arp_gw
+      changed_when: false
+      ignore_errors: true
+      tags: [comprobar]
+
+    - name: Produccion intacta, arping al server de siempre (10.0.0.10)
+      ansible.builtin.shell:
+        cmd: "arping -c 2 -w 3 -I ens4 10.0.0.10 2>&1 | grep -c 'reply from' || true"
+      register: produccion
+      changed_when: false
+      when: inventory_hostname != 'server'
+      tags: [comprobar]
+
+    - name: Resultado de este host
+      ansible.builtin.debug:
+        msg:
+          - "{{ arp_gw.stdout_lines | default([]) }}"
+          - "ARP de produccion a 10.0.0.10: {{ produccion.stdout | default('n/a') | trim }} respuestas"
+      tags: [comprobar]
+
+- name: Gateway ARP, rollback (solo con --tags quitar)
+  hosts: borde
+  gather_facts: false
+  vars:
+    app: org.campus.gatewayarp
+    api: "http://{{ onos_ip }}:8181/onos/v1"
+  tasks:
+    - name: Desactivar la app (ONOS retira sus flujos)
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}/active"
+        method: DELETE
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 204]
+      tags: [quitar, never]
+
+    - name: Esperar 8 s y comprobar que ya no quedan flujos de la app
+      ansible.builtin.uri:
+        url: "{{ api }}/flows/application/{{ app }}"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: restantes
+      until: restantes.json.flows | default([]) | length == 0
+      retries: 4
+      delay: 8
+      tags: [quitar, never]
