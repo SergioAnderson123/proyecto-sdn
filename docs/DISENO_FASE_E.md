@@ -73,14 +73,37 @@ tabla 0 ──(sesión 40001)──► tabla de rol ──(permitido: pop VLAN)�
 - Dos ayudas, `_salida(politica)` y `_normal(politica)`, que devuelven `[VLAN_POP, NORMAL]` / `[NORMAL]` o, en modo proactivo, `[VLAN_POP, TABLE 60]` / `[TABLE 60]`. Se usan en los cuatro sitios de 1.5.
 - Las reglas de ARP de las tablas de rol quedan inalcanzables (el 40003 las gana), pero van también a la tabla 60 por coherencia.
 
-### 3.3 Reglas de confianza: por tipo de trama, no por puerto
-La regla actual `in_port → NORMAL` a 40001 **gana a la de LLDP/BDDP (40000)** y se tragaría el descubrimiento de enlaces; un "todo el switch" a 40001 haría lo mismo. En modo proactivo, las reglas de confianza casan además **`ETH_TYPE = IPv4`** (el ARP ya va por la 40003; LLDP, BDDP y EAPOL siguen llegando al controlador). En los cores y el borde (confianza total) basta una regla `IPv4 → tabla 60`.
+### 3.3 Reglas de confianza y descubrimiento de enlaces (dos capas)
+La regla actual `in_port → NORMAL` a 40001 **gana a LLDP/BDDP (40000)** y se tragaría el descubrimiento de enlaces; y si ONOS perdiera los
+enlaces, el vigilante creería que los cables cayeron. Por eso dos capas:
+1. **Capa principal: la confianza solo cubre IPv4.** Las reglas de confianza casan además `ETH_TYPE = IPv4` (el ARP ya va por la 40003). LLDP, BDDP,
+   EAPOL y cualquier trama de control futura nunca entran en la tabla 60.
+2. **Capa de refuerzo: más prioridad a LLDP/BDDP.** Reglas propias `ETH_TYPE 0x88cc` (LLDP) y `0x8942` (BDDP) → controlador, a **prioridad 40100** en
+   cada switch: sobre la confianza (40001), el portal (40002) y el ARP (40003), bajo el DHCP (40500). Se registra en `R5/deploy/prioridades.yaml`.
+
+**Quién confía en qué** (por puerto, no por switch entero):
+| Switch | Puertos de confianza (IPv4 → tabla 60) | Puertos que NO son de confianza |
+|---|---|---|
+| core-1, core-2 | las troncales y el del **server** (p5) | el de monitoreo (p1) |
+| sw-acc-1, sw-acc-2 | las troncales (p2, p3) | **p1 (host): sesión o cuarentena** |
+| switch-borde | las troncales (p2, p3) | **p1 (host-jhon): sesión o cuarentena**, y p4/p5 (monitoreo) |
+
+host-jhon cuelga del borde: se trata como **un usuario más** (tablas de rol y cuarentena), no como equipo de confianza.
 
 ### 3.4 Lo que la tabla 60 necesita para que esto funcione
-1. **Hosts fijos.** ONOS solo aprende hosts de los paquetes que le llegan; el ARP ya no le llega (va a la tabla 60) y el DHCP solo enseña a los clientes. El **server y el portal** (IP fija) no aparecerían, y sin su MAC no habría flujo unicast hacia ellos: el tráfico se descartaría. Hay que declararlos en un archivo (`hosts_fijos`: MAC, switch y puerto) que el vigilante una a lo que dice ONOS.
-2. **Visibilidad de los hosts de usuario.** Para que ONOS siga aprendiendo ubicaciones (lo necesita el portal, `ubicar_host`, y los flujos unicast del vigilante), la regla de difusión de **entrada por un puerto de acceso** añade además `OUTPUT CONTROLLER`. El controlador recibe la copia pero **no reenvía nada** (no hay `proxyarp`), así que no hay riesgo de inundación.
-3. **Camino rápido para hosts nuevos en el vigilante.** Hoy cualquier cambio espera 15 s. Para el tráfico de un host recién autenticado eso es mucho. Si la diferencia son **solo altas de flujos unicast** (ningún borrado ni cambio de difusión), se aplica de inmediato: no puede formar lazos.
-4. **Server con dos tarjetas** (una por core). Las dos están en la misma subred; el ARP del host recibirá respuesta de ambas y se quedará con una MAC cualquiera. Funciona si hay flujos hacia **las dos MAC**, pero Linux puede descartar el tráfico que llega por la segunda tarjeta si `rp_filter` es estricto. Hay que fijar `rp_filter=2` (o 0) en el server antes de la prueba.
+1. **¿Cómo conoce ONOS a los hosts?** Aprende de los paquetes que llegan al controlador: el **DHCP** (40500) enseña a cada cliente, el **EAPOL** (AAA) a los
+   autenticados, y la **copia del ARP** (punto 2) a los de IP fija. **Un invitado es un cliente DHCP normal: ONOS lo aprende al primer `DISCOVER`, antes de
+   que haga login.** No necesita estar en ninguna lista. La lista de **hosts fijos** es solo para máquinas de IP fija que nunca hablan con el controlador:
+   el **server** (con las MAC de sus dos tarjetas y sus puertos) y el **portal**. El vigilante la une a lo que diga ONOS.
+2. **Visibilidad de los hosts de usuario.** La regla de difusión de **entrada por un puerto de acceso** añade `OUTPUT CONTROLLER`: ONOS recibe una copia del
+   ARP (aprende MAC, IP y ubicación) y **no reenvía nada** (no hay `proxyarp`), así que no hay riesgo de inundación.
+3. **Camino rápido para hosts nuevos (aceptado).** Si la diferencia son **solo altas de flujos unicast** (ni borrados ni cambios de difusión), el vigilante
+   las aplica de inmediato, sin esperar los 15 s: no pueden formar lazos. Un host nuevo recibe su tráfico en ≤5 s.
+4. **Server con dos tarjetas** (una por core), en la misma subred. El host se queda con la MAC de la tarjeta que le conteste, y hacen falta flujos hacia
+   las dos. Además, Linux puede descartar paquetes que llegan por la segunda tarjeta si `rp_filter` es estricto (ver 6).
+5. **Los servicios en una sola VM.** La política ya distingue los servicios por **IP y puerto TCP** (todos los puertos son únicos: 8001-8003, 8101-8105,
+   portal 8443); la tabla 60 solo mira la **MAC** de destino. Con todo en el `server`, se mantienen las tres IP (10.0.0.40, .50, .60) como alias del server y
+   **`policy.yaml` no cambia**; las tres resuelven por ARP a las MAC del server.
 
 ### 3.5 R5
 La regla de espejo (41000) pasa de `NORMAL + sensores` a `goto_table:60 + sensores` (la copia a los sensores es una acción inmediata y no cambia).
@@ -92,21 +115,43 @@ La regla de espejo (41000) pasa de `NORMAL + sensores` a `goto_table:60 + sensor
 4. **Simulador de la tubería completa** (tabla 0 → tabla de rol → tabla 60) con paquetes de ejemplo: alumno → servicio permitido (llega), alumno → sistema de notas (se descarta), respuesta del servidor → alumno (llega), invitado → portal (llega), invitado → servicio (se descarta), DHCP (al controlador), broadcast (nunca duplicado). Sobre la topología de 14 VM y con cada fallo simple.
 5. Las pruebas existentes de R2 y R5 con la bandera en `normal` siguen pasando sin cambios.
 
-## 5. Despliegue
-1. Con la bandera apagada no cambia nada: se sube el código.
-2. Se instalan primero los **hosts fijos** y se comprueba (vista previa) que existen los flujos unicast hacia el server y el portal.
-3. Se activa **en un solo switch de acceso** (`acc-1`) borrando y reinstalando sus flujos de R2 (borrar y publicar, igual que en la fase B), con el diagnóstico 95 y el freno abierto.
-4. Prueba de punta a punta con un usuario real: autenticar, llegar a un servicio permitido, ser rechazado en uno prohibido.
-5. Después `acc-2`, los cores y el borde, uno a uno.
+## 5. Despliegue (orden elegido: primero la entrega, después la entrada)
+0. **Código con la bandera apagada:** no cambia nada en la red.
+1. **Preparar el `server`:** alias de IP (.40, .50, .60), `rp_filter` flexible, y comprobar que los servicios están escuchando (`ss -ltn`).
+2. **Hosts fijos** (MAC de las dos tarjetas del server y del portal) y **vista previa**: deben existir los flujos unicast hacia el server en cada switch.
+3. **Núcleo y borde** (sin usuarios; solo `IPv4 → tabla 60` en puertos troncales y del server, más las reglas LLDP/BDDP), uno a uno, con el diagnóstico 95 y el
+   freno abiertos.
+4. **`sw-acc-1`**: borrar y reinstalar sus flujos de R2 con la bandera activa. Prueba de punta a punta con un usuario real: autenticar, llegar a un servicio
+   permitido, ser rechazado en uno prohibido, y un invitado que llega al portal.
+5. **`sw-acc-2`**, y por último la bandera global.
 6. **Reversible:** apagar la bandera y volver a sincronizar devuelve los flujos a `NORMAL`.
+Razón del orden: cuando un acceso empiece a entregar a la tabla 60, el núcleo ya debe saber reenviar; si fuera al revés, el tráfico se descartaría.
 
-## 6. Decisiones que necesito del equipo
-1. **Dónde viven los servicios (10.0.0.40, .50) y el portal (10.0.0.60) en esta topología.** ¿En el `server`? ¿Con sus IP como alias en una tarjeta? Define los hosts fijos.
-2. **Orden de despliegue:** ¿primero acceso y luego núcleo, o al revés? (Recomendado: primero los hosts fijos y el núcleo, después los accesos.)
-3. **El camino rápido** (3.4.3): aplicar de inmediato las altas unicast. ¿Lo aceptamos?
-4. **`rp_filter` en el server** (3.4.4): ¿se puede cambiar en esa VM?
+## 6. Decisiones
+**Tomadas (16-nov-2026):** orden de despliegue recomendado (arriba); camino rápido para altas unicast aceptado; los servicios viven todos en el `server`.
+**Pendientes de confirmar:** (a) mantener las tres IP como alias del server (recomendado) o pasar a una sola IP con puertos distintos; (b) cambiar `rp_filter`
+en el `server` (es un parámetro del kernel de esa VM, se aplica con Ansible); (c) las dos capas de 3.3.
+
+**`rp_filter`, en corto.** Es una protección de Linux: al llegar un paquete por una interfaz con origen S, el kernel comprueba si respondería a S por esa misma
+interfaz; en modo estricto (1), si no, lo descarta en silencio. El server tiene dos tarjetas en la misma subred y **una sola ruta** hacia ella: lo que llega por
+la segunda tarjeta se respondería por la primera, y el kernel lo tiraría aunque la red lo haya entregado bien. Con `rp_filter=2` (flexible) o `0` no lo hace.
 
 ## 7. Riesgos
 - **El mayor es el de las reglas de confianza** (3.3): sin la condición de tipo de trama, se tragarían los enlaces y la red perdería topología.
 - **Sesiones activas durante el cambio:** al reinstalar las tablas de rol de un switch, los usuarios con sesión pierden tráfico unos instantes (no la sesión, que está en el flujo 40001 y en el Policy Mapper).
 - **Servicio inalcanzable por falta de host fijo** es el fallo más probable al principio; la vista previa de flujos debe mostrarlo antes de activar nada.
+
+## 8. Qué protocolos llegan y cuáles no
+La política es de **capa 3 y 4**, no solo IP: las reglas de las tablas de rol casan `IPv4 + TCP + ip_dst del servicio/32 + puerto TCP`. **Todo lo que no
+coincide se descarta** (prioridad 0): FTP, SMTP, SSH, Telnet, ICMP, UDP y cualquier otro puerto o IP no figuran en `services`, así que **no llegan** (el SSH
+al puerto 22 del server se descarta salvo que se añada como servicio). La tabla 60 solo decide **por dónde** va lo ya permitido. Excepciones, que existen hoy
+y no cambian con la fase E: el **ARP**, el **DHCP** (va al controlador) y el tráfico que entra por **puertos de confianza** (servidores y troncales), que no se
+filtra: la política protege a los servicios *de los usuarios* y no a los usuarios *de los servidores*. Endurecerlo (por ejemplo, que la confianza del server
+solo deje salir TCP desde los puertos de los servicios) es posible, pero queda fuera de esta fase.
+
+## 9. Cambio aparte, NO se hace ahora: la lista negra sobre el EAPOL
+Hoy el EAPOL del puerto (50000) está **sobre** la lista negra (45000), y una prueba (`test_prioridades`) lo exige. La lista negra casa `in_port + eth_src` de
+una MAC concreta; la regla de EAPOL casa el puerto entero y **no se borra nunca** (solo se inyecta al crear una sesión). Consecuencia: una MAC bloqueada
+puede seguir enviando EAPOL durante el bloqueo, volver a autenticarse y dejar una sesión que se activa sola al expirar el bloqueo. Poner la lista negra por
+encima del EAPOL (por ejemplo 50500) evita que una MAC bloqueada intente siquiera autenticar. Toca R1 y R5 (la constante, `prioridades.yaml`, el panel y la
+prueba de orden), por eso se hace como un cambio aparte, después de la fase E.
