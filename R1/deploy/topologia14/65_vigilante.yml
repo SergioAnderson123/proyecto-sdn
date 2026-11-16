@@ -4,6 +4,7 @@
 #   PLAYBOOK=65_vigilante.yml ./lanzar.sh -e aplicar=true       # el servicio también CAMBIA los flujos
 #   PLAYBOOK=65_vigilante.yml ./lanzar.sh -e accion=parar       # para y deshabilita el servicio en las dos VM
 #   PLAYBOOK=65_vigilante.yml ./lanzar.sh --limit node-ctrl-3   # solo el principal (o --limit node-ctrl-2: solo el respaldo)
+#   PLAYBOOK=65_vigilante.yml ./lanzar.sh -e usar_hosts_fijos=true   # suma los hosts de /etc/vigilante/hosts_fijos.json (fase E; ver 70_fase_e.yml)
 #   PLAYBOOK=65_vigilante.yml ./lanzar.sh -e regenerar_acceso=true   # vuelve a guardar los puertos de acceso (solo con la red completa)
 #
 # Cómo funciona (diseño: docs/DISENO_FLUJOS_PROACTIVOS.md):
@@ -31,6 +32,8 @@
     url_principal: "http://{{ hostvars['node-ctrl-3'].ansible_host }}:{{ puerto_salud }}/salud"
     aplicar: false
     regenerar_acceso: false
+    usar_hosts_fijos: false          # true = --hosts-fijos /etc/vigilante/hosts_fijos.json (lo escribe 70_fase_e.yml -e hosts_fijos=true)
+    copiar_arp: false                # true = --copiar-arp (el ARP de puertos de acceso sube al controlador; solo si ONOS no aprende los hosts por EAPOL/DHCP)
     carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
     destino: /opt/vigilante
     config: /etc/vigilante
@@ -41,6 +44,7 @@
       - plan_arboles.py
       - puertos.py
       - recalculo.py
+      - hosts_fijos.py
       - onos_multi.py
       - instalar_proactivo.py
       - vista_previa.py
@@ -100,7 +104,7 @@
 
           [Service]
           WorkingDirectory={{ destino }}
-          ExecStart=/usr/bin/python3 {{ destino }}/vigilante.py --acceso {{ config }}/acceso.json --onos {{ nodos_onos }} --salud-puerto {{ puerto_salud }}{{ (' --respaldo-de ' ~ url_principal) if rol == 'respaldo' else '' }}{{ ' --aplicar' if (aplicar | bool) else '' }}
+          ExecStart=/usr/bin/python3 {{ destino }}/vigilante.py --acceso {{ config }}/acceso.json --onos {{ nodos_onos }} --salud-puerto {{ puerto_salud }}{{ (' --respaldo-de ' ~ url_principal) if rol == 'respaldo' else '' }}{{ (' --hosts-fijos ' ~ config ~ '/hosts_fijos.json') if (usar_hosts_fijos | bool) else '' }}{{ ' --copiar-arp' if (copiar_arp | bool) else '' }}{{ ' --aplicar' if (aplicar | bool) else '' }}
           Restart=always
           RestartSec=5
 

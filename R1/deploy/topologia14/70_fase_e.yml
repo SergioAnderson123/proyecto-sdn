@@ -1,0 +1,140 @@
+# Fase E: el tráfico IP de R2 por la tabla 60 (sin NORMAL). Prepara el server, genera policy.local.yaml y los hosts fijos del vigilante.
+# Diseño: docs/DISENO_FASE_E.md. POR DEFECTO SOLO LEE E IMPRIME: no cambia nada en la red ni en los servicios.
+#
+#   PLAYBOOK=70_fase_e.yml ./lanzar.sh                                   # lee las MAC del server y muestra el policy.local.yaml que se generaría
+#   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e preparar_ip=true               # además pone 10.0.0.10/24 en ens4 del server (temporal: se pierde al reiniciar)
+#   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true                  # escribe R2/policy/policy.local.yaml en node-ctrl-1 (reenvio: normal = no cambia nada)
+#   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true -e reenvio=core-1,core-2,borde   # reenvío proactivo SOLO en esos switches
+#   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true -e reiniciar=true                # y reinicia el policy_mapper para que lo lea
+#   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e hosts_fijos=true               # escribe /etc/vigilante/hosts_fijos.json (node-ctrl-3 y node-ctrl-2)
+#
+# Orden recomendado (se prueba cada paso con 95_diagnostico_lazos.yml; el freno es 99_freno_emergencia.yml):
+#   1) preparar_ip=true y hosts_fijos=true; luego 65_vigilante.yml -e usar_hosts_fijos=true (el vigilante añade las reglas del server: alta rápida).
+#   2) escribir=true con reenvio=core-1,core-2,borde y reiniciar=true.   3) sumar sw-acc-1 a la lista y probar con un usuario real.
+#   4) sumar sw-acc-2.   5) reenvio=proactivo (todos).   Marcha atrás: reenvio=normal con reiniciar=true.
+- name: Fase E, paso 1 - el server (MAC de sus tarjetas e IP única)
+  hosts: server
+  become: true
+  gather_facts: false
+  vars:
+    preparar_ip: false
+    ip_server: 10.0.0.10
+    prefijo: 24
+    nic_core1: ens4          # cable hacia sw-core-1 (puerto 5 de ONOS)
+    nic_core2: ens5          # cable hacia sw-core-2 (puerto 5 de ONOS)
+  tasks:
+    - name: Leer las MAC de las dos tarjetas de datos
+      ansible.builtin.shell: "cat /sys/class/net/{{ nic_core1 }}/address; cat /sys/class/net/{{ nic_core2 }}/address; ip -br addr show {{ nic_core1 }}; ip -br addr show {{ nic_core2 }}"
+      register: macs
+      changed_when: false
+      tags: [server]
+
+    - name: Mostrar
+      ansible.builtin.debug:
+        var: macs.stdout_lines
+      tags: [server]
+
+    - name: "Poner la IP única de los servicios en {{ nic_core1 }} (las dos tarjetas contestan ARP: rp_filter=2 ya está aplicado)"
+      ansible.builtin.shell: |
+        ip link set {{ nic_core1 }} up
+        ip link set {{ nic_core2 }} up
+        ip addr show dev {{ nic_core1 }} | grep -q "inet {{ ip_server }}/" || ip addr add {{ ip_server }}/{{ prefijo }} dev {{ nic_core1 }}
+        ip -br addr show {{ nic_core1 }}
+      register: ip_puesta
+      changed_when: "'ya' not in ip_puesta.stdout"
+      when: preparar_ip | bool
+      tags: [server]
+
+- name: Fase E, paso 2 - policy.local.yaml (node-ctrl-1, donde corre el policy_mapper)
+  hosts: servicios
+  gather_facts: false
+  vars:
+    escribir: false
+    reiniciar: false
+    reenvio: normal                  # normal | proactivo | lista (core-1,core-2,borde,...)
+    ip_server: 10.0.0.10
+    puerto_portal: 8443
+    server_en: "core-1:5,core-2:5"   # switch:puerto donde conecta el server
+    externos: "borde:1"              # switch:puerto de equipos externos (host-jhon): sin DHCP
+    nic_core1: ens4
+    carpeta: "{{ repo_dir }}/R2/policy"
+  tasks:
+    - name: Actualizar el repo (la rama debe estar subida)
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ repo_dir }}"
+        version: "{{ repo_rama }}"
+        update: true
+        force: false
+      tags: [politica]
+
+    - name: PyYAML disponible (lo necesita el generador)
+      ansible.builtin.command: python3 -c "import yaml"
+      changed_when: false
+      tags: [politica]
+
+    - name: MAC del server por la que se llega al portal (la de su tarjeta hacia sw-core-1)
+      ansible.builtin.command: "cat /sys/class/net/{{ nic_core1 }}/address"
+      delegate_to: server
+      register: mac_portal
+      changed_when: false
+      tags: [politica]
+
+    - name: Generar (solo imprimir)
+      ansible.builtin.command:
+        cmd: >-
+          python3 generar_politica_local.py --mac-portal {{ mac_portal.stdout | trim }} --ip-server {{ ip_server }} --puerto-portal {{ puerto_portal }}
+          --server {{ server_en }} --externos "{{ externos }}" --reenvio "{{ reenvio }}"
+        chdir: "{{ carpeta }}"
+      register: generado
+      changed_when: false
+      tags: [politica]
+
+    - name: Lo que se generaría
+      ansible.builtin.debug:
+        msg: "{{ generado.stdout_lines }}"
+      tags: [politica]
+
+    - name: Escribir policy.local.yaml
+      ansible.builtin.command:
+        cmd: >-
+          python3 generar_politica_local.py --mac-portal {{ mac_portal.stdout | trim }} --ip-server {{ ip_server }} --puerto-portal {{ puerto_portal }}
+          --server {{ server_en }} --externos "{{ externos }}" --reenvio "{{ reenvio }}" --salida {{ carpeta }}/policy.local.yaml
+        chdir: "{{ carpeta }}"
+      when: escribir | bool
+      tags: [politica]
+
+    - name: Reiniciar el policy_mapper (lee policy.local.yaml al arrancar y reaplica los flujos de R2)
+      ansible.builtin.command: docker restart policy_mapper
+      when: (escribir | bool) and (reiniciar | bool)
+      tags: [politica]
+
+- name: Fase E, paso 3 - hosts fijos del vigilante (el server, que ONOS no aprende)
+  hosts: node-ctrl-3:node-ctrl-2
+  become: true
+  gather_facts: false
+  vars:
+    hosts_fijos: false
+    nic_core1: ens4
+    nic_core2: ens5
+    config: /etc/vigilante
+    puerto_server_core: 5
+  tasks:
+    - name: Leer las MAC del server
+      ansible.builtin.shell: "cat /sys/class/net/{{ nic_core1 }}/address; cat /sys/class/net/{{ nic_core2 }}/address"
+      delegate_to: server
+      become: false
+      register: macs_server
+      changed_when: false
+      when: hosts_fijos | bool
+      tags: [fijos]
+
+    - name: Escribir hosts_fijos.json (cada tarjeta, en el core al que está cableada)
+      ansible.builtin.copy:
+        dest: "{{ config }}/hosts_fijos.json"
+        mode: "0644"
+        content: |
+          [{"nombre": "server-{{ nic_core1 }}", "mac": "{{ macs_server.stdout_lines[0] | trim }}", "device": "core-1", "port": {{ puerto_server_core }}},
+           {"nombre": "server-{{ nic_core2 }}", "mac": "{{ macs_server.stdout_lines[1] | trim }}", "device": "core-2", "port": {{ puerto_server_core }}}]
+      when: hosts_fijos | bool
+      tags: [fijos]
