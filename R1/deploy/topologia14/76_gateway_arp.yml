@@ -1,7 +1,9 @@
 # APP DE ONOS "Gateway ARP" (R2/onos-app/gateway-arp): instala en ONOS la app, publica su configuracion (sacada del plan de subredes) y comprueba que los flujos del ARP del gateway quedan
 # instalados Y SE QUEDAN con allowExtraneousRules=false (esa es la razon de ser de la app: los flujos de ovs-ofctl eran borrados por ONOS, los de una app no).
 #   PLAYBOOK=76_gateway_arp.yml ./lanzar.sh                       # instala, configura y comprueba (sin cambiar nada del reenvio actual)
-#   PLAYBOOK=76_gateway_arp.yml ./lanzar.sh --tags quitar         # desactiva la app: ONOS retira sus flujos (rollback)
+#   PLAYBOOK=76_gateway_arp.yml ./lanzar.sh --tags quitar         # desactiva la app: ONOS retira sus flujos (rollback). El driver ovs forzado se revierte con: curl -u onos:rocks -X DELETE http://192.168.201.1:8181/onos/v1/network/configuration/devices/<deviceId>/basic
+#   -e reinstalar=true                                            # reemplaza la app por el .oar del repositorio
+# Hallazgo del 16-nov: los switches (OVS 3.3.9) quedan con driver `default` en ONOS 2.7 (el driver ovs solo coincide con sw=2.x); sin driver ovs la app no puede usar las extensiones de Nicira. El playbook lo fuerza por netcfg.
 # Que toca: solo 4 flujos de ARP (tabla 60, prioridad 300) que coinciden con las IP de gateway 10.0.0.254, 10.0.1.254, 10.0.2.254 y 203.0.113.254. Nadie usa esas IP hoy, asi que el trafico de
 # produccion no cambia. La comprobacion con hosts hace arping a esos gateways desde h1, h2 y el server SIN tocar sus IP ni rutas, y arping al server de siempre (10.0.0.10) para ver que sigue igual.
 # Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh . Freno: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true
@@ -115,6 +117,25 @@
       failed_when: false
       tags: [instalar]
 
+    - name: Leer los switches de la configuracion generada
+      ansible.builtin.slurp:
+        src: "{{ config }}"
+      register: config_leida
+      tags: [instalar]
+
+    - name: Forzar el driver ovs en esos switches (ONOS 2.7 solo asigna ovs a OVS 2.x; el slice tiene 3.3.x y quedaban en default, sin las extensiones de Nicira)
+      ansible.builtin.uri:
+        url: "{{ api }}/network/configuration/devices/{{ item }}"
+        method: POST
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        body_format: json
+        body: {basic: {driver: ovs}}
+        status_code: [200, 201, 204]
+      loop: "{{ (config_leida.content | b64decode | from_json).gatewayarp.gateways | map(attribute='device') | unique | list }}"
+      tags: [instalar]
+
     - name: Esperar 6 s a que el componente OSGi de la app arranque
       ansible.builtin.pause:
         seconds: 6
@@ -191,7 +212,7 @@
   tasks:
     - name: Flujos de ARP del gateway en este switch (esperado 1 en core-1, acc-1, acc-2 y borde; 0 en core-2)
       ansible.builtin.shell:
-        cmd: "ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=60,priority=300,arp | grep -c 'arp_tpa=' || true"
+        cmd: "ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=60,arp | grep priority=300 | grep -c 'arp_tpa=' || true"
       register: en_switch
       changed_when: false
       tags: [comprobar]
