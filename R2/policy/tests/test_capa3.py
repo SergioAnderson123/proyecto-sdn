@@ -34,8 +34,8 @@ NOMBRE = {(h["device"], h["port"]): h["ip"] for h in HOSTS}
 G = c.grafo_desde_links(LINKS)
 
 
-def red(grafo=G, hosts=HOSTS, plan=PLAN, **kw):
-    flujos = l3.flujos_capa3(plan, grafo, hosts, PREF, **kw)
+def red(grafo=G, hosts=HOSTS, plan=PLAN, pref=PREF, **kw):
+    flujos = l3.flujos_capa3(plan, grafo, hosts, pref, **kw)
     arp = lambda d: pt._base(d, 0, 40003, [{"type": "ETH_TYPE", "ethType": "0x0806"}], [{"type": "TABLE", "tableId": 60}])    # noqa: E731
     ip = lambda d: pt._base(d, 0, 40001, [{"type": "ETH_TYPE", "ethType": "0x0800"}], [{"type": "TABLE", "tableId": 60}])     # noqa: E731
     por = {d: [arp(d), ip(d)] + [f for f in flujos if f["deviceId"] == d] for d in grafo}

@@ -1,0 +1,10 @@
+{
+  "_comentario": "Plan de subredes de la topologia de 14 VM (VNRT) para capa3.cargar_plan(datos, nombres=NOMBRES). Ver docs/PLAN_DIRECCIONAMIENTO.md. Los puertos son los de ONOS; sw-acc-1 y sw-acc-2 solo tienen el 1 como puerto de usuario.",
+  "gw_mac": "02:00:5E:00:00:FE",
+  "subredes": [
+    {"nombre": "servicios", "dispositivo": "core-1", "prefijo": "10.0.0.0/24", "gateway": "10.0.0.254", "puertos": [5]},
+    {"nombre": "acc-1", "dispositivo": "acc-1", "prefijo": "10.0.1.0/24", "gateway": "10.0.1.254", "puertos": [1]},
+    {"nombre": "acc-2", "dispositivo": "acc-2", "prefijo": "10.0.2.0/24", "gateway": "10.0.2.254", "puertos": [1]},
+    {"nombre": "externa", "dispositivo": "borde", "prefijo": "203.0.113.0/24", "gateway": "203.0.113.254", "puertos": [1]}
+  ]
+}
