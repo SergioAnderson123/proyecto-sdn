@@ -16,7 +16,7 @@ Cómo pasar la producción del slice de reenvío L2 (tabla 60: unicast por MAC y
 
 La regla de entrada de la prueba aislada (tabla 0, prioridad 40060) **se salta las tablas de rol de R2**: el IPv4 con la MAC del gateway sube a la tabla 62 sin pasar por la sesión 802.1X (40001) ni la cuarentena (1000). Con IP de prueba que nadie usa no importa; **con hosts reales sería un agujero**: un host sin sesión podría enrutar por el gateway. Por eso:
 - la entrada aislada solo se usa con la MAC de gateway de prueba (queda anotado en `R5/deploy/prioridades.yaml` y probado);
-- la capa 3 real va **en la tabla 60**, a la que se llega **después** de la sesión y de las tablas de rol (o por la confianza de las troncales), de modo que la autorización de R2 se mantiene. No existe una etapa de "coexistencia" segura con hosts reales en otra tabla: el paso real es la conmutación de la sección 4.
+- la capa 3 real va **en la tabla 60**, a la que se llega **después** de la sesión y de las tablas de rol (o por la confianza de las troncales), de modo que la autorización de R2 se mantiene. Comprobado en simulación con las tablas de rol reales de R2 (`tests/test_capa3_con_politica_r2.py`, 10 pruebas): un docente con sesión llega al 8101 por el gateway con MAC y TTL correctos, un alumno no, el ICMP y los puertos no permitidos se descartan, un host sin sesión no usa el gateway y la respuesta del servidor vuelve por la confianza. En vivo se comprobará en la conmutación. No existe una etapa de "coexistencia" segura con hosts reales en otra tabla: el paso real es la conmutación de la sección 4.
 
 ## 3. Condiciones previas (todas, antes de empezar)
 
@@ -31,10 +31,10 @@ La regla de entrada de la prueba aislada (tabla 0, prioridad 40060) **se salta l
 1. **Parar el vigilante L2** en ctrl-3 y ctrl-2 (`65_vigilante.yml -e accion=parar`): dos vigilantes no pueden pelear por la tabla 60.
 2. **Un ciclo del vigilante en modo capa 3 en la tabla 60** con `--aplicar --estable 0`: borra los 30 flujos L2 y monta los 15 de capa 3 (borrar antes de añadir: el peor estado intermedio descarta, nunca forma un lazo). Corte esperado: segundos.
 3. **Quitar la IP vieja** de h1 y h2 (`10.0.0.201`, `10.0.0.202`): pasan a depender solo del gateway.
-4. **Verificar** (`arping` al gateway, ping h1–h2 con TTL 61, h1–server con TTL 62, ARP a 10.0.0.10 desde h1 ya enrutado) y el diagnóstico `95`.
+4. **Verificar con sesión 802.1X** (el ICMP nunca pasa por R2 y sin sesión todo IPv4 se descarta, así que no vale el `ping`): autenticar h1 (docente) y h2 (alumno) con `72_suplicante.yml`, y `69_conmutacion_hosts.yml -e accion=verificar`: ARP del gateway y `nc` a `10.0.0.10:8101`, que debe dar *refused* para el docente (llega y vuelve) y *timed out* para el alumno (bloqueado por su rol), más los contadores de los flujos de entrega /32 de la tabla 60. Después el diagnóstico `95`.
 5. **Arrancar el servicio del vigilante en modo capa 3** (principal en ctrl-3, respaldo en ctrl-2) para que mantenga la tabla 60 ante caídas.
 
-Criterios de **abortar** (ir al retroceso): ping h1–h2 sin respuesta a los 30 s del paso 3; el `95` muestra tormenta; ONOS pierde enlaces; cualquier duda.
+Criterios de **abortar** (ir al retroceso): el docente h1 con sesión no recibe *refused* en el 8101 a los 30 s del paso 3; el `95` muestra tormenta; ONOS pierde enlaces; cualquier duda.
 
 ## 4 bis. Lo que NO cubre el plan
 Hosts nuevos sin IP conocida por ONOS (no reciben reglas: falla cerrado), R5 (`HOME_NET` agregado, espejo a la tabla 60, bloqueo por MAC), DHCP por subred, bond del server, caída de un cable en vivo (se recomienda probarla en la ventana, con un cable de acceso redundante y el retroceso a mano).
@@ -52,4 +52,5 @@ Tiempo esperado: menos de un minuto. Si el vigilante L2 no repusiera por algún 
   - `67_hosts_plan_a.yml`: IP del plan A como secundaria en los hosts y rutas hacia las otras subredes; no persiste y se quita con `-e accion=quitar`.
   - `68_vigilante_capa3_servicio.yml`: servicio `vigilante-capa3` en ctrl-3 (principal) y ctrl-2 (respaldo) en modo **solo avisar**, en una unidad aparte; no toca el L2. Con `-e aplicar=true` aplica en la tabla 60: solo durante la conmutación y con el L2 parado.
   - `65_vigilante.yml` corregido (copiaba sin `capa3.py`).
-- **Por hacer, tras ver 67 y 68 funcionando:** el playbook de conmutación (`-e confirmar=true`: parar el L2 en las dos VM, `68 -e aplicar=true`, quitar la IP vieja de h1 y h2, verificar con TTL, y el retroceso en sentido inverso). No se ejecuta sin tu decisión.
+  - `69_conmutacion_hosts.yml`: quitar la IP vieja de h1 y h2 (se niega si la capa 3 no está montada), verificar y restaurar; el encabezado trae el orden completo y el retroceso.
+- **Ejecutado el 16-nov:** 66, 67 y 68 (los dos servicios de capa 3 activos solo avisando). **Por ejecutar, solo con tu decisión:** la secuencia del encabezado de `69_conmutacion_hosts.yml` (parar el L2 con el 65, `68 -e aplicar=true`, `69 quitar_ip_vieja -e confirmar=true`, sesiones con el 72, `69 verificar`).

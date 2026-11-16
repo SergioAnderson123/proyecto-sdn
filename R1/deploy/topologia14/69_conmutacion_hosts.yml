@@ -1,0 +1,121 @@
+# CONMUTACION A CAPA 3, lado de los HOSTS (docs/PLAN_CONMUTACION_CAPA3.md, pasos 3 y 4 y retroceso). Cambia la IP principal de h1 y h2 al plan A. No persiste: un reinicio del host devuelve la IP vieja.
+# Orden completo (cada comando se ejecuta y se verifica antes del siguiente; Freno: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true):
+#   0) PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh ; 66_preflight_conmutacion.yml ; 67_hosts_plan_a.yml (ya aplicado)
+#   1) PLAYBOOK=65_vigilante.yml ./lanzar.sh -e accion=parar                       # para el vigilante L2 en ctrl-3 y ctrl-2
+#   2) PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e aplicar=true       # el vigilante capa 3 aplica en la tabla 60 (tarda ~20 s: espera 15 s de estabilidad)
+#   3) PLAYBOOK=69_conmutacion_hosts.yml ./lanzar.sh -e accion=quitar_ip_vieja -e confirmar=true   # h1 y h2 sin la IP vieja, con rutas por el gateway
+#   4) PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true --limit node-ctrl-1,h1-profesor   # sesion 802.1X de h1 (docente); alumno01 en h2 igual con --limit node-ctrl-1,h2-alumno
+#   5) PLAYBOOK=69_conmutacion_hosts.yml ./lanzar.sh -e accion=verificar          # ARP del gateway y TCP al 10.0.0.10:8101 desde h1 y h2 (con sesion: docente refused, alumno timed out)
+#   6) PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh
+# El ICMP (ping) NUNCA pasa por R2 (las tablas de rol solo dejan TCP a los servicios del catalogo): no se usa para verificar. Sin sesion 802.1X todo IPv4 se descarta (cuarentena): el resultado solo vale con sesion.
+# RETROCESO (en este orden):
+#   a) PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e accion=parar
+#   b) PLAYBOOK=69_conmutacion_hosts.yml ./lanzar.sh -e accion=restaurar_ip_vieja -e confirmar=true
+#   c) PLAYBOOK=65_vigilante.yml ./lanzar.sh -e aplicar=true -e usar_hosts_fijos=true      # el vigilante L2 repone el reenvio L2 (borra los flujos de capa 3 y monta los L2)
+#   d) PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh ; y comprobar con arping h1 al server
+# quitar_ip_vieja se niega si la capa 3 no esta montada (menos de 3 flujos de entrega /32 en la tabla 60) o si los hosts no tienen la IP del plan A (67).
+- name: Conmutacion, lado de los hosts - comprobar condiciones
+  hosts: borde
+  gather_facts: false
+  vars:
+    accion: verificar               # verificar | quitar_ip_vieja | restaurar_ip_vieja
+    confirmar: false
+    contar: "python3 {{ playbook_dir }}/files/contar_flujos.py --onos http://{{ onos_ip }}:8181 --usuario {{ onos_user }}:{{ onos_pass }}"
+  tasks:
+    - name: Las acciones que cambian IP exigen -e confirmar=true
+      ansible.builtin.assert:
+        that: accion == 'verificar' or (confirmar | bool)
+        fail_msg: "{{ accion }} cambia la IP de h1 y h2: repetir con -e confirmar=true"
+        quiet: true
+
+    - name: Flujos de entrega por IP /32 en la tabla 60 (capa 3 montada)
+      ansible.builtin.command:
+        cmd: "{{ contar }}"
+      register: cuentas
+      changed_when: false
+
+    - name: Para quitar la IP vieja la capa 3 debe estar montada (3 flujos de entrega o mas)
+      ansible.builtin.assert:
+        that: (cuentas.stdout_lines | select('search', 'total_entrega160=') | first | regex_replace('.*=', '') | int) >= 3
+        fail_msg: "La capa 3 no esta en la tabla 60 (paso 2). No se quita la IP vieja: los hosts quedarian sin red. {{ cuentas.stdout_lines }}"
+        quiet: true
+      when: accion == 'quitar_ip_vieja'
+
+    - name: Estado de los flujos
+      ansible.builtin.debug:
+        msg: "{{ cuentas.stdout_lines }}"
+
+- name: Conmutacion, lado de los hosts - cambiar la IP principal o verificar
+  hosts: h1-profesor:h2-alumno:server
+  become: true
+  gather_facts: false
+  vars:
+    accion: verificar
+    datos:
+      h1-profesor: {viejo: "10.0.0.201", nuevo: "10.0.1.101", gw: "10.0.1.254", destinos: ["10.0.2.102", "10.0.0.10"]}
+      h2-alumno: {viejo: "10.0.0.202", nuevo: "10.0.2.102", gw: "10.0.2.254", destinos: ["10.0.1.101", "10.0.0.10"]}
+      server: {viejo: "10.0.0.10", nuevo: "10.0.0.10", gw: "10.0.0.254", destinos: ["10.0.1.101", "10.0.2.102"]}
+    yo: "{{ datos[inventory_hostname] }}"
+  tasks:
+    - name: El host debe tener la IP del plan A (67) antes de quitar la vieja
+      ansible.builtin.shell:
+        cmd: "ip -4 -o addr show dev ens4 | grep -q ' {{ yo.nuevo }}/'"
+      changed_when: false
+      when: accion == 'quitar_ip_vieja'
+
+    - name: Quitar la IP vieja y poner la ruta hacia 10.0.0.0/24 por el gateway (h1 y h2)
+      ansible.builtin.shell:
+        cmd: |
+          ip addr del {{ yo.viejo }}/24 dev ens4
+          ip route replace 10.0.0.0/24 via {{ yo.gw }} dev ens4 src {{ yo.nuevo }}
+      when: accion == 'quitar_ip_vieja' and inventory_hostname != 'server'
+      changed_when: true
+
+    - name: Devolver la IP vieja y quitar la ruta por el gateway (h1 y h2)
+      ansible.builtin.shell:
+        cmd: |
+          ip route del 10.0.0.0/24 via {{ yo.gw }} dev ens4 2>/dev/null || true
+          ip addr show dev ens4 | grep -q ' {{ yo.viejo }}/' || ip addr add {{ yo.viejo }}/24 dev ens4
+      when: accion == 'restaurar_ip_vieja' and inventory_hostname != 'server'
+      changed_when: true
+
+    - name: Esperar 3 s a que se asiente
+      ansible.builtin.pause:
+        seconds: 3
+      when: accion != 'verificar'
+
+    - name: ARP del gateway y TCP al servicio de prueba (10.0.0.10:8101, sistema de notas). Con sesion, docente = refused (llega y vuelve) y alumno = timed out (bloqueado por su rol)
+      ansible.builtin.shell:
+        cmd: |
+          ip neigh del {{ yo.gw }} dev ens4 2>/dev/null
+          ping -c 1 -W 1 -I {{ yo.nuevo }} {{ yo.gw }} >/dev/null 2>&1
+          echo "vecino del gateway: $(ip neigh show {{ yo.gw }} dev ens4 | awk '{print $3, $5}')"
+          echo "direcciones: $(ip -4 -o addr show dev ens4 | awk '{print $4}' | tr '\n' ' ')"
+          {% if inventory_hostname != 'server' %}echo "tcp {{ yo.nuevo }} -> 10.0.0.10:8101: $(nc -zv -w 3 -s {{ yo.nuevo }} 10.0.0.10 8101 2>&1 | tr '\n' ' ')"{% endif %}
+      register: pings
+      changed_when: false
+      ignore_errors: true
+      when: accion != 'restaurar_ip_vieja'
+
+    - name: Resultado de este host
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} ({{ accion }}): {{ pings.stdout_lines | default(['IP vieja devuelta; verificar con arping al server y el diagnostico 95']) }}"
+
+- name: Conmutacion, contadores de la capa 3 (evidencia de que el trafico paso por los flujos de entrega)
+  hosts: borde
+  gather_facts: false
+  vars:
+    accion: verificar
+    contar: "python3 {{ playbook_dir }}/files/contar_flujos.py --onos http://{{ onos_ip }}:8181 --usuario {{ onos_user }}:{{ onos_pass }}"
+  tasks:
+    - name: Flujos de entrega y sus paquetes (debe subir tras el nc de h1 y h2 con sesion)
+      ansible.builtin.command:
+        cmd: "{{ contar }}"
+      register: despues
+      changed_when: false
+      when: accion != 'restaurar_ip_vieja'
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ despues.stdout_lines | default([]) }}"
+      when: accion != 'restaurar_ip_vieja'
