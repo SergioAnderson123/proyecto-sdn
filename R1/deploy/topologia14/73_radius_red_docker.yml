@@ -12,9 +12,10 @@
     ip_radius: 10.50.0.250
   tasks:
     - name: Estado actual del contenedor radius (IP y puertos publicados)
-      ansible.builtin.shell: |
-        echo "IP: $(docker inspect radius --format '{{ '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' }}')"
-        echo "puertos publicados: [$(docker port radius 2>/dev/null | tr '\n' ' ')]"
+      ansible.builtin.shell:
+        cmd: |
+          echo "IP: $(docker inspect radius --format '{{ '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' }}')"
+          echo "puertos publicados: [$(docker port radius 2>/dev/null | tr '\n' ' ')]"
       register: estado
       changed_when: false
       tags: [radius]
@@ -42,10 +43,11 @@
       tags: [radius]
 
     - name: Recrear radius sin puertos publicados y con IP fija
-      ansible.builtin.shell: |
-        set -e
-        docker compose -p controller -f {{ compose_r1 }} up -d --no-deps radius
-        docker update --restart unless-stopped radius
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          docker compose -p controller -f {{ compose_r1 }} up -d --no-deps radius
+          docker update --restart unless-stopped radius
       args:
         executable: /bin/bash
         chdir: "{{ repo_dir }}/R1"
@@ -92,11 +94,12 @@
       tags: [radius]
 
     - name: Registro del AAA y sockets UDP de ONOS
-      ansible.builtin.shell: |
-        echo "errores de enlace en el último minuto: $(docker logs onos --since 60s 2>&1 | grep -c "Can't open RADIUS socket")"
-        echo "errores de envío en el último minuto:  $(docker logs onos --since 60s 2>&1 | grep -c 'Cannot send packet')"
-        docker logs onos --since 60s 2>&1 | grep -E 'AaaManager|SocketBasedRadius|RadiusOperational' | grep -v '    at ' | tail -6 | cut -c1-170
-        ss -ulpn | grep java || true
+      ansible.builtin.shell:
+        cmd: |
+          echo "errores de enlace en el último minuto: $(docker logs onos --since 60s 2>&1 | grep -c "Can.t open RADIUS socket")"
+          echo "errores de envío en el último minuto:  $(docker logs onos --since 60s 2>&1 | grep -c 'Cannot send packet')"
+          docker logs onos --since 60s 2>&1 | grep -E 'AaaManager|SocketBasedRadius|RadiusOperational' | grep -v '    at ' | tail -6 | cut -c1-170
+          ss -ulpn | grep java || true
       become: true
       register: aaa
       changed_when: false
