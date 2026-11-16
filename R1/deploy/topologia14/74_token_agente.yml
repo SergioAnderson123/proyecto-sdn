@@ -1,0 +1,89 @@
+# AGENTE_TOKEN: la clave compartida entre el agente 802.1X de los hosts y el Policy Mapper para cerrar sesiones (POST /sessions/logout).
+# Sin ella el Policy Mapper rechaza el aviso (403) y la sesión de un usuario que se desconecta queda abierta: ONOS AAA 2.7.0 no manda accounting a RADIUS,
+# así que ese aviso es el único cierre. En topologia14 el .env de node-ctrl-1 se creó sin la clave (hallazgo del 16-nov: el logoff no cerraba la sesión).
+#   PLAYBOOK=74_token_agente.yml ./lanzar.sh                      # SOLO LEE: ¿está la clave en el .env y en el contenedor?
+#   PLAYBOOK=74_token_agente.yml ./lanzar.sh -e aplicar=true      # la genera (si falta) en R1/deploy/.env y RECREA el contenedor policy_mapper para que la lea
+# Efecto de aplicar=true: el Policy Mapper se reinicia (como en 70_fase_e.yml -e reiniciar=true): reinstala los flujos de R2 y BORRA los flujos de sesión, así que
+# los usuarios autenticados deben volver a autenticar. No se tocan los flujos de r2.proactivo ni de ONOS. Después: PLAYBOOK=72_suplicante.yml ./lanzar.sh
+# (el playbook 72 copia la clave del .env de node-ctrl-1 al servicio r1-agente de cada host).
+- name: Clave del agente 802.1X en el Policy Mapper
+  hosts: servicios
+  gather_facts: false
+  vars:
+    aplicar: false
+    env_archivo: "{{ repo_dir }}/R1/deploy/.env"
+    compose_r1: "{{ repo_dir }}/R1/compose.yml"
+  tasks:
+    - name: Estado de la clave (sin mostrarla)
+      ansible.builtin.shell:
+        cmd: |
+          if grep -q '^AGENTE_TOKEN=.\+' {{ env_archivo }} 2>/dev/null; then echo ".env: AGENTE_TOKEN presente"; else echo ".env: AGENTE_TOKEN AUSENTE"; fi
+          n=$(docker exec policy_mapper printenv AGENTE_TOKEN 2>/dev/null | tr -d '\n' | wc -c)
+          if [ "$n" -gt 0 ]; then echo "policy_mapper: AGENTE_TOKEN cargada ($n caracteres)"; else echo "policy_mapper: SIN AGENTE_TOKEN (el logout del agente se rechaza)"; fi
+      register: estado
+      changed_when: false
+      tags: [token]
+
+    - name: Mostrar
+      ansible.builtin.debug:
+        msg: "{{ estado.stdout_lines }}"
+      tags: [token]
+
+    - name: Generar la clave si falta (se conserva si ya existe)
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          [ -f {{ env_archivo }} ] || touch {{ env_archivo }}
+          if ! grep -q '^AGENTE_TOKEN=.\+' {{ env_archivo }}; then
+            sed -i -e '$a\' {{ env_archivo }}
+            echo "AGENTE_TOKEN=$(python3 -c 'import secrets; print(secrets.token_hex(16))')" >> {{ env_archivo }}
+            echo generada
+          else
+            echo ya_existia
+          fi
+        executable: /bin/bash
+      register: gen
+      changed_when: "'generada' in gen.stdout"
+      when: aplicar | bool
+      tags: [token]
+
+    - name: Recrear policy_mapper con la clave (misma forma que 42_servicios.yml)
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          set -a; . {{ env_archivo }}; set +a
+          export ONOS_HOST={{ ansible_host }}
+          docker compose -p controller -f {{ compose_r1 }} up -d --no-deps policy_mapper
+          docker update --restart unless-stopped policy_mapper
+        executable: /bin/bash
+        chdir: "{{ repo_dir }}/R1"
+      when: aplicar | bool
+      tags: [token]
+
+    - name: Esperar a que el Policy Mapper responda
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:5000/sessions"
+        status_code: 200
+      register: pm
+      until: pm.status == 200
+      retries: 15
+      delay: 3
+      when: aplicar | bool
+      tags: [token]
+
+    - name: Comprobar que la carga la clave
+      ansible.builtin.shell:
+        cmd: |
+          n=$(docker exec policy_mapper printenv AGENTE_TOKEN 2>/dev/null | tr -d '\n' | wc -c)
+          echo "policy_mapper: AGENTE_TOKEN de $n caracteres"
+          [ "$n" -gt 0 ]
+      register: ok
+      changed_when: false
+      when: aplicar | bool
+      tags: [token]
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ ok.stdout_lines }}"
+      when: aplicar | bool
+      tags: [token]
