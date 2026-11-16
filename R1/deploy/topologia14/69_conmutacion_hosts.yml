@@ -36,7 +36,7 @@
 
     - name: Para quitar la IP vieja la capa 3 debe estar montada (3 flujos de entrega o mas)
       ansible.builtin.assert:
-        that: (cuentas.stdout_lines | select('search', 'total_entrega160=') | first | regex_replace('.*=', '') | int) >= 3
+        that: (cuentas.stdout | regex_findall('total_entrega160=([0-9]+)') | first | int) >= 3
         fail_msg: "La capa 3 no esta en la tabla 60 (paso 2). No se quita la IP vieja: los hosts quedarian sin red. {{ cuentas.stdout_lines }}"
         quiet: true
       when: accion == 'quitar_ip_vieja'
