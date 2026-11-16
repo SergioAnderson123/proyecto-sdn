@@ -77,6 +77,10 @@ echo "[*] Instalando SADIS y AAA..."
 # En el clúster de la topología de 14 VM ONOS corre en la red del host: ya no resuelve los nombres del compose, y se pasan las IP
 # (SADIS_URL=http://192.168.201.1:5000/sadis/%s, RADIUS_IP=192.168.201.1). Sin variables, los nombres de siempre.
 SADIS_URL="${SADIS_URL:-http://policy_mapper:5000/sadis/%s}"; RADIUS_IP="${RADIUS_IP:-radius}"
+# `radiusServerUdpPort` parece ser el puerto UDP LOCAL que ONOS abre para hablar con RADIUS (el del servidor es radiusServerPort). Observado el 16-nov en node-ctrl-1: ONOS usa la
+# red del host, el contenedor de RADIUS publica el 1812/udp con docker-proxy y el AAA de ese nodo falla al enlazar ("SocketException: Socket closed" en bind); los de node-ctrl-2/3, no.
+# Por eso en topologia14 se usa otro puerto local (RADIUS_UDP_PORT=18120); sin variable, el 1812 de siempre.
+RADIUS_UDP_PORT="${RADIUS_UDP_PORT:-1812}"
 echo "[*] Configurando SADIS dinamico hacia $SADIS_URL..."
 curl -s -u "$AUTH" -X POST -H "Content-Type: application/json" "$ONOS_URL/network/configuration" -d '{
   "apps": {"org.opencord.sadis": {"sadis": {"integration": {
@@ -88,7 +92,7 @@ curl -s -u "$AUTH" -X POST -H "Content-Type: application/json" "$ONOS_URL/networ
   "apps": {"org.opencord.aaa": {"AAA": {
     "radiusIp": "'"$RADIUS_IP"'",
     "radiusServerPort": "1812",
-    "radiusServerUdpPort": "1812",
+    "radiusServerUdpPort": "'"$RADIUS_UDP_PORT"'",
     "radiusSecret": "testing123",
     "radiusConnectionType": "socket",
     "radiusMac": "00:00:00:00:00:01",
