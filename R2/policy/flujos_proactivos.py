@@ -71,10 +71,14 @@ def puertos_del_arbol(grafo: caminos.Grafo, raiz: str, preferidos: Iterable[str]
     return puertos
 
 
-def flujos_difusion(grafo: caminos.Grafo, raiz: str, puertos_acceso: Dict[str, Iterable[int]], preferidos: Iterable[str] = ()) -> List[dict]:
+def flujos_difusion(grafo: caminos.Grafo, raiz: str, puertos_acceso: Dict[str, Iterable[int]], preferidos: Iterable[str] = (),
+                    copiar_arp: bool = False) -> List[dict]:
     """ARP en broadcast SIN inundar: por cada switch y puerto de entrada válido (del árbol o de acceso), un flujo explícito que lo saca por
     el resto de puertos del árbol y de acceso, nunca por donde entró. Un broadcast que entre por un puerto troncal fuera del árbol no
-    coincide con ningún flujo y se descarta (el descarte de la tabla)."""
+    coincide con ningún flujo y se descarta (el descarte de la tabla).
+
+    `copiar_arp`: además, el ARP que entra por un puerto de ACCESO se copia al controlador (para que ONOS aprenda hosts con IP estática que no
+    usan DHCP ni 802.1X). Solo en la entrada por acceso: así cada ARP sube UNA vez (en su primer switch), no una por cada switch que cruza."""
     arbol = puertos_del_arbol(grafo, raiz, preferidos)
     flujos: List[dict] = []
     for d in sorted(arbol):
@@ -83,6 +87,8 @@ def flujos_difusion(grafo: caminos.Grafo, raiz: str, puertos_acceso: Dict[str, I
         todos = set(arbol[d]) | acceso
         for entrada in sorted(todos):
             salidas = [{"type": "OUTPUT", "port": str(p)} for p in sorted(todos - {entrada})]
+            if copiar_arp and entrada in acceso:
+                salidas.append({"type": "OUTPUT", "port": "CONTROLLER"})
             flujos.append(_base(d, TABLA_REENVIO, PRIO_DIFUSION,
                                 [{"type": "IN_PORT", "port": entrada}, {"type": "ETH_TYPE", "ethType": "0x0806"},
                                  {"type": "ETH_DST", "mac": MAC_BROADCAST}], salidas))

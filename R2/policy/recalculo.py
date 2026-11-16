@@ -45,14 +45,14 @@ def esta_conexa(grafo: c.Grafo, raiz: Optional[str]) -> bool:
 
 
 def flujos_deseados(grafo: c.Grafo, hosts: Iterable[dict], acceso: Dict[str, Iterable[int]], preferidos: Iterable[str],
-                    raiz: Optional[str] = None) -> List[dict]:
+                    raiz: Optional[str] = None, copiar_arp: bool = False) -> List[dict]:
     """Todos los flujos de la tabla 60 que debería haber ahora (unicast por host, difusión por árbol y descarte), en todos los switches vivos."""
     preferidos = list(preferidos)
     raiz = raiz or raiz_viva(grafo, preferidos)
     troncales = {(d, p) for d, v in grafo.items() for _, p in v}
     validos = [h for h in hosts if h["device"] in grafo and (h["device"], h["port"]) not in troncales]
     return (fp.flujos_unicast(validos, grafo, grafo.keys(), preferidos) + fp.flujos_descarte(grafo.keys())
-            + fp.flujos_difusion(grafo, raiz, acceso, preferidos))
+            + fp.flujos_difusion(grafo, raiz, acceso, preferidos, copiar_arp))
 
 
 # ---- comparar lo deseado con lo instalado ----
@@ -87,6 +87,25 @@ def diferencia(deseados: Iterable[dict], instalados: Iterable[dict]) -> Dict[str
     kd = {clave(f) for f in deseados}
     ki = {clave(f) for f in instalados}
     return {"borrar": [f for f in instalados if clave(f) not in kd], "agregar": [f for f in deseados if clave(f) not in ki]}
+
+
+def altas_puras(dif: Dict[str, List[dict]], instalados: Iterable[dict]) -> bool:
+    """¿El cambio son SOLO flujos unicast de MAC nuevas (ninguna regla instalada para esa MAC y nada que borrar)?
+
+    Si es así se puede aplicar de inmediato: mientras una MAC no tiene reglas, su tráfico cae en el descarte, así que cualquier estado a
+    medias solo descarta y no puede formar un lazo; y como ninguna regla existente cambia, no se mezclan árboles viejos y nuevos."""
+    if dif["borrar"] or not dif["agregar"]:
+        return False
+
+    def mac_unicast(f):
+        crit = f["selector"]["criteria"]
+        if int(f["tableId"]) != fp.TABLA_REENVIO or int(f["priority"]) != fp.PRIO_UNICAST or len(crit) != 1 or crit[0]["type"] != "ETH_DST":
+            return None
+        return crit[0]["mac"].upper()
+
+    conocidas = {m for m in (mac_unicast(f) for f in instalados) if m}
+    nuevas = [mac_unicast(f) for f in dif["agregar"]]
+    return all(m is not None and m not in conocidas for m in nuevas)
 
 
 def resumen(dif: Dict[str, List[dict]], nombre=lambda d: d) -> str:

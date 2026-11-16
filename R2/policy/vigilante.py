@@ -29,6 +29,7 @@ import urllib.request
 
 import caminos
 import flujos_proactivos as fp
+import hosts_fijos
 import recalculo as rc
 from instalar_proactivo import MONITOREO, puertos_acceso_rest, sin_monitoreo
 from onos_multi import OnosCluster, ONOSNoDisponible
@@ -75,12 +76,13 @@ def consultar_salud(url, timeout=3, max_edad_s=30):
 
 class Vigilante:
     def __init__(self, onos, preferidos, acceso, aplicar=False, estable_s=15, min_intervalo_s=60, max_cambios=200,
-                 interruptor=None, log=print, nombre=_nombre, reloj=time.monotonic, monitoreo=None, salud_principal=None, muerto_s=45):
+                 interruptor=None, log=print, nombre=_nombre, reloj=time.monotonic, monitoreo=None, salud_principal=None, muerto_s=45, hosts_fijos=(), copiar_arp=False):
         self.onos, self.preferidos, self.aplicar = onos, list(preferidos), aplicar
         self.estable_s, self.min_intervalo_s, self.max_cambios = estable_s, min_intervalo_s, max_cambios
         self.interruptor, self.log, self.nombre, self.reloj = interruptor, log, nombre, reloj
         self.acceso_fijo = sin_monitoreo(acceso, monitoreo)
         self.troncales = set()                 # (switch, puerto) que alguna vez salió en un enlace
+        self.hosts_fijos, self.copiar_arp = list(hosts_fijos), copiar_arp     # hosts que ONOS no aprende solos; copia del ARP de acceso al controlador
         self.hosts = {}                        # MAC -> host; un host que ONOS deja de listar no se olvida
         self._huella = self._desde = self._ultimo_cambio = None
         self._avisos = set()
@@ -150,6 +152,8 @@ class Vigilante:
             self.troncales.add((e["dst"]["device"], int(e["dst"]["port"])))
         for h in hosts:
             self.hosts[h["mac"].upper()] = h
+        for h in self.hosts_fijos:                                # los fijos mandan sobre lo que diga ONOS
+            self.hosts[h["mac"].upper()] = h
 
         if dispositivos and not links:
             self._aviso("sin-enlaces", "AVISO: ONOS lista switches pero ningún enlace (¿reiniciando?). No se toca nada.")
@@ -166,7 +170,7 @@ class Vigilante:
         self._olvidar_avisos("partida")
 
         acceso = {d: [p for p in ps if (d, p) not in self.troncales] for d, ps in self.acceso_fijo.items() if d in grafo}
-        deseados = rc.flujos_deseados(grafo, list(self.hosts.values()), acceso, self.preferidos, raiz)
+        deseados = rc.flujos_deseados(grafo, list(self.hosts.values()), acceso, self.preferidos, raiz, self.copiar_arp)
         try:
             instalados = [f for d in grafo for f in self.onos.flujos_de_app(d, fp.TABLA_REENVIO)]
         except ONOSNoDisponible as e:
@@ -184,6 +188,12 @@ class Vigilante:
         if total > self.max_cambios:
             self._aviso("demasiados", f"AVISO: el cambio es de {total} flujos (límite {self.max_cambios}): parece un dato incompleto. No se aplica.")
             return "demasiados cambios"
+
+        if self.aplicar and rc.altas_puras(dif, instalados):         # host nuevo: solo se añaden reglas unicast; sin esperar ni respetar el intervalo
+            self._aplicar(dif)
+            self._reiniciar_espera()
+            self.log(f"ALTA RÁPIDA: {rc.resumen(dif, self.nombre)} (host nuevo; no cambia ninguna regla existente).")
+            return "alta rápida"
 
         huella = hash(frozenset(rc.clave(f) for f in dif["borrar"]) | frozenset(("+",) + rc.clave(f) for f in dif["agregar"]))
         ahora = self.reloj()
@@ -249,6 +259,8 @@ def main(argv=None):
     a.add_argument("--estable", type=float, default=15, help="segundos que debe durar una diferencia antes de actuar")
     a.add_argument("--min-intervalo", type=float, default=60, help="segundos mínimos entre dos cambios")
     a.add_argument("--max-cambios", type=int, default=200)
+    a.add_argument("--hosts-fijos", metavar="ARCHIVO", help="JSON con hosts que ONOS no aprende (server, portal); se suman a los de ONOS")
+    a.add_argument("--copiar-arp", action="store_true", help="copia al controlador el ARP que entra por puertos de acceso (apagado por defecto)")
     a.add_argument("--interruptor", default="/etc/vigilante/desactivar")
     a.add_argument("--aplicar", action="store_true", help="sin esta bandera solo avisa")
     a.add_argument("--una-vez", action="store_true", help="hace un solo ciclo y termina (para pruebas)")
@@ -278,9 +290,18 @@ def main(argv=None):
             return 2
         log(f"AVISO: no hay {arg.acceso}; sin él no se pueden calcular los flujos de difusión. Solo se vigila la conexión.")
         acceso = {}
+    fijos = []
+    if arg.hosts_fijos:
+        try:
+            fijos = hosts_fijos.cargar(arg.hosts_fijos)
+        except (OSError, ValueError) as e:
+            log(f"NO ARRANCO: {e}")
+            return 2
+        log(f"Hosts fijos: {len(fijos)} ({', '.join(h['nombre'] for h in fijos)}).")
     salud = (lambda: consultar_salud(arg.respaldo_de)) if arg.respaldo_de else None
     v = Vigilante(onos, PREFERIDOS, acceso, aplicar=arg.aplicar, estable_s=arg.estable, min_intervalo_s=arg.min_intervalo,
-                  max_cambios=arg.max_cambios, interruptor=arg.interruptor, log=log, salud_principal=salud, muerto_s=arg.muerto)
+                  max_cambios=arg.max_cambios, interruptor=arg.interruptor, log=log, salud_principal=salud, muerto_s=arg.muerto,
+                  hosts_fijos=fijos, copiar_arp=arg.copiar_arp)
     rol = f"RESPALDO de {arg.respaldo_de} (asume el mando tras {arg.muerto:g}s sin respuesta)" if arg.respaldo_de else "PRINCIPAL"
     if arg.salud_puerto:
         servir_salud(arg.salud_puerto, lambda: {"rol": "respaldo" if arg.respaldo_de else "principal", "ultimo_ciclo": v.ultimo_ciclo,
