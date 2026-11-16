@@ -89,7 +89,22 @@ el ARP cuya IP objetivo es un gateway de prueba (`10.99.x.254`) y el IPv4 cuya M
 (`del-flows cookie=0x99c3000000000000/0xffff000000000000`); los de producción no la llevan. Los hosts reciben una **IP secundaria** de prueba (10.99.x.y) y una ruta `10.99.0.0/16` por su gateway virtual; la IP de producción no se toca.
 **Subredes de prueba:** `10.99.0.0/24` (core-1, puerto 5: server `10.99.0.10`), `10.99.1.0/24` (acc-1, puerto 1: h1 `10.99.1.101`) y `10.99.2.0/24` (acc-2, puerto 1: h2 `10.99.2.102`); gateway `.254`.
 **TTL esperado:** h1↔h2 llega con TTL 61 (tres saltos de enrutamiento: ruta en acc-1, ruta en core-1, entrega en acc-2) y h1→server con 62.
-**Decisión según el resultado:** si V1 acepta todo → instalar por REST (sin cambios en ONOS). Si V1 rechaza y V2/V4 funcionan → flujos de ARP estáticos con `ovs-ofctl` (más `allowExtraneousRules=true` si ONOS los borra: `-e permitir_extranos=true`). Si V2 falla → app de ONOS en Java.
+**Resultado de V1 (16-nov, en vivo, `sw-acc-1`): el REST de ONOS 2.7 solo acepta 2 de los 9 elementos.**
+| Elemento | Resultado | Mensaje de ONOS |
+|---|---|---|
+| Criterio `ARP_OP` | **rechaza** | `Type ARP_OP is unknown` |
+| Criterio `ARP_TPA` | **rechaza** | `Type ARP_TPA is unknown` |
+| Instrucción `DEC_TTL` | **acepta** | |
+| Instrucciones `ARP_OP`, `ARP_SHA`, `ARP_SPA` | **rechaza** | `L3 Instruction subtype ... is not supported` |
+| Salida por `IN_PORT` | **acepta** | |
+| Extensiones de Nicira (copia de campos) | **rechaza** | por nombre: HTTP 500; por objeto: `Empty device identifier` (el formato pide el `deviceId`; aun acertándolo, faltan los criterios y las instrucciones ARP de arriba) |
+
+**Consecuencia: el diseño se divide en dos.**
+- **Lo dinámico va por REST, como hoy** (el vigilante): las rutas por prefijo, la entrega /32 con reescritura de MAC, la reescritura de TTL (`DEC_TTL` sí entra) y el reenvío por MAC solo usan criterios e instrucciones que ONOS acepta.
+- **El ARP del gateway virtual NO se puede instalar por REST** (necesita `ARP_TPA`, `ARP_OP` y las instrucciones ARP). Es **estático** (una regla por puerto de acceso, no cambia con los hosts): se instala con `ovs-ofctl` desde Ansible en cada switch de acceso
+  (y se reinstala si OVS se reinicia), con `allowExtraneousRules=true` en ONOS si este los borrara. Esa es la hipótesis de V2. La alternativa es una app de ONOS en Java.
+
+**Decisión (tras V1):** V1 rechazó el ARP, así que queda el camino de los flujos de ARP estáticos con `ovs-ofctl` (más `allowExtraneousRules=true` si ONOS los borra: `-e permitir_extranos=true`), **si V2 y V4 funcionan**. Si V2 falla (Open vSwitch no acepta algo o ONOS no tolera los flujos) → app de ONOS en Java.
 
 ## 7. Estado, pruebas y siguiente
 **Hecho (sin red):** plan y validación de subredes (`Plan`, `cargar_plan`, 8 casos de plan inválido); `flujos_capa3` con rutas completas y ruta por defecto; entrega de punta a punta con MAC y TTL (12 parejas); tráfico dentro de la subred; ARP del gateway y ARP local; IP desconocida
