@@ -18,7 +18,7 @@ docker run --rm -v "$(pwd):/app" -v onos-m2:/root/.m2 -w /app maven:3.8.6-eclips
 
 ## Instalar y probar en la slice
 `PLAYBOOK=82_dhcp_app.yml ./lanzar.sh -e confirmar=true` (instala, desactiva el DHCP estándar, publica la configuración que genera `R2/policy/generar_config_dhcp.py` y las entradas ARP del servidor DHCP de cada subred; retroceso con `-e accion=quitar`).
-Prueba con interfaces macvlan en h1, sin tocar su IP real: `PLAYBOOK=83_prueba_dhcp.yml ./lanzar.sh` y `-e prueba=agotamiento`.
+Prueba con interfaces macvlan en h1, sin tocar su IP real (cliente propio `files/cliente_dhcp_prueba.py`, comprobado contra el servidor Java en `ClientePruebaTest`): `PLAYBOOK=83_prueba_dhcp.yml ./lanzar.sh` y `-e prueba=agotamiento`.
 
 ## Límites de esta versión
 Las concesiones viven en la memoria del nodo de ONOS que atiende el switch (un cambio de nodo maestro las pierde hasta que los clientes renueven). Sin reservas por MAC.
