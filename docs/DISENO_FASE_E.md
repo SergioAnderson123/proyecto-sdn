@@ -101,9 +101,10 @@ host-jhon cuelga del borde: se trata como **un usuario más** (tablas de rol y c
    las aplica de inmediato, sin esperar los 15 s: no pueden formar lazos. Un host nuevo recibe su tráfico en ≤5 s.
 4. **Server con dos tarjetas** (una por core), en la misma subred. El host se queda con la MAC de la tarjeta que le conteste, y hacen falta flujos hacia
    las dos. Además, Linux puede descartar paquetes que llegan por la segunda tarjeta si `rp_filter` es estricto (ver 6).
-5. **Los servicios en una sola VM.** La política ya distingue los servicios por **IP y puerto TCP** (todos los puertos son únicos: 8001-8003, 8101-8105,
-   portal 8443); la tabla 60 solo mira la **MAC** de destino. Con todo en el `server`, se mantienen las tres IP (10.0.0.40, .50, .60) como alias del server y
-   **`policy.yaml` no cambia**; las tres resuelven por ARP a las MAC del server.
+5. **Los servicios en una sola VM, con UNA sola IP (decidido).** La política ya distingue los servicios por **IP y puerto TCP** (todos los puertos son únicos:
+   8001-8003, 8101-8105, portal 8443); la tabla 60 solo mira la **MAC** de destino. El server tendrá **una única IP de servicios**: se propone **10.0.0.10**
+   (fuera del rango DHCP 100-199 y distinta del servidor DHCP .250; falta comprobar que está libre). Todos los servicios y el portal pasan a esa IP, cada
+   uno con su puerto. El cambio va en el `policy.local.yaml` de este slice (que ya mezcla sobre `policy.yaml`): el laboratorio de Mininet conserva sus .40/.50/.60.
 
 ### 3.5 R5
 La regla de espejo (41000) pasa de `NORMAL + sensores` a `goto_table:60 + sensores` (la copia a los sensores es una acción inmediata y no cambia).
@@ -128,9 +129,9 @@ La regla de espejo (41000) pasa de `NORMAL + sensores` a `goto_table:60 + sensor
 Razón del orden: cuando un acceso empiece a entregar a la tabla 60, el núcleo ya debe saber reenviar; si fuera al revés, el tráfico se descartaría.
 
 ## 6. Decisiones
-**Tomadas (16-nov-2026):** orden de despliegue recomendado (arriba); camino rápido para altas unicast aceptado; los servicios viven todos en el `server`.
-**Pendientes de confirmar:** (a) mantener las tres IP como alias del server (recomendado) o pasar a una sola IP con puertos distintos; (b) cambiar `rp_filter`
-en el `server` (es un parámetro del kernel de esa VM, se aplica con Ansible); (c) las dos capas de 3.3.
+**Tomadas (16-nov-2026):** orden de despliegue recomendado (arriba); camino rápido para altas unicast aceptado; los servicios viven todos en el `server` con
+**una sola IP**; `rp_filter` **ya vale 2** en `all`, `ens4` y `ens5` del server (comprobado): no se cambia nada.
+**Pendiente:** confirmar que 10.0.0.10 está libre (`ip -br addr` en el server) y las dos capas de 3.3 (se asumen aceptadas si no hay objeción).
 
 **`rp_filter`, en corto.** Es una protección de Linux: al llegar un paquete por una interfaz con origen S, el kernel comprueba si respondería a S por esa misma
 interfaz; en modo estricto (1), si no, lo descarta en silencio. El server tiene dos tarjetas en la misma subred y **una sola ruta** hacia ella: lo que llega por
@@ -155,3 +156,21 @@ una MAC concreta; la regla de EAPOL casa el puerto entero y **no se borra nunca*
 puede seguir enviando EAPOL durante el bloqueo, volver a autenticarse y dejar una sesión que se activa sola al expirar el bloqueo. Poner la lista negra por
 encima del EAPOL (por ejemplo 50500) evita que una MAC bloqueada intente siquiera autenticar. Toca R1 y R5 (la constante, `prioridades.yaml`, el panel y la
 prueba de orden), por eso se hace como un cambio aparte, después de la fase E.
+
+## 10. Servicios más ricos sin perder el "denegar por defecto"
+Una red real tiene SSH, SMTP, FTP, Telnet, etc. La solución no es dejar pasar todo, sino que **`services` admita más que un puerto TCP**: `proto`
+(`tcp`, `udp`, `icmp` o `any`) y `puertos` (lista o rangos). Cada entrada genera sus reglas (`ip_proto` + `tcp_dst`/`udp_dst`, o solo `ip_dst` para `any`) y la
+matriz `rules` sigue diciendo **qué rol** puede usarlas. Ejemplo: `ssh: {ip: 10.0.0.10, proto: tcp, puertos: [22]}` permitido a `administrator`. Lo que no figura
+sigue descartado. Es un cambio pequeño en `flujos_tabla_rol` y se hace después de la fase E.
+
+## 11. Lo que llega de afuera (datos de esta topología)
+- **El borde** tiene `ens3` con la IP pública (10.20.11.14), `ens5` en la red de gestión (192.168.201.254) y `br0` (el plano de datos) **sin IP y en `DOWN`**
+  (comprobado). No hay ninguna ruta entre `br0` y la red pública.
+- **Entrada desde Internet:** solo el SSH a cada VM por `iptables DNAT`, que va a la **red de gestión** (192.168.201.0/24). **Nada entra al plano de datos**
+  (10.0.0.0/24).
+- **Salida de los usuarios a Internet:** las VM usan como ruta por defecto 192.168.201.254 (la gestión, con NAT del borde); la interfaz de datos no es la salida.
+  Es decir, el acceso a Internet **no pasa por R2**, y el servicio `internet` de `policy.yaml` no tiene host ni flujos. Es un artefacto de VNRT.
+- **host-jhon** (el atacante) cuelga del puerto 1 del borde y además tiene su propia IP pública por `ens3`. En el plano de datos se trata como **un usuario más**
+  (cuarentena o sesión).
+- Para meter Internet bajo la política de R2 haría falta un **gateway L3 en el borde** (puerto interno de `br0` con IP y NAT) y el `internet` como servicio.
+  Queda fuera de la fase E.
