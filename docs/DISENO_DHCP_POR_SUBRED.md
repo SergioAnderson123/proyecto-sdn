@@ -88,5 +88,15 @@ Límite conocido: la cuota por puerto asume pocos equipos por puerto (cable a un
 1. ~~Esqueleto de la app y la lógica del ámbito, con pruebas en Docker.~~ Hecho (20 pruebas).
 2. ~~Generador de configuración y su prueba.~~ Hecho (`generar_config_dhcp.py`, 5 pruebas; el ARP del servidor DHCP `.250` de cada subred se añade a la app Gateway ARP para que la renovación por unicast funcione).
 3. ~~Compilar el `.oar` y un playbook de instalación.~~ Hecho (`campus-dhcp-1.0.0.oar` compila; `82_dhcp_app.yml`, sin ejecutar).
-4. Prueba en vivo con interfaces macvlan en h1 (aislada, reversible): `83_prueba_dhcp.yml` (una; y `-e prueba=agotamiento` para ver la cuota por puerto en acción). **Pendiente de ejecutar.** Riesgo: si VNRT filtra por MAC de origen en el puerto de h1, las interfaces no reciben respuesta.
+4. Prueba en vivo con interfaces macvlan en h1 (aislada, reversible): `83_prueba_dhcp.yml`. **`una` ejecutada el 16-nov con éxito** (ver §9). Pendiente: `-e prueba=agotamiento` (la cuota por puerto en acción).
 5. Documentar y, solo entonces, decidir si h1 y h2 pasan a DHCP.
+
+## 9. Resultado en vivo (16-nov, `82_dhcp_app.yml` y `83_prueba_dhcp.yml`)
+
+Cliente de prueba propio en una macvlan de h1 (MAC 02:aa:bb:00:01:01, entra por acc-1/1), con la app DHCP estándar desactivada:
+- El cliente recibió ACK con `10.0.1.100`, router `10.0.1.254`, máscara `/24`, servidor `10.0.1.250` y **concesión de 900 s** (la que fija el bloque `dhcp` del plan de la slice).
+- ONOS (`/hosts`) listó el equipo con `ips=['10.0.1.100']` ubicado en acc-1/1 y el vigilante montó su regla de entrega /32 (alta rápida).
+- A los 15 s el cliente envió su RELEASE: ONOS retiró la IP (`ips=[]`) y **la regla /32 desapareció**. h1 conservó su IP real y su sesión; no quedó ninguna interfaz de prueba.
+- Camino hasta aquí: dhclient no sirvió (AppArmor impedía su guion y no liberaba), y el cliente lanzado con `nohup` moría al cerrarse la tarea de Ansible; con `async` de Ansible llega a liberar.
+
+**Ideas diferidas por decisión del equipo (no se hacen ahora):** (1) usar las señales de R1 (logoff y link-down que ya quitan la sesión de un equipo autenticado) para liberar también su concesión DHCP; (2) acortar la concesión (p. ej. 300 s) para acotar las IP de equipos que desaparecen sin avisar, a cambio de más renovaciones.
