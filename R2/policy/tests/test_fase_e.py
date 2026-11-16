@@ -103,8 +103,8 @@ def test_la_politica_no_cambia_solo_la_entrega(pol):
     """Mismas tablas de rol y cuarentena, mismas coincidencias y prioridades: solo cambia la última acción (NORMAL -> tabla 60)."""
     normal = politica("normal")
     for d in (A1, B):
-        a = [f for f in pt.flujos_dispositivo(normal, d) if f["tableId"] != 0]
-        b = [f for f in pt.flujos_dispositivo(pol, d) if f["tableId"] != 0]
+        a = [f for f in pt.flujos_dispositivo(normal, d) if f["tableId"] not in (0, 99)]       # la tabla 99 (cuarentena) se prueba aparte: ver abajo
+        b = [f for f in pt.flujos_dispositivo(pol, d) if f["tableId"] not in (0, 99)]
         clave = lambda f: (f["tableId"], f["priority"], json.dumps(f["selector"], sort_keys=True))  # noqa: E731
         assert sorted(map(clave, a)) == sorted(map(clave, b)) and a
         asignadas = [f for f in a if f["treatment"]["instructions"]]
@@ -264,3 +264,33 @@ def test_el_arp_en_difusion_llega_una_vez_a_cada_host_y_nunca_se_duplica(pol, or
     esperado = {n: 1 for n in UBICACION if n != origen}
     assert res["entregado"] == esperado and not res["cortado"] and not res["inunda"]
     assert all(v == 1 for v in res["llegadas"].values())
+
+
+# ---------- reglas de OpenFlow que el simulador no cubre solo ----------
+def test_ningun_flujo_hace_goto_hacia_atras_en_ningun_switch():
+    """`goto_table` solo puede ir a una tabla de MAYOR número que la del flujo; si no, OVS lo rechaza y ONOS lo deja en PENDING_ADD para siempre
+    (medido en vivo: la cuarentena en la tabla 99 saltaba a la 60 y el Policy Mapper reenviaba esos flujos cada 15 s)."""
+    for d in TODOS:
+        for f in pt.flujos_dispositivo(pol_global(), d):
+            for i in f["treatment"]["instructions"]:
+                if i["type"] == "TABLE":
+                    assert int(i["tableId"]) > int(f["tableId"]), (d, f["tableId"], f["priority"], i)
+
+
+def test_en_proactivo_la_tabla_de_cuarentena_solo_descarta_y_el_arp_y_el_portal_se_resuelven_en_la_tabla_0():
+    p = pol_global()
+    for d in (A1, A2, B):
+        q = [f for f in pt.flujos_dispositivo(p, d) if f["tableId"] == 99]
+        assert len(q) == 1 and q[0]["priority"] == 0 and q[0]["treatment"]["instructions"] == []
+        arriba = [f for f in pt.flujos_dispositivo(p, d) if f["tableId"] == 0]
+        assert any(f["priority"] == 40002 for f in arriba)                              # ARP de quien no tiene sesión
+        assert any(f["priority"] == 35000 for f in arriba)                              # TCP al portal
+
+
+def test_en_modo_normal_la_cuarentena_sigue_igual():
+    q = [f for f in pt.flujos_dispositivo(politica("normal"), A1) if f["tableId"] == 99]
+    assert len(q) == 3                                                                  # ARP, TCP al portal y descarte, como siempre
+
+
+def pol_global():
+    return politica()

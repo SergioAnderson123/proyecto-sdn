@@ -237,11 +237,16 @@ def flujos_cuarentena(politica: dict, dpid: str) -> List[dict]:
         return []
     vlan = {"type": "VLAN_VID", "vlanId": tabla}
     salida = _salida(politica)
-    flujos = [_base(dpid, 0, PRIO_CUARENTENA, [], [
+    entrada = _base(dpid, 0, PRIO_CUARENTENA, [], [
         {"type": "L2MODIFICATION", "subtype": "VLAN_PUSH", "ethernetType": "0x8100"},
         {"type": "L2MODIFICATION", "subtype": "VLAN_ID", "vlanId": tabla},
-        {"type": "TABLE", "tableId": tabla}]),
-        _base(dpid, tabla, PRIO_ROL, [vlan, {"type": "ETH_TYPE", "ethType": "0x0806"}], salida)]
+        {"type": "TABLE", "tableId": tabla}])
+    if reenvio_proactivo(politica) and tabla >= TABLA_REENVIO:
+        # En OpenFlow `goto_table` solo va hacia una tabla de MAYOR número: desde la 99 un `TABLE 60` lo rechaza OVS (el flujo queda en PENDING_ADD y el Policy Mapper
+        # lo reenvía cada 15 s). El ARP y el TCP al portal de un host sin sesión ya se resuelven en la tabla 0 (flujos_portal: 40002 y 35000, que van a la tabla 60),
+        # así que aquí solo queda el descarte de todo lo demás.
+        return [entrada, _base(dpid, tabla, 0, [], [])]
+    flujos = [entrada, _base(dpid, tabla, PRIO_ROL, [vlan, {"type": "ETH_TYPE", "ethType": "0x0806"}], salida)]
     portal = politica.get("portal")
     if portal:
         flujos.append(_base(dpid, tabla, PRIO_ROL, [
