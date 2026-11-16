@@ -2,7 +2,6 @@ package org.campus.gatewayarp;
 
 import org.onlab.packet.ARP;
 import org.onlab.packet.Ethernet;
-import org.onlab.packet.MacAddress;
 import org.onosproject.core.ApplicationId;
 import org.onosproject.core.CoreService;
 import org.onosproject.net.Device;
@@ -135,7 +134,6 @@ public class GatewayArpApp {
             log.warn("Gateway ARP: sin configuración válida (clave '{}' en apps/{}); no se instala nada", CLAVE_CONFIG, APP);
             return;
         }
-        MacAddress gwMac = cfg.gwMac();
         int instalados = 0;
         for (GatewayConfig.Gateway g : cfg.gateways()) {
             Device dispositivo = deviceService.getDevice(g.device);
@@ -174,11 +172,11 @@ public class GatewayArpApp {
                     tratamiento.setOutput(PortNumber.CONTROLLER);          // antes de modificar: ONOS recibe la petición original
                 }
                 tratamiento.extension(ethSrcADst, g.device)
-                        .setEthSrc(gwMac)
+                        .setEthSrc(g.mac)
                         .setArpOp(ARP.OP_REPLY)
                         .extension(shaATha, g.device)
                         .extension(spaATpa, g.device)
-                        .setArpSha(gwMac)
+                        .setArpSha(g.mac)
                         .setArpSpa(g.ip)
                         .setOutput(PortNumber.IN_PORT);
                 FlowRule regla = DefaultFlowRule.builder()

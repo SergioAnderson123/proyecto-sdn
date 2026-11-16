@@ -100,21 +100,44 @@ def plan_vivo(plan, grafo: c.Grafo):
     return l3.Plan(plan.gw_mac, vivas) if vivas else None
 
 
-def flujos_deseados_capa3(grafo: c.Grafo, hosts: Iterable[dict], plan, preferidos: Iterable[str], nucleo: Optional[Iterable[str]] = None) -> List[dict]:
-    """Los flujos que el vigilante debe mantener en capa 3: rutas por prefijo, entrega por host, reenvío local por MAC, ARP local y descarte. SIN el ARP del gateway (estático: lo instala otro mecanismo)."""
+PRIO_ENTRADA = 40060        # sobre la sesión (40001), el portal (40002) y el ARP proactivo (40003); bajo la lista negra (45000)
+
+
+def reglas_entrada(plan, grafo: c.Grafo, tabla: int) -> List[dict]:
+    """MODO AISLADO (tabla distinta de la 60): la única puerta de entrada a esa tabla, una regla en la tabla 0 de cada switch: el IPv4 cuya MAC destino es la MAC del gateway del plan.
+    Nadie más usa esa MAC, así que el resto del tráfico sigue exactamente su camino de siempre."""
+    return [{"priority": PRIO_ENTRADA, "timeout": 0, "isPermanent": True, "deviceId": d, "tableId": 0,
+             "selector": {"criteria": [{"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "ETH_DST", "mac": plan.gw_mac}]},
+             "treatment": {"instructions": [{"type": "TABLE", "tableId": tabla}]}} for d in sorted(grafo)]
+
+
+def es_entrada(f: dict, plan) -> bool:
+    """¿Es una regla de entrada del modo aislado (tabla 0, prioridad de entrada, IPv4 con la MAC del gateway del plan)? Así el vigilante solo reconoce como suyas esas de la tabla 0."""
+    if int(f["tableId"]) != 0 or int(f["priority"]) != PRIO_ENTRADA:
+        return False
+    crit = {cr["type"]: cr for cr in f["selector"]["criteria"]}
+    return set(crit) == {"ETH_TYPE", "ETH_DST"} and str(crit["ETH_DST"]["mac"]).upper() == plan.gw_mac.upper()
+
+
+def flujos_deseados_capa3(grafo: c.Grafo, hosts: Iterable[dict], plan, preferidos: Iterable[str], nucleo: Optional[Iterable[str]] = None, tabla: int = fp.TABLA_REENVIO) -> List[dict]:
+    """Los flujos que el vigilante debe mantener en capa 3: rutas por prefijo, entrega por host, reenvío local por MAC, ARP local y descarte. SIN el ARP del gateway (estático: lo instala otro mecanismo).
+
+    Con `tabla` distinta de la 60 (modo aislado, para probar con subredes de prueba) todo va a esa tabla y se añaden las reglas de entrada de la tabla 0; la tabla 60 no se toca."""
+    aislado = tabla != fp.TABLA_REENVIO
     vivo = plan_vivo(plan, grafo)
     if vivo is None:
-        return fp.flujos_descarte(grafo.keys())
-    return l3.flujos_capa3(vivo, grafo, hosts_con_ip(vivo, hosts), list(preferidos), nucleo=nucleo, arp_gateway=False)
+        return [] if aislado else fp.flujos_descarte(grafo.keys())
+    flujos = l3.flujos_capa3(vivo, grafo, hosts_con_ip(vivo, hosts), list(preferidos), nucleo=nucleo, tabla=tabla, arp_gateway=False)
+    return (reglas_entrada(vivo, grafo, tabla) + flujos) if aislado else flujos
 
 
-def altas_puras_capa3(dif: Dict[str, List[dict]]) -> bool:
+def altas_puras_capa3(dif: Dict[str, List[dict]], tabla: int = fp.TABLA_REENVIO) -> bool:
     """¿El cambio son SOLO reglas de host (reenvío local por MAC, prioridad 100, o entrega por IP /32, prioridad 160) y no hay nada que borrar?
 
     Una regla de host termina en el puerto del host de ese mismo switch: no puede formar un lazo ni cambia ninguna ruta existente, así que se aplica de inmediato."""
     if dif["borrar"] or not dif["agregar"]:
         return False
-    return all(int(f["tableId"]) == fp.TABLA_REENVIO and int(f["priority"]) in (l3.PRIO_L2_LOCAL, l3.PRIO_ENTREGA) for f in dif["agregar"])
+    return all(int(f["tableId"]) == tabla and int(f["priority"]) in (l3.PRIO_L2_LOCAL, l3.PRIO_ENTREGA) for f in dif["agregar"])
 
 
 def diferencia(deseados: Iterable[dict], instalados: Iterable[dict]) -> Dict[str, List[dict]]:

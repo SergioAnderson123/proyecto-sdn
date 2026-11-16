@@ -1,0 +1,33 @@
+{
+ "_comentario": "Plan de la PRUEBA AISLADA de capa 3 (playbook 77): subredes 10.99.x con su propia MAC de gateway; el vigilante la aplica en la tabla 62, nunca en la 60. Ver docs/DISENO_CAPA3.md.",
+ "gw_mac": "02:00:5E:99:99:FE",
+ "subredes": [
+  {
+   "nombre": "servicios_p",
+   "dispositivo": "core-1",
+   "prefijo": "10.99.0.0/24",
+   "gateway": "10.99.0.254",
+   "puertos": [
+    5
+   ]
+  },
+  {
+   "nombre": "acc1_p",
+   "dispositivo": "acc-1",
+   "prefijo": "10.99.1.0/24",
+   "gateway": "10.99.1.254",
+   "puertos": [
+    1
+   ]
+  },
+  {
+   "nombre": "acc2_p",
+   "dispositivo": "acc-2",
+   "prefijo": "10.99.2.0/24",
+   "gateway": "10.99.2.254",
+   "puertos": [
+    1
+   ]
+  }
+ ]
+}

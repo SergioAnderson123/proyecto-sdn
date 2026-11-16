@@ -1,0 +1,232 @@
+# PRUEBA APLICADA del vigilante en modo capa 3, AISLADA de la produccion: el vigilante APLICA la capa 3 con subredes de prueba 10.99.x en la TABLA 62 (nunca en la 60) y se usa con trafico real entre h1, h2 y el server.
+#   PLAYBOOK=77_prueba_vigilante_aislado.yml ./lanzar.sh                  # hace todo y limpia al final
+#   PLAYBOOK=77_prueba_vigilante_aislado.yml ./lanzar.sh --tags limpiar   # SOLO limpia (si la prueba se interrumpio)
+# Requisito: la app Gateway ARP ya instalada (76_gateway_arp.yml). Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh. Freno: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true
+# Aislamiento (por que no puede afectar a produccion):
+#   - El vigilante en modo aislado (--tabla 62) solo lee y escribe la tabla 62 y UNA regla de entrada por switch en la tabla 0 (prioridad 40060: IPv4 cuya MAC destino es la MAC del gateway de prueba 02:00:5E:99:99:FE,
+#     que nadie usa). No toca la tabla 60 ni ninguna otra regla de la tabla 0 (lo prueba tests/test_vigilante_aislado.py).
+#   - El ARP del gateway de prueba lo contesta la app Gateway ARP con 3 flujos mas en la tabla 60 (prioridad 300) para las IP 10.99.x.254, que nadie usa; el playbook los quita al final (vuelve a publicar la configuracion de produccion).
+#   - Los hosts reciben una IP SECUNDARIA 10.99.x.y y una ruta 10.99.0.0/16 por el gateway de prueba; su IP y rutas de produccion no se tocan, y se quitan al final.
+# Que demuestra: el vigilante aplica en un ciclo (estable 0), un segundo ciclo no cambia nada, hay ping entre subredes por el gateway y la limpieza (--retirar) deja ONOS como estaba.
+- name: Prueba aislada, paso 1 - app con los gateways de prueba y vigilante aplicando en la tabla 62 (switch-borde)
+  hosts: borde
+  gather_facts: false
+  vars:
+    app: org.campus.gatewayarp
+    api: "http://{{ onos_ip }}:8181/onos/v1"
+    carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
+    contar: "python3 {{ playbook_dir }}/files/contar_flujos.py --onos http://{{ onos_ip }}:8181 --usuario {{ onos_user }}:{{ onos_pass }} --app {{ app }}"
+    config: /tmp/gateway_arp_config_prueba.json
+    vigilante: >-
+      python3 vigilante.py --onos http://{{ onos_ip }}:8181 --subredes planes/prueba_aislada_capa3.json --nucleo core-1,core-2,borde
+      --hosts-fijos planes/hosts_fijos_prueba_aislada.json --tabla 62 --una-vez --estable 0 --max-cambios 500
+  tasks:
+    - name: La app Gateway ARP debe estar activa
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: estado_app
+      failed_when: estado_app.json.state | default('') != 'ACTIVE'
+      tags: [probar]
+
+    - name: Cuentas ANTES de la prueba
+      ansible.builtin.command:
+        cmd: "{{ contar }}"
+      register: antes
+      changed_when: false
+      tags: [probar]
+
+    - name: Configuracion de la app con los gateways de produccion MAS los de prueba (cada uno con su MAC)
+      ansible.builtin.command:
+        cmd: "python3 generar_config_gateway_arp.py --plan planes/vnrt_topologia14.json --plan-prueba planes/prueba_aislada_capa3.json --salida {{ config }}"
+        chdir: "{{ carpeta_codigo }}"
+      changed_when: true
+      tags: [probar]
+
+    - name: Publicarla
+      ansible.builtin.command:
+        argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/json", --data-binary, "@{{ config }}", "{{ api }}/network/configuration/apps/{{ app }}"]
+      changed_when: true
+      tags: [probar]
+
+    - name: Esperar 6 s a que la app instale los flujos de los gateways
+      ansible.builtin.pause:
+        seconds: 6
+      tags: [probar]
+
+    - name: El vigilante aplica la capa 3 en la tabla 62 (primer ciclo)
+      ansible.builtin.command:
+        cmd: "{{ vigilante }} --aplicar"
+        chdir: "{{ carpeta_codigo }}"
+      register: ciclo1
+      changed_when: false
+      tags: [probar]
+
+    - name: Segundo ciclo (debe decir que ya coincide)
+      ansible.builtin.command:
+        cmd: "{{ vigilante }} --aplicar"
+        chdir: "{{ carpeta_codigo }}"
+      register: ciclo2
+      changed_when: false
+      tags: [probar]
+
+    - name: Cuentas DESPUES de aplicar
+      ansible.builtin.command:
+        cmd: "{{ contar }}"
+      register: despues
+      changed_when: false
+      tags: [probar]
+
+    - name: Resumen
+      ansible.builtin.debug:
+        msg:
+          - "ANTES: {{ antes.stdout_lines }}"
+          - "primer ciclo: {{ ciclo1.stdout_lines }}"
+          - "segundo ciclo: {{ ciclo2.stdout_lines }}"
+          - "DESPUES (esperado: app 7 ADDED; tabla62 y entrada40060 > 0; tabla60 igual que antes): {{ despues.stdout_lines }}"
+      tags: [probar]
+
+- name: Prueba aislada, paso 2 - los hosts usan las subredes de prueba
+  hosts: h1-profesor:h2-alumno:server
+  become: true
+  gather_facts: false
+  vars:
+    datos:
+      h1-profesor: {ip: "10.99.1.101", gw: "10.99.1.254", destinos: ["10.99.0.10", "10.99.2.102", "10.99.2.77"]}
+      h2-alumno: {ip: "10.99.2.102", gw: "10.99.2.254", destinos: ["10.99.1.101"]}
+      server: {ip: "10.99.0.10", gw: "10.99.0.254", destinos: ["10.99.1.101"]}
+    yo: "{{ datos[inventory_hostname] }}"
+  tasks:
+    - name: IP secundaria de prueba y ruta 10.99.0.0/16 por el gateway de prueba
+      ansible.builtin.shell:
+        cmd: |
+          ip addr show dev ens4 | grep -q "{{ yo.ip }}/" || ip addr add {{ yo.ip }}/24 dev ens4
+          ip route replace 10.99.0.0/16 via {{ yo.gw }} dev ens4
+      changed_when: true
+      tags: [probar]
+
+    - name: ARP del gateway de prueba y ping entre subredes (el 10.99.2.77 no existe, debe perderse el 100 por ciento)
+      ansible.builtin.shell:
+        cmd: |
+          ip neigh del {{ yo.gw }} dev ens4 2>/dev/null
+          ping -c 1 -W 1 -I {{ yo.ip }} {{ yo.gw }} >/dev/null 2>&1
+          echo "vecino del gateway: $(ip neigh show {{ yo.gw }} dev ens4 | awk '{print $3, $5}')"
+          for destino in {{ yo.destinos | join(' ') }}; do
+            salida=$(ping -c 3 -W 2 -I {{ yo.ip }} "$destino" 2>&1)
+            perdida=$(echo "$salida" | grep -o '[0-9]*% packet loss' | cut -d% -f1)
+            ttl=$(echo "$salida" | grep -o 'ttl=[0-9]*' | head -1)
+            echo "{{ yo.ip }} -> $destino perdida=${perdida:-?}% ${ttl:-sin-respuesta}"
+          done
+      register: pings
+      changed_when: false
+      ignore_errors: true
+      tags: [probar]
+
+    - name: Produccion intacta, ping al server de siempre (10.0.0.10)
+      ansible.builtin.shell:
+        cmd: "ping -c 2 -W 2 10.0.0.10 2>&1 | grep -o '[0-9]*% packet loss'"
+      register: produccion
+      changed_when: false
+      ignore_errors: true
+      when: inventory_hostname != 'server'
+      tags: [probar]
+
+    - name: Resultado de este host
+      ansible.builtin.debug:
+        msg:
+          - "{{ pings.stdout_lines | default([]) }}"
+          - "produccion a 10.0.0.10: {{ produccion.stdout | default('n/a') | trim }}"
+      tags: [probar]
+
+- name: Prueba aislada, paso 3 - limpiar los hosts (siempre)
+  hosts: h1-profesor:h2-alumno:server
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Quitar la ruta y la IP secundaria de prueba
+      ansible.builtin.shell:
+        cmd: |
+          ip route del 10.99.0.0/16 2>/dev/null || true
+          for ip in $(ip -4 -o addr show dev ens4 | awk '{print $4}' | grep '^10\.99\.'); do ip addr del "$ip" dev ens4; done
+          ip -4 -o addr show dev ens4 | awk '{print $4}' | tr '\n' ' '
+      register: limpio
+      changed_when: false
+      tags: [probar, limpiar]
+
+    - name: Direcciones de ens4 tras limpiar
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ limpio.stdout | trim }}"
+      tags: [probar, limpiar]
+
+- name: Prueba aislada, paso 4 - retirar lo del vigilante y los gateways de prueba (siempre)
+  hosts: borde
+  gather_facts: false
+  vars:
+    app: org.campus.gatewayarp
+    api: "http://{{ onos_ip }}:8181/onos/v1"
+    carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
+    contar: "python3 {{ playbook_dir }}/files/contar_flujos.py --onos http://{{ onos_ip }}:8181 --usuario {{ onos_user }}:{{ onos_pass }} --app {{ app }}"
+    config: /tmp/gateway_arp_config.json
+  tasks:
+    - name: El vigilante retira la tabla 62 y sus reglas de entrada (modo --retirar)
+      ansible.builtin.command:
+        cmd: >-
+          python3 vigilante.py --onos http://{{ onos_ip }}:8181 --subredes planes/prueba_aislada_capa3.json --nucleo core-1,core-2,borde
+          --hosts-fijos planes/hosts_fijos_prueba_aislada.json --tabla 62 --retirar --aplicar --una-vez --estable 0 --max-cambios 500
+        chdir: "{{ carpeta_codigo }}"
+      register: retiro
+      changed_when: false
+      ignore_errors: true
+      tags: [probar, limpiar]
+
+    - name: Volver a generar la configuracion de produccion (sin los gateways de prueba)
+      ansible.builtin.command:
+        cmd: "python3 generar_config_gateway_arp.py --plan planes/vnrt_topologia14.json --salida {{ config }}"
+        chdir: "{{ carpeta_codigo }}"
+      changed_when: true
+      tags: [probar, limpiar]
+
+    - name: Publicarla
+      ansible.builtin.command:
+        argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/json", --data-binary, "@{{ config }}", "{{ api }}/network/configuration/apps/{{ app }}"]
+      changed_when: true
+      tags: [probar, limpiar]
+
+    - name: Esperar 6 s
+      ansible.builtin.pause:
+        seconds: 6
+      tags: [probar, limpiar]
+
+    - name: Cuentas finales
+      ansible.builtin.command:
+        cmd: "{{ contar }}"
+      register: final
+      changed_when: false
+      tags: [probar, limpiar]
+
+    - name: Resultado de la limpieza (esperado, app 4 ADDED, tabla62 0 y entrada40060 0 en todos)
+      ansible.builtin.debug:
+        msg:
+          - "{{ retiro.stdout_lines | default([]) }}"
+          - "{{ final.stdout_lines }}"
+      tags: [probar, limpiar]
+
+- name: Prueba aislada, veredicto
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lineas: "{{ ['h1-profesor', 'h2-alumno', 'server'] | map('extract', hostvars) | map(attribute='pings') | map(attribute='stdout_lines') | flatten }}"
+  tasks:
+    - name: Los ping entre subredes de prueba llegaron (perdida 0 por ciento), salvo el destino que no existe
+      ansible.builtin.assert:
+        that:
+          - lineas | select('search', 'perdida=') | reject('search', '10.99.2.77') | list | length == 4
+          - lineas | select('search', 'perdida=') | reject('search', '10.99.2.77') | reject('search', 'perdida=0%') | list | length == 0
+          - lineas | select('search', '10.99.2.77') | select('search', 'perdida=100%') | list | length == 1
+        fail_msg: "Algun ping entre subredes de prueba fallo: ver el resultado de cada host (y revisar el 95)"
+        success_msg: "La capa 3 aplicada por el vigilante en la tabla 62 enruta entre las subredes de prueba y el destino inexistente se pierde"
+      tags: [probar]

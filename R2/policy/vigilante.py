@@ -77,12 +77,13 @@ def consultar_salud(url, timeout=3, max_edad_s=30):
 
 class Vigilante:
     def __init__(self, onos, preferidos, acceso, aplicar=False, estable_s=15, min_intervalo_s=60, max_cambios=200,
-                 interruptor=None, log=print, nombre=_nombre, reloj=time.monotonic, monitoreo=None, salud_principal=None, muerto_s=45, hosts_fijos=(), copiar_arp=False, plan=None, nucleo=None):
+                 interruptor=None, log=print, nombre=_nombre, reloj=time.monotonic, monitoreo=None, salud_principal=None, muerto_s=45, hosts_fijos=(), copiar_arp=False, plan=None, nucleo=None, tabla=fp.TABLA_REENVIO, retirar=False):
         self.onos, self.preferidos, self.aplicar = onos, list(preferidos), aplicar
         self.estable_s, self.min_intervalo_s, self.max_cambios = estable_s, min_intervalo_s, max_cambios
         self.interruptor, self.log, self.nombre, self.reloj = interruptor, log, nombre, reloj
         self.acceso_fijo = sin_monitoreo(acceso or {}, monitoreo)        # capa 3 no necesita los puertos de acceso (acceso.json); sin el archivo llega None
         self.troncales = set()                 # (switch, puerto) que alguna vez salió en un enlace
+        self.tabla, self.retirar = tabla, retirar         # tabla != 60: MODO AISLADO (solo con plan): trabaja en esa tabla y en sus reglas de entrada, nunca en la 60; retirar = dejar vacío lo que puso
         self.plan, self.nucleo = plan, (list(nucleo) if nucleo else None)     # capa 3: plan de subredes (capa3.Plan) y switches con rutas completas; sin plan, capa 2
         self.hosts_fijos, self.copiar_arp = list(hosts_fijos), copiar_arp     # hosts que ONOS no aprende solos; copia del ARP de acceso al controlador
         self.hosts = {}                        # MAC -> host; un host que ONOS deja de listar no se olvida
@@ -173,11 +174,13 @@ class Vigilante:
 
         acceso = {d: [p for p in ps if (d, p) not in self.troncales] for d, ps in self.acceso_fijo.items() if d in grafo}
         if self.plan:                                             # capa 3: rutas por prefijo, entrega por host y ARP local (el ARP del gateway es estático, no lo gestiona el vigilante)
-            deseados = rc.flujos_deseados_capa3(grafo, list(self.hosts.values()), self.plan, self.preferidos, self.nucleo)
+            deseados = [] if self.retirar else rc.flujos_deseados_capa3(grafo, list(self.hosts.values()), self.plan, self.preferidos, self.nucleo, self.tabla)
         else:
             deseados = rc.flujos_deseados(grafo, list(self.hosts.values()), acceso, self.preferidos, raiz, self.copiar_arp)
         try:
-            instalados = [f for d in grafo for f in self.onos.flujos_de_app(d, fp.TABLA_REENVIO)]
+            instalados = [f for d in grafo for f in self.onos.flujos_de_app(d, self.tabla)]
+            if self.plan and self.tabla != fp.TABLA_REENVIO:                       # modo aislado: además, SOLO las reglas de entrada de la tabla 0 (las demás de la tabla 0 no son del vigilante)
+                instalados += [f for d in grafo for f in self.onos.flujos_de_app(d, 0) if rc.es_entrada(f, self.plan)]
         except ONOSNoDisponible as e:
             self._aviso("sin-onos", f"AVISO: ningún ONOS responde ({e}). No se toca nada.")
             return "sin ONOS"
@@ -194,7 +197,7 @@ class Vigilante:
             self._aviso("demasiados", f"AVISO: el cambio es de {total} flujos (límite {self.max_cambios}): parece un dato incompleto. No se aplica.")
             return "demasiados cambios"
 
-        if self.aplicar and (rc.altas_puras_capa3(dif) if self.plan else rc.altas_puras(dif, instalados)):         # host nuevo: solo reglas de host; sin esperar ni respetar el intervalo
+        if self.aplicar and (rc.altas_puras_capa3(dif, self.tabla) if self.plan else rc.altas_puras(dif, instalados)):         # host nuevo: solo reglas de host; sin esperar ni respetar el intervalo
             self._aplicar(dif)
             self._reiniciar_espera()
             self.log(f"ALTA RÁPIDA: {rc.resumen(dif, self.nombre)} (host nuevo; no cambia ninguna regla existente).")
@@ -211,7 +214,8 @@ class Vigilante:
                     self.log(f"    {tipo}: {rc.describir(f, self.nombre)}")
                 if len(flujos) > 6:
                     self.log(f"    ... y {len(flujos) - 6} más que {tipo}n")
-            return "esperando"
+            if self.estable_s > 0:
+                return "esperando"
         if ahora - self._desde < self.estable_s:
             return "esperando"
         if self._ultimo_cambio is not None and ahora - self._ultimo_cambio < self.min_intervalo_s:
@@ -267,6 +271,8 @@ def main(argv=None):
     a.add_argument("--hosts-fijos", metavar="ARCHIVO", help="JSON con hosts que ONOS no aprende (server, portal); se suman a los de ONOS")
     a.add_argument("--subredes", metavar="ARCHIVO", help="MODO CAPA 3: plan de subredes (JSON de capa3.cargar_plan, con nombres de switch como core-1, acc-1...)")
     a.add_argument("--nucleo", metavar="SWITCHES", help="con --subredes: switches con una ruta por cada prefijo (p. ej. core-1,core-2,borde); los demás acceso llevan solo la ruta por defecto hacia arriba")
+    a.add_argument("--tabla", type=int, default=fp.TABLA_REENVIO, help="con --subredes: tabla de trabajo. Distinta de 60 (61 a 98) = MODO AISLADO: solo toca esa tabla y sus reglas de entrada en la tabla 0 (para probar con subredes de prueba sin tocar producción)")
+    a.add_argument("--retirar", action="store_true", help="modo aislado: borra lo que el vigilante puso en esa tabla y sus reglas de entrada (con --aplicar)")
     a.add_argument("--copiar-arp", action="store_true", help="copia al controlador el ARP que entra por puertos de acceso (apagado por defecto)")
     a.add_argument("--interruptor", default="/etc/vigilante/desactivar")
     a.add_argument("--aplicar", action="store_true", help="sin esta bandera solo avisa")
@@ -291,6 +297,12 @@ def main(argv=None):
             acceso = json.load(f)
     except OSError:
         acceso = None
+    if arg.tabla != fp.TABLA_REENVIO and (not arg.subredes or not 61 <= arg.tabla <= 98):
+        log(f"NO ARRANCO: --tabla {arg.tabla} (modo aislado) exige --subredes y una tabla entre 61 y 98; la 60 es la de producción.")
+        return 2
+    if arg.retirar and arg.tabla == fp.TABLA_REENVIO:
+        log("NO ARRANCO: --retirar solo se permite en modo aislado (--tabla distinta de 60): nunca vacía la tabla de producción.")
+        return 2
     plan = None
     if arg.subredes:
         try:
@@ -299,7 +311,7 @@ def main(argv=None):
         except (OSError, ValueError) as e:                   # PlanInvalido es un ValueError
             log(f"NO ARRANCO: {e}")
             return 2
-        log(f"MODO CAPA 3: {len(plan.subredes)} subredes ({', '.join(s.nombre for s in plan.subredes)}).")
+        log(f"MODO CAPA 3{' AISLADO en la tabla ' + str(arg.tabla) if arg.tabla != fp.TABLA_REENVIO else ''}{' (RETIRAR)' if arg.retirar else ''}: {len(plan.subredes)} subredes ({', '.join(s.nombre for s in plan.subredes)}).")
     nucleo = [{v: k for k, v in NOMBRES.items()}.get(x.strip(), x.strip()) for x in arg.nucleo.split(",") if x.strip()] if arg.nucleo else None
     if not acceso and not plan:
         if arg.aplicar:
@@ -318,7 +330,7 @@ def main(argv=None):
     salud = (lambda: consultar_salud(arg.respaldo_de)) if arg.respaldo_de else None
     v = Vigilante(onos, PREFERIDOS, acceso, aplicar=arg.aplicar, estable_s=arg.estable, min_intervalo_s=arg.min_intervalo,
                   max_cambios=arg.max_cambios, interruptor=arg.interruptor, log=log, salud_principal=salud, muerto_s=arg.muerto,
-                  hosts_fijos=fijos, copiar_arp=arg.copiar_arp, plan=plan, nucleo=nucleo)
+                  hosts_fijos=fijos, copiar_arp=arg.copiar_arp, plan=plan, nucleo=nucleo, tabla=arg.tabla, retirar=arg.retirar)
     rol = f"RESPALDO de {arg.respaldo_de} (asume el mando tras {arg.muerto:g}s sin respuesta)" if arg.respaldo_de else "PRINCIPAL"
     if arg.salud_puerto:
         servir_salud(arg.salud_puerto, lambda: {"rol": "respaldo" if arg.respaldo_de else "principal", "ultimo_ciclo": v.ultimo_ciclo,

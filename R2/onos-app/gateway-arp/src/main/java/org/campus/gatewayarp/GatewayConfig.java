@@ -26,11 +26,14 @@ public class GatewayConfig extends Config<ApplicationId> {
         public final DeviceId device;
         public final Ip4Address ip;
         public final List<PortNumber> ports;
+        /** MAC de este gateway; si el gateway no trae la suya, la común de la configuración (permite varios planes, p. ej. producción y prueba, con MAC distintas). */
+        public final MacAddress mac;
 
-        Gateway(DeviceId device, Ip4Address ip, List<PortNumber> ports) {
+        Gateway(DeviceId device, Ip4Address ip, List<PortNumber> ports, MacAddress mac) {
             this.device = device;
             this.ip = ip;
             this.ports = ports;
+            this.mac = mac;
         }
     }
 
@@ -85,7 +88,8 @@ public class GatewayConfig extends Config<ApplicationId> {
             for (JsonNode p : g.get("ports")) {
                 puertos.add(PortNumber.portNumber(p.asLong()));
             }
-            salida.add(new Gateway(DeviceId.deviceId(g.get("device").asText()), Ip4Address.valueOf(g.get("ip").asText()), puertos));
+            MacAddress mac = g.has("gwMac") ? MacAddress.valueOf(g.get("gwMac").asText()) : gwMac();
+            salida.add(new Gateway(DeviceId.deviceId(g.get("device").asText()), Ip4Address.valueOf(g.get("ip").asText()), puertos, mac));
         }
         return salida;
     }

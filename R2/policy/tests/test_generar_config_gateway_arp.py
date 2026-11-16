@@ -35,5 +35,21 @@ class TestConfigGatewayArp(unittest.TestCase):
         json.dumps(g.construir(self.plan))
 
 
+
+class TestPlanDePrueba(unittest.TestCase):
+    def test_los_gateways_de_prueba_llevan_su_propia_mac(self):
+        with open(PLAN, encoding="utf-8") as f:
+            plan = l3.cargar_plan(json.load(f), nombres=NOMBRES)
+        with open(os.path.join(os.path.dirname(AQUI), "planes", "prueba_aislada_capa3.json"), encoding="utf-8") as f:
+            prueba = l3.cargar_plan(json.load(f), nombres=NOMBRES)
+        c = g.construir(plan, plan_prueba=prueba)["gatewayarp"]
+        self.assertEqual(len(c["gateways"]), len(plan.subredes) + len(prueba.subredes))
+        propios = [e for e in c["gateways"] if "gwMac" in e]
+        self.assertEqual(len(propios), len(prueba.subredes))
+        self.assertTrue(all(e["ip"].startswith("10.99.") and e["gwMac"] == prueba.gw_mac for e in propios))
+        self.assertTrue(all("gwMac" not in e for e in c["gateways"] if not e["ip"].startswith("10.99.")))
+        self.assertNotEqual(prueba.gw_mac, plan.gw_mac)
+
+
 if __name__ == "__main__":
     unittest.main()
