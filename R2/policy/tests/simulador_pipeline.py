@@ -35,6 +35,10 @@ def casa(f, pkt):
             ok = pkt.get("ip_proto") == int(cr["protocol"])
         elif t in ("TCP_DST", "TCP_SRC", "UDP_DST", "UDP_SRC"):
             ok = pkt.get(t.lower()) == int(cr.get("tcpPort", cr.get("udpPort")))
+        elif t == "ARP_OP":
+            ok = pkt.get("arp_op") == int(cr["op"])
+        elif t == "ARP_TPA":
+            ok = pkt.get("arp_tpa") == str(cr["ip"]).split("/")[0]
         else:
             raise SimError("criterio no soportado por el simulador: " + t)
         if not ok:
@@ -62,6 +66,8 @@ def ejecutar(flujos, pkt):
                     res["salidas"].append(p)
                 elif p == "CONTROLLER":
                     res["controlador"] = True
+                elif p == "IN_PORT":
+                    res["salidas"].append(pkt["in_port"])
                 else:
                     res["salidas"].append(int(p))
             elif t == "L2MODIFICATION":
@@ -75,7 +81,35 @@ def ejecutar(flujos, pkt):
                 elif s == "ETH_SRC":
                     pkt["eth_src"] = ins["mac"]
             elif t == "L3MODIFICATION":
-                pkt["ip_dst" if ins["subtype"] == "IPV4_DST" else "ip_src"] = ins["ip"]
+                sub = ins["subtype"]
+                if sub == "IPV4_DST":
+                    pkt["ip_dst"] = ins["ip"]
+                elif sub == "IPV4_SRC":
+                    pkt["ip_src"] = ins["ip"]
+                elif sub == "DEC_TTL":
+                    pkt["ttl"] = pkt.get("ttl", 64) - 1
+                    if pkt["ttl"] <= 0:                                  # TTL agotado: el paquete se descarta (un lazo de enrutamiento acabaría aquí)
+                        res["ttl_agotado"] = True
+                        res["salidas"] = []
+                        return res
+                elif sub == "ARP_OP":
+                    pkt["arp_op"] = int(ins["op"])
+                elif sub == "ARP_SHA":
+                    pkt["arp_sha"] = ins["mac"]
+                elif sub == "ARP_SPA":
+                    pkt["arp_spa"] = ins["ip"]
+                else:
+                    raise SimError("L3MODIFICATION no soportada por el simulador: " + sub)
+            elif t == "EXTENSION":                                       # extensiones de Nicira usadas por el ARP del gateway de la capa 3
+                e = ins["extensionType"]
+                if e == "NICIRA_MOVE_ETH_SRC_TO_DST":
+                    pkt["eth_dst"] = pkt["eth_src"]
+                elif e == "NICIRA_MOVE_ARP_SHA_TO_THA":
+                    pkt["arp_tha"] = pkt.get("arp_sha")
+                elif e == "NICIRA_MOVE_ARP_SPA_TO_TPA":
+                    pkt["arp_tpa"] = pkt.get("arp_spa")
+                else:
+                    raise SimError("extensión no soportada por el simulador: " + e)
             elif t == "L4MODIFICATION":
                 pkt["tcp_dst" if ins["subtype"] == "TCP_DST" else "tcp_src"] = int(ins["tcpPort"])
             elif t == "TABLE":
@@ -94,7 +128,7 @@ def entregar(red, dpid, puerto, pkt, max_saltos=40):
 
     red = {"flujos": {dpid: [flujos]}, "fisico": {(dpid, puerto): (dpid2, puerto2)}, "hosts": {(dpid, puerto): nombre}}
     Devuelve {'entregado': {host: veces}, 'llegadas': {dpid: veces}, 'controlador': [dpid...], 'inunda': [...], 'cortado': bool}."""
-    out = {"entregado": {}, "llegadas": {}, "controlador": [], "inunda": [], "cortado": False}
+    out = {"entregado": {}, "llegadas": {}, "controlador": [], "inunda": [], "cortado": False, "paquetes": {}, "ttl_agotado": False}
     cola = [(dpid, puerto, dict(pkt, in_port=puerto))]
     pasos = 0
     while cola:
@@ -107,6 +141,7 @@ def entregar(red, dpid, puerto, pkt, max_saltos=40):
         out["llegadas"][d] = out["llegadas"].get(d, 0) + 1
         r = ejecutar(red["flujos"].get(d, []), paquete)
         out["inunda"] += r["inunda"]
+        out["ttl_agotado"] = out["ttl_agotado"] or r.get("ttl_agotado", False)
         if r["controlador"]:
             out["controlador"].append(d)
         for s in r["salidas"]:
@@ -114,6 +149,7 @@ def entregar(red, dpid, puerto, pkt, max_saltos=40):
                 if (d, s) in red["hosts"]:
                     h = red["hosts"][(d, s)]
                     out["entregado"][h] = out["entregado"].get(h, 0) + 1
+                    out["paquetes"].setdefault(h, []).append(dict(r["pkt"]))
                 elif (d, s) in red["fisico"]:
                     d2, p2 = red["fisico"][(d, s)]
                     cola.append((d2, p2, dict(r["pkt"])))
