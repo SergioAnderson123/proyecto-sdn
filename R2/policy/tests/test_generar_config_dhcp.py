@@ -47,5 +47,36 @@ class TestConfigDhcp(unittest.TestCase):
         json.dumps(g.construir(self.plan))
 
 
+class TestBloqueDhcpDelPlan(unittest.TestCase):
+    def setUp(self):
+        with open(PLAN, encoding="utf-8") as f:
+            self.datos = json.load(f)
+        self.plan = l3.cargar_plan(self.datos, nombres=NOMBRES)
+
+    def test_el_plan_del_slice_fija_la_concesion_de_las_subredes_de_acceso(self):
+        extras = {s["nombre"]: s["dhcp"] for s in self.datos["subredes"] if "dhcp" in s}
+        c = g.construir(self.plan, extras=extras)["campusdhcp"]
+        self.assertEqual([s["leaseSeg"] for s in c["subredes"]], [900, 900])
+
+    def test_sin_bloque_dhcp_vale_el_valor_por_defecto(self):
+        c = g.construir(self.plan, lease=1234)["campusdhcp"]
+        self.assertEqual([s["leaseSeg"] for s in c["subredes"]], [1234, 1234])
+
+    def test_el_bloque_puede_cambiar_el_ambito_y_el_dns(self):
+        c = g.construir(self.plan, extras={"acc-1": {"inicio": "10.0.1.20", "fin": "10.0.1.60", "servidor": "10.0.1.200", "dns": ["1.1.1.1"]}})["campusdhcp"]
+        s = c["subredes"][0]
+        self.assertEqual((s["inicio"], s["fin"], s["servidor"], s["dns"]), ("10.0.1.20", "10.0.1.60", "10.0.1.200", ["1.1.1.1"]))
+
+    def test_un_bloque_incoherente_se_rechaza(self):
+        for malo in ({"inicio": "10.0.1.100", "fin": "10.0.1.50"},                  # inicio mayor que fin
+                     {"inicio": "10.0.2.5"},                                         # fuera de la subred
+                     {"inicio": "10.0.1.200", "fin": "10.0.1.254"},                  # incluye el gateway
+                     {"servidor": "10.0.1.150"},                                     # el servidor cae en el ambito
+                     {"leaseSeg": 10},                                               # concesion demasiado corta
+                     {"leaseSeg_mal": 5}):                                           # campo desconocido
+            with self.assertRaises(l3.PlanInvalido, msg=str(malo)):
+                g.construir(self.plan, extras={"acc-1": malo})
+
+
 if __name__ == "__main__":
     unittest.main()

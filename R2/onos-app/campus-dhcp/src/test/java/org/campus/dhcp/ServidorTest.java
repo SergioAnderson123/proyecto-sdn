@@ -308,4 +308,38 @@ public class ServidorTest {
     public void unAmbitoQueSeSaleDeLaSubredSeRechaza() {
         subred("x", ACC1, "10.0.1.0/24", "10.0.1.254", "10.0.1.100", "10.0.2.5", "10.0.1.250");
     }
+
+    @Test
+    public void sinEnlaceEnElPuertoSeLiberanSusConcesionesYLasDeOtrosPuertosQuedan() throws Exception {
+        servidor.procesar(discover(mac(1)), ACC1, 1, T0);
+        servidor.procesar(cliente(mac(1), MsgType.DHCPREQUEST, "10.0.1.100", "10.0.1.250", mac(1)), ACC1, 1, T0 + 100);
+        servidor.procesar(discover(mac(2)), ACC2, 1, T0);
+        servidor.procesar(cliente(mac(2), MsgType.DHCPREQUEST, "10.0.2.100", "10.0.2.250", mac(2)), ACC2, 1, T0 + 100);
+        List<Servidor.Evento> liberadas = servidor.liberarPuerto(ACC1, 1);
+        assertEquals(1, liberadas.size());
+        assertEquals(Servidor.Evento.Tipo.LIBERADA, liberadas.get(0).tipo);
+        assertEquals(Ip4Address.valueOf("10.0.1.100"), liberadas.get(0).ip);
+        assertEquals(0, servidor.pool("acc-1").ocupadas());
+        assertEquals(1, servidor.pool("acc-2").confirmadas());
+    }
+
+    @Test
+    public void unSwitchCaidoLiberaTodosSusPuertosYUnPuertoSinAmbitoNoHaceNada() throws Exception {
+        servidor.procesar(discover(mac(1)), ACC1, 1, T0);                    // solo una oferta, sin confirmar
+        servidor.procesar(discover(mac(2)), ACC2, 1, T0);
+        servidor.procesar(cliente(mac(2), MsgType.DHCPREQUEST, "10.0.2.100", "10.0.2.250", mac(2)), ACC2, 1, T0 + 100);
+        assertEquals(0, servidor.liberarPuerto(ACC1, -1).size());            // la oferta se descarta pero no hay concesion confirmada que avisar
+        assertEquals(0, servidor.pool("acc-1").ocupadas());
+        assertEquals(1, servidor.liberarPuerto(ACC2, -1).size());
+        assertEquals(0, servidor.liberarPuerto(ACC1, 9).size());              // un puerto que no es de ningun ambito
+    }
+
+    @Test
+    public void unEquipoQueVuelveTrasPerderElEnlaceRecuperaSuIpPorElArranqueConIpAnterior() throws Exception {
+        servidor.procesar(discover(mac(1)), ACC1, 1, T0);
+        servidor.procesar(cliente(mac(1), MsgType.DHCPREQUEST, "10.0.1.100", "10.0.1.250", mac(1)), ACC1, 1, T0 + 100);
+        servidor.liberarPuerto(ACC1, 1);
+        Servidor.Salida s = servidor.procesar(cliente(mac(1), MsgType.DHCPREQUEST, "10.0.1.100", null, mac(1)), ACC1, 1, T0 + 5000);
+        assertEquals(MsgType.DHCPACK, dhcpDe(s.respuesta).getPacketType());
+    }
 }

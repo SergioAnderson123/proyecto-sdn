@@ -28,6 +28,18 @@ Reemplaza a la app DHCP estándar (hay que desactivar `org.onosproject.dhcp`: do
 - Si un equipo cambia de puerto o de switch, recibe IP de la subred del nuevo lugar en su siguiente petición; la concesión anterior sigue en su ámbito hasta vencer (o hasta su RELEASE).
 - Si un puerto de acceso alimenta un pequeño switch con varios equipos, todos comparten la subred y la **cuota por puerto** (`maxPorPuerto`, ajustable).
 
+## 2 ter. Cuánto dura una concesión y qué pasa cuando el equipo se va
+
+**Dónde se fija:** en el **plan de subredes**, en el bloque `dhcp` de cada subred de acceso (`R2/policy/planes/vnrt_topologia14.json`):
+`{"nombre": "acc-1", ..., "puertos": [1], "dhcp": {"leaseSeg": 900}}`. `generar_config_dhcp.py` lo copia a la configuración de la app; si una subred no trae bloque `dhcp` vale `--lease` del generador (3600 s). El mismo bloque admite `inicio`, `fin`, `servidor` y `dns`. Cambiar el valor = editar el plan y repetir `82_dhcp_app.yml` (la app recarga sus ámbitos; las concesiones en memoria se pierden).
+
+**Cómo muere una concesión (tres caminos, del más rápido al más lento):**
+1. **El cliente la libera** (RELEASE al apagarse bien): la app retira la IP de ONOS al instante.
+2. **El puerto pierde el enlace** (cable desconectado) o **el switch cae**: la app escucha los eventos de puerto y de dispositivo de ONOS y **libera al instante** las concesiones de ese puerto o de ese switch; ONOS deja de tener la IP del host y el vigilante quita su entrega /32. Si el equipo vuelve a conectarse, su cliente pide la IP que tenía (arranque con IP anterior) y la recupera si sigue libre.
+3. **Vence la concesión:** para un equipo que desaparece sin que el puerto lo note (un equipo detrás de otro switch, una máquina virtual apagada) la IP se retira sola a los `leaseSeg` segundos. Con 900 s (15 min) como máximo queda una IP "fantasma".
+
+Límite honesto: en la red virtual de VNRT apagar o bajar la interfaz de un host **no** baja el puerto del switch, así que el camino 2 no se puede probar ahí con equipos reales; se prueba con la prueba Java (liberación por puerto) y, en VNRT, bajando la interfaz del propio switch (`80_caida_cable.yml` con el puerto de acceso).
+
 ## 3. Flujo (cliente en `acc-1`, puerto 1, subred `10.0.1.0/24`)
 1. DISCOVER (0.0.0.0 a broadcast) entra por acc-1/1; R2 lo sube al controlador (40500), con o sin sesión 802.1X.
 2. La app mira (acc-1, 1), encuentra la subred `10.0.1.0/24`, elige una IP libre del ámbito (por ejemplo `.100-.199`), la reserva unos segundos y envía el OFFER por un packet-out al mismo puerto (a broadcast; todo cliente en INIT lo acepta).

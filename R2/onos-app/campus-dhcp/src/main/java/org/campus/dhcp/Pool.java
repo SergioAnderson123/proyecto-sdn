@@ -135,6 +135,28 @@ public final class Pool {
         return a.confirmada ? new Concesion(mac, ip, a.puerto, a.expira) : null;
     }
 
+    /**
+     * El puerto dejo de tener cable (o el switch cayo): se liberan al instante todas las ofertas y concesiones de ese puerto, sin esperar a que venzan. `prefijoPuerto` es "switch/puerto" o,
+     * para liberar todo un switch, "switch/". Devuelve las concesiones confirmadas que se liberaron (para avisar a ONOS). Un equipo que vuelva a conectarse y pida su IP anterior la recupera si sigue libre.
+     */
+    public synchronized List<Concesion> liberarPuerto(String prefijoPuerto) {
+        List<Concesion> liberadas = new ArrayList<>();
+        Iterator<Map.Entry<Integer, Asig>> it = porIp.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<Integer, Asig> e = it.next();
+            Asig a = e.getValue();
+            boolean coincide = prefijoPuerto.endsWith("/") ? a.puerto.startsWith(prefijoPuerto) : a.puerto.equals(prefijoPuerto);
+            if (coincide) {
+                it.remove();
+                porMac.remove(a.mac);
+                if (a.confirmada) {
+                    liberadas.add(new Concesion(a.mac, e.getKey(), a.puerto, a.expira));
+                }
+            }
+        }
+        return liberadas;
+    }
+
     /** DECLINE: el cliente detecto que otro equipo ya usa esa IP; se aparta un tiempo. */
     public synchronized void declinar(MacAddress mac, int ip, long ahora) {
         Integer propia = porMac.get(mac);

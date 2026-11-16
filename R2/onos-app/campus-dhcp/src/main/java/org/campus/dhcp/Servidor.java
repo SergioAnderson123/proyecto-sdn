@@ -151,6 +151,20 @@ public final class Servidor {
         return eventos;
     }
 
+    /** El puerto perdio el enlace: libera lo de ese puerto y devuelve un evento LIBERADA por cada concesion confirmada. `puerto` < 0 = todo el switch (cayo o se desconecto). */
+    public List<Evento> liberarPuerto(String device, long puerto) {
+        List<Evento> eventos = new ArrayList<>();
+        for (Subred s : subredes) {
+            if (!s.device.equals(device) || (puerto >= 0 && !s.puertos.contains(puerto))) {
+                continue;
+            }
+            for (Pool.Concesion c : pools.get(s.nombre).liberarPuerto(puerto >= 0 ? device + "/" + puerto : device + "/")) {
+                eventos.add(new Evento(Evento.Tipo.LIBERADA, c.mac, c.ip, s.nombre, c.puerto));
+            }
+        }
+        return eventos;
+    }
+
     private Salida discover(Subred subred, Pool pool, DHCP dhcp, MacAddress mac, String clavePuerto, long ahora) {
         if (!limitador.permitir(clavePuerto, ahora)) {
             return Salida.ignorar("limite de tasa del puerto " + clavePuerto);

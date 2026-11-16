@@ -10,11 +10,15 @@ import org.onosproject.core.CoreService;
 import org.onosproject.net.ConnectPoint;
 import org.onosproject.net.HostId;
 import org.onosproject.net.HostLocation;
+import org.onosproject.net.Port;
 import org.onosproject.net.config.ConfigFactory;
 import org.onosproject.net.config.NetworkConfigEvent;
 import org.onosproject.net.config.NetworkConfigListener;
 import org.onosproject.net.config.NetworkConfigRegistry;
 import org.onosproject.net.config.basics.SubjectFactories;
+import org.onosproject.net.device.DeviceEvent;
+import org.onosproject.net.device.DeviceListener;
+import org.onosproject.net.device.DeviceService;
 import org.onosproject.net.flow.DefaultTrafficSelector;
 import org.onosproject.net.flow.DefaultTrafficTreatment;
 import org.onosproject.net.flow.TrafficSelector;
@@ -73,6 +77,9 @@ public class CampusDhcpApp {
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected HostProviderRegistry hostProviderRegistry;
 
+    @Reference(cardinality = ReferenceCardinality.MANDATORY)
+    protected DeviceService deviceService;
+
     private ApplicationId appId;
     private volatile Servidor servidor;
     private HostProviderService hostProviderService;
@@ -111,6 +118,31 @@ public class CampusDhcpApp {
         }
     };
 
+    /** Un puerto sin enlace (o un switch caido) libera al instante las concesiones que tenia: el equipo ya no esta, su IP y su regla /32 no deben quedar esperando a que venza la concesion. */
+    private final DeviceListener oyenteDispositivos = new DeviceListener() {
+        @Override
+        public void event(DeviceEvent evento) {
+            Servidor s = servidor;
+            if (s == null) {
+                return;
+            }
+            String device = evento.subject().id().toString();
+            java.util.List<Servidor.Evento> liberadas = java.util.Collections.emptyList();
+            if (evento.type() == DeviceEvent.Type.PORT_UPDATED || evento.type() == DeviceEvent.Type.PORT_REMOVED) {
+                Port puerto = evento.port();
+                if (puerto != null && (evento.type() == DeviceEvent.Type.PORT_REMOVED || !puerto.isEnabled())) {
+                    liberadas = s.liberarPuerto(device, puerto.number().toLong());
+                }
+            } else if (evento.type() == DeviceEvent.Type.DEVICE_AVAILABILITY_CHANGED && !deviceService.isAvailable(evento.subject().id())) {
+                liberadas = s.liberarPuerto(device, -1);
+            }
+            for (Servidor.Evento e : liberadas) {
+                hostProviderService.removeIpFromHost(HostId.hostId(e.mac, VlanId.NONE), e.ip);
+                log.info("DHCP por subred: {} sin enlace en {}, se libera {} ({})", e.mac, e.puerto, e.ip, e.subred);
+            }
+        }
+    };
+
     private final PacketProcessor procesador = new PacketProcessor() {
         @Override
         public void process(PacketContext contexto) {
@@ -131,6 +163,7 @@ public class CampusDhcpApp {
         configRegistry.registerConfigFactory(fabricaConfig);
         configRegistry.addListener(oyenteConfig);
         hostProviderService = hostProviderRegistry.register(proveedor);
+        deviceService.addListener(oyenteDispositivos);
         cargarConfig();
         packetService.addProcessor(procesador, PacketProcessor.director(1));
         packetService.requestPackets(selectorDhcp, PacketPriority.CONTROL, appId);
@@ -142,6 +175,7 @@ public class CampusDhcpApp {
     @Deactivate
     protected void deactivate() {
         reloj.shutdownNow();
+        deviceService.removeListener(oyenteDispositivos);
         packetService.cancelPackets(selectorDhcp, PacketPriority.CONTROL, appId);
         packetService.removeProcessor(procesador);
         hostProviderRegistry.unregister(proveedor);
