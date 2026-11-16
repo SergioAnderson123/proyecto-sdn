@@ -161,7 +161,7 @@ Cable `acc-1/2 ↔ core-1/2` (la subida de h1 hacia core-1, raíz del árbol y d
 - **Caída:** ONOS vio el cambio en ~2 s; el vigilante esperó 15 s de estabilidad y aplicó a las 22:07:35 (1 flujo reemplazado en acc-1, borde y core-1); h1 recuperó el servicio al segundo siguiente por el camino de reserva (acc-1/3, core-2, core-1/4). **Corte total: ~17 s** (2 s de detección + 15 s de estabilidad + <1 s de aplicación). Casi todo el corte es el parámetro `--estable`.
 - **Vuelta del cable:** detectada a los 2 s y aplicada a los 16 s (respetando los 60 s mínimos entre cambios); h1 no registró ningún corte.
 - **Parpadeo de 1 s** (primer intento, por un error del playbook): h1 perdió 1 s y el vigilante no cambió nada (exige estabilidad): no hay vaivén de rutas ante un cable inestable; el intervalo mínimo de 60 s acota además el número de cambios por minuto.
-- **Ajuste posible:** `--estable` más bajo reduce el corte casi proporcionalmente (con 5 s se esperan ~7 s), a costa de reaccionar a caídas más breves; `68 -e aplicar=true -e estable=5`.
+- **Ajuste medido:** con `68 -e aplicar=true -e estable=5` el mismo cable dio **~6 s de corte** (22:15:38 a 22:15:43: detectado en el mismo segundo, aplicado a los 6 s) y la vuelta del cable otra vez sin corte; `95` limpios. Queda en `estable=5` en ctrl-3 y ctrl-2. El coste: reacciona a caídas de 5 s o más (un parpadeo de 1 s sigue sin cambiar nada; el mínimo de 60 s entre cambios acota el vaivén).
 - Corrección en el camino: la primera ejecución dejó el cable caído solo 1 s porque `pause` solo corre en el primer host del play (ahora `sleep` en el propio switch).
 
 ## 7. Estado, pruebas y siguiente
