@@ -129,6 +129,12 @@ Salvedades: la prueba usó ping (ICMP) con la política de R2 esquivada a propó
 - Hallazgos que costó encontrar: (1) ONOS dejó la app `ACTIVE` con el feature `Uninstalled` (carrera ya vista con la app AAA): el playbook ejecuta `feature:install gateway-arp` por Karaf, que es idempotente. (2) Las constantes de Nicira de ONOS 2.7 son `NICIRA_MOV_*`. (3) Los 5 switches (OVS 3.3.9) quedaban con driver `default`, porque el driver `ovs` de ONOS 2.7 solo coincide con `sw=2.*`: sin él no hay extensiones de Nicira. Se fuerza con netcfg (`devices/<id>` `basic.driver=ovs`); el `ovs` hereda el mismo pipeline que `default`, solo añade las extensiones. Se revierte con `DELETE .../devices/<id>/basic`.
 - Pendiente: el driver ovs está forzado solo en los 4 switches del plan; core-2 sigue en `default`. Falta ver el vigilante en modo capa 3 contra ONOS con esta app.
 
+### V6. El vigilante en modo capa 3 contra ONOS real, solo lectura (16-nov, `98_prueba_vigilante_capa3.yml`)
+
+Un ciclo sin `--aplicar` con el plan de la slice, `--nucleo core-1,core-2,borde` y los 3 hosts con las IP del plan A. Leyó switches, enlaces y flujos reales sin errores y calculó la diferencia: **sobran 30 flujos** (los de reenvío L2 de hoy: unicast por MAC y difusión ARP por árbol) y **faltan 15** (entrega /32 con MAC y TTL en core-1, acc-1 y acc-2; rutas por prefijo en borde, core-2 y core-1). Raíz: core-1.
+- Es la dimensión del cambio: aplicarlo ahora reemplazaría el L2 de producción y dejaría sin reenvío a los hosts reales (siguen con 10.0.0.201 y 10.0.0.202, fuera de sus subredes del plan) y a los hosts de ONOS sin IP (p. ej. FA:16:3E:05:44:06 en borde/3, que el plan no cubre). Por eso no se aplica.
+- Para aplicar de verdad hacen falta: IP del plan A en los hosts (DHCP por subred), una decisión para los hosts sin IP (sensores, monitoreo) y una prueba aplicada en una tabla aparte con subredes de prueba antes de la conmutación.
+
 ## 7. Estado, pruebas y siguiente
 **Hecho (sin red):** plan y validación de subredes (`Plan`, `cargar_plan`, 8 casos de plan inválido); `flujos_capa3` con rutas completas y ruta por defecto; entrega de punta a punta con MAC y TTL (12 parejas); tráfico dentro de la subred; ARP del gateway y ARP local; IP desconocida
 y TTL agotado; **caída de cada uno de los 7 cables** y de un switch (todo sigue llegando, sin inundar ni lazos); propiedades de escala (el core no depende de H; un acceso crece 2 por host local; L3 < L2/2 con 960 hosts; ruta por defecto constante). **244 pruebas en total** (R2 + prioridades + plantillas).
