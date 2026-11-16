@@ -23,7 +23,12 @@
         path: "{{ item }}"
       loop: ["{{ oar }}", "{{ plan }}"]
       register: archivos
-      failed_when: not archivos.results | map(attribute='stat.exists') | min
+      tags: [instalar]
+
+    - name: Detener si falta alguno
+      ansible.builtin.assert:
+        that: archivos.results | selectattr('stat.exists') | list | length == 2
+        fail_msg: "Falta el .oar o el plan en este clon: hacer git pull"
       tags: [instalar]
 
     - name: Generar la configuracion de la app desde el plan de subredes
