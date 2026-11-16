@@ -39,7 +39,14 @@ La regla de entrada de la prueba aislada (tabla 0, prioridad 40060) **se salta l
 Criterios de **abortar** (ir al retroceso): el docente h1 con sesión no recibe *refused* en el 8101 a los 30 s del paso 3; el `95` muestra tormenta; ONOS pierde enlaces; cualquier duda.
 
 ## 4 bis. Lo que NO cubre el plan
-Hosts nuevos sin IP conocida por ONOS (no reciben reglas: falla cerrado), R5 (`HOME_NET` agregado, espejo a la tabla 60, bloqueo por MAC), DHCP por subred, bond del server, caída de un cable en vivo (se recomienda probarla en la ventana, con un cable de acceso redundante y el retroceso a mano).
+
+**Cómo sabe el vigilante la IP de un host (y por qué un host nuevo no la tendría).**
+- El servidor DHCP **sí está dentro de ONOS** (app `org.onosproject.dhcp`): R2 sube el DHCP del cliente (UDP 68 a 67, prioridad 40500) al controlador y esa app lo contesta, con un solo rango.
+- Pero la lista de hosts de ONOS (`/hosts`, la que lee el vigilante) **no se alimenta de las concesiones DHCP**: aprende IP↔MAC de los ARP e IPv4 que llegan al controlador. El reenvío proactivo manda el ARP directo a la tabla 60 (regla 40003) **sin copia al controlador**, así que ONOS casi nunca lo ve y lista los hosts con `ipAddresses: []` (lo medido con h1). El EAPOL (802.1X) le da la MAC y el puerto, no la IP.
+- Hoy el vigilante toma las IP de `hosts_fijos` (los 3 hosts de la slice). Para hosts nuevos hay tres caminos: (a) `--copiar-arp` (una copia de cada petición ARP por puerto de acceso: ONOS aprende la IP, a costa de tráfico al controlador); (b) que el vigilante lea las **concesiones de la app DHCP de ONOS** por su REST (la ruta exacta, `/onos/dhcp/allocations` según recuerdo, hay que comprobarla en vivo; es la fuente natural para hosts con DHCP); (c) seguir con `hosts_fijos` para los equipos con IP fija.
+- Una IP desconocida **falla cerrada**: el host sin IP en el vigilante no recibe reglas de entrega y no se alcanza.
+
+**Otras cosas sin cubrir:** R5 (`HOME_NET` agregado, espejo a la tabla 60, bloqueo por MAC; lo lleva otra persona, notas en `PLAN_DIRECCIONAMIENTO.md` §3), DHCP por subred (la app de ONOS tiene un solo rango), bond del server, y la caída de un cable en vivo (se prueba con `80_caida_cable.yml`).
 
 ## 5. Retroceso (en este orden)
 1. Parar el vigilante capa 3 (si ya arrancó el servicio).

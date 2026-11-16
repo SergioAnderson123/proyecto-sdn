@@ -1,0 +1,188 @@
+# CAIDA DE UN CABLE EN VIVO con la capa 3 en produccion (docs/PLAN_CONMUTACION_CAPA3.md). Baja UNA interfaz de datos de un switch un rato, mide desde h1 cuanto tarda en recuperarse el acceso al servidor y vuelve a subirla SIEMPRE.
+#   PLAYBOOK=80_caida_cable.yml ./lanzar.sh                                               # solo LISTA los cables que ve ONOS (no cambia nada)
+#   PLAYBOOK=80_caida_cable.yml ./lanzar.sh -e accion=caida -e sw=acc-1 -e puerto=2 -e confirmar=true
+#   PLAYBOOK=80_caida_cable.yml ./lanzar.sh -e accion=subir -e sw=acc-1 -e puerto=2 -e confirmar=true   # por si la prueba se interrumpio: vuelve a subir la interfaz
+# Requisitos: sesion 802.1X de h1 (docente) activa y la capa 3 conmutada (69). Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh. Freno: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true
+# Que hace: (1) h1 prueba cada segundo `nc` a 10.0.0.10:8101 (docente = refused = el servidor contesta; timed out = sin camino); (2) a los {{ inicio_s }} s se baja la interfaz del puerto elegido; (3) tras {{ caida_s }} s se vuelve a subir;
+# (4) se muestra la linea de tiempo, los segundos sin servicio y lo que dijo el vigilante de capa 3. Elige un cable de ACCESO con su cable redundante (cada acceso tiene dos subidas): nunca el unico camino de un host.
+# Se niega a bajar la interfaz de gestion (192.168.201.x) y cualquier puerto que no exista en br0.
+- name: Caida de cable, paso 1 - cables que ve ONOS (solo lectura)
+  hosts: borde
+  gather_facts: false
+  vars:
+    accion: listar
+    sw: ""
+    puerto: ""
+  tasks:
+    - name: Cables de ONOS (nombre/puerto -> nombre/puerto)
+      ansible.builtin.command:
+        cmd: "python3 {{ playbook_dir }}/files/listar_enlaces.py --onos http://{{ onos_ip }}:8181 --usuario {{ onos_user }}:{{ onos_pass }}"
+      register: enlaces
+      changed_when: false
+      when: accion == 'listar'
+
+    - name: Lista
+      ansible.builtin.debug:
+        msg: "{{ enlaces.stdout_lines }}"
+      when: accion == 'listar'
+
+    - name: Para caida o subir hacen falta sw, puerto y confirmar
+      ansible.builtin.assert:
+        that:
+          - sw in ['borde', 'core-1', 'core-2', 'acc-1', 'acc-2']
+          - puerto | string | regex_search('^[0-9]+$') is not none
+          - confirmar | default(false) | bool
+        fail_msg: "Uso: -e accion=caida -e sw=acc-1 -e puerto=2 -e confirmar=true (sw: borde, core-1, core-2, acc-1, acc-2)"
+        quiet: true
+      when: accion in ['caida', 'subir']
+
+    - name: A donde va ese cable segun ONOS
+      ansible.builtin.command:
+        cmd: "python3 {{ playbook_dir }}/files/listar_enlaces.py --onos http://{{ onos_ip }}:8181 --usuario {{ onos_user }}:{{ onos_pass }} --desde {{ sw }} --puerto {{ puerto }}"
+      register: cable
+      changed_when: false
+      when: accion == 'caida'
+
+    - name: Cable elegido
+      ansible.builtin.debug:
+        msg: "{{ cable.stdout_lines }}"
+      when: accion == 'caida'
+
+- name: Caida de cable, paso 2 - h1 empieza a medir el acceso al servidor
+  hosts: h1-profesor
+  gather_facts: false
+  vars:
+    accion: listar
+    medicion_s: 150
+  tasks:
+    - name: Prueba cada segundo nc 10.0.0.10:8101 con la IP del plan A (segundo plano)
+      ansible.builtin.shell:
+        cmd: |
+          rm -f /tmp/medicion_cable.txt
+          fin=$(( $(date +%s) + {{ medicion_s }} ))
+          while [ $(date +%s) -lt $fin ]; do
+            r=$(nc -zv -w 1 -s 10.0.1.101 10.0.0.10 8101 2>&1 | tr '\n' ' ')
+            case "$r" in
+              *refused*) e=OK;;
+              *) e=SIN_CAMINO;;
+            esac
+            echo "$(date +%T) $e" >> /tmp/medicion_cable.txt
+            sleep 1
+          done
+      async: 200
+      poll: 0
+      register: medicion
+      when: accion == 'caida'
+
+- name: Caida de cable, paso 3 - bajar la interfaz y volver a subirla (siempre)
+  hosts: switches
+  become: true
+  gather_facts: false
+  vars:
+    accion: listar
+    sw: ""
+    puerto: ""
+    inicio_s: 10
+    caida_s: 60
+    nombres: {switch-borde: borde, sw-core-1: core-1, sw-core-2: core-2, sw-acc-1: acc-1, sw-acc-2: acc-2}
+  tasks:
+    - name: Interfaz del puerto (se niega con la de gestion)
+      ansible.builtin.script: "{{ playbook_dir }}/files/nic_de_puerto.py {{ puerto }}"
+      args:
+        executable: python3
+      register: nic
+      changed_when: false
+      when: accion in ['caida', 'subir'] and nombres[inventory_hostname] == sw
+
+    - name: Interfaz elegida
+      ansible.builtin.debug:
+        msg: "{{ sw }} puerto {{ puerto }} = interfaz {{ nic.stdout | trim }}"
+      when: accion in ['caida', 'subir'] and nombres[inventory_hostname] == sw
+
+    - name: Volver a subir la interfaz (accion=subir)
+      ansible.builtin.command:
+        cmd: "ip link set {{ nic.stdout | trim }} up"
+      when: accion == 'subir' and nombres[inventory_hostname] == sw
+      changed_when: true
+
+    - name: Bajar, esperar y subir (el cable se vuelve a subir aunque algo falle)
+      block:
+        - name: Esperar el inicio de la medicion
+          ansible.builtin.pause:
+            seconds: "{{ inicio_s }}"
+          delegate_to: localhost
+          become: false
+
+        - name: BAJAR la interfaz
+          ansible.builtin.shell:
+            cmd: "date +%T; ip link set {{ nic.stdout | trim }} down"
+          register: bajada
+          changed_when: true
+
+        - name: Esperar con el cable caido
+          ansible.builtin.pause:
+            seconds: "{{ caida_s }}"
+          delegate_to: localhost
+          become: false
+      always:
+        - name: SUBIR la interfaz
+          ansible.builtin.shell:
+            cmd: "ip link set {{ nic.stdout | trim }} up; date +%T"
+          register: subida
+          changed_when: true
+
+        - name: Horas de bajada y subida
+          ansible.builtin.debug:
+            msg: "bajada {{ bajada.stdout_lines | default(['?']) | first }}; subida {{ subida.stdout_lines | default(['?']) | first }}"
+      when: accion == 'caida' and nombres[inventory_hostname] == sw
+
+- name: Caida de cable, paso 4 - resultado de la medicion en h1
+  hosts: h1-profesor
+  gather_facts: false
+  vars:
+    accion: listar
+  tasks:
+    - name: Esperar a que termine la medicion
+      ansible.builtin.async_status:
+        jid: "{{ medicion.ansible_job_id }}"
+      register: fin
+      until: fin.finished
+      retries: 40
+      delay: 5
+      when: accion == 'caida'
+
+    - name: Linea de tiempo (cambios de estado) y resumen
+      ansible.builtin.shell:
+        cmd: |
+          echo "total de pruebas: $(wc -l < /tmp/medicion_cable.txt); OK: $(grep -c ' OK$' /tmp/medicion_cable.txt); SIN_CAMINO (segundos sin servicio): $(grep -c SIN_CAMINO /tmp/medicion_cable.txt)"
+          echo "primer SIN_CAMINO: $(grep -m1 SIN_CAMINO /tmp/medicion_cable.txt | cut -d' ' -f1)  ultimo SIN_CAMINO: $(grep SIN_CAMINO /tmp/medicion_cable.txt | tail -1 | cut -d' ' -f1)"
+          echo "cambios de estado:"
+          awk 'NR==1 || $2!=prev {print $0} {prev=$2}' /tmp/medicion_cable.txt
+      register: resumen
+      changed_when: false
+      when: accion == 'caida'
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ resumen.stdout_lines }}"
+      when: accion == 'caida'
+
+- name: Caida de cable, paso 5 - lo que dijo el vigilante de capa 3 y cuentas finales
+  hosts: node-ctrl-3
+  become: true
+  gather_facts: false
+  vars:
+    accion: listar
+  tasks:
+    - name: Registro del vigilante de capa 3 (ultimos 4 minutos, resumido)
+      ansible.builtin.shell:
+        cmd: "journalctl -u vigilante-capa3 --since '-4 min' --no-pager | grep -E 'CAMBIO DETECTADO|APLICADO|AVISO|Espero|SIMULA|estado|ERROR' | cut -c1-210 | tail -20"
+      register: registro
+      changed_when: false
+      failed_when: false
+      when: accion == 'caida'
+
+    - name: Vigilante
+      ansible.builtin.debug:
+        msg: "{{ registro.stdout_lines }}"
+      when: accion == 'caida'
