@@ -153,13 +153,14 @@ def _respuesta_arp_gateway(gw_mac: str, gw_ip: str, copiar: bool) -> List[dict]:
 
 
 # ---------- flujos por subred ----------
-def _flujos_de_subred(plan: Plan, s: Subred, hosts: List[dict], copiar_arp: bool, tabla: int = TABLA_REENVIO) -> List[dict]:
+def _flujos_de_subred(plan: Plan, s: Subred, hosts: List[dict], copiar_arp: bool, tabla: int = TABLA_REENVIO, arp_gateway: bool = True) -> List[dict]:
     d, gw = s.dispositivo, plan.gw_mac
     flujos = []
     for p in s.puertos:
-        flujos.append(fp._base(d, tabla, PRIO_ARP_GATEWAY, [
-            {"type": "IN_PORT", "port": p}, {"type": "ETH_TYPE", "ethType": "0x0806"}, {"type": "ARP_OP", "op": 1},
-            {"type": "ARP_TPA", "ip": f"{s.gateway}/32"}], _respuesta_arp_gateway(gw, str(s.gateway), copiar_arp)))
+        if arp_gateway:                                                    # estático: no cabe en el REST de ONOS (ver DISENO_CAPA3.md); lo instala otro mecanismo
+            flujos.append(fp._base(d, tabla, PRIO_ARP_GATEWAY, [
+                {"type": "IN_PORT", "port": p}, {"type": "ETH_TYPE", "ethType": "0x0806"}, {"type": "ARP_OP", "op": 1},
+                {"type": "ARP_TPA", "ip": f"{s.gateway}/32"}], _respuesta_arp_gateway(gw, str(s.gateway), copiar_arp)))
         otros = [q for q in s.puertos if q != p]
         if otros:                                                          # inundación LOCAL: solo puertos de acceso de esta subred, nunca troncales
             flujos.append(fp._base(d, tabla, PRIO_ARP_LOCAL, [
@@ -176,11 +177,12 @@ def _flujos_de_subred(plan: Plan, s: Subred, hosts: List[dict], copiar_arp: bool
 
 
 def flujos_capa3(plan: Plan, grafo: caminos.Grafo, hosts: Iterable[dict], preferidos: Iterable[str] = (), nucleo: Optional[Iterable[str]] = None,
-                 copiar_arp: bool = False, tabla: int = TABLA_REENVIO) -> List[dict]:
+                 copiar_arp: bool = False, tabla: int = TABLA_REENVIO, arp_gateway: bool = True) -> List[dict]:
     """Todos los flujos de la tabla de reenvío en modo capa 3.
 
     `nucleo`: switches que llevan UNA regla por cada prefijo (rutas completas). Con `None`, todos. Si se indica, los demás switches con subredes (los de acceso) llevan solo una
     regla por defecto "hacia arriba" por puerto de acceso: sus reglas dejan de crecer con el número de subredes (ver el diseño). `copiar_arp`: copia al controlador el ARP del gateway.
+    `arp_gateway=False`: sin los flujos del ARP del gateway (son estáticos y se instalan aparte; el vigilante solo gestiona lo dinámico, que sí cabe en el REST de ONOS).
     `tabla`: tabla OpenFlow donde van los flujos (60 en producción; otra, p. ej. 62, para la prueba de viabilidad aislada de producción)."""
     preferidos = list(preferidos)
     validos, _ = hosts_validos(plan, hosts)
@@ -193,7 +195,7 @@ def flujos_capa3(plan: Plan, grafo: caminos.Grafo, hosts: Iterable[dict], prefer
             raise PlanInvalido(f"{s.nombre}: el switch {s.dispositivo} no está en la topología")
     flujos: List[dict] = [fp._base(d, tabla, PRIO_DESCARTE, [], []) for d in sorted(grafo)]
     for s in plan.subredes:
-        flujos += _flujos_de_subred(plan, s, sorted(por_subred[s.nombre], key=lambda h: h["mac"].upper()), copiar_arp, tabla)
+        flujos += _flujos_de_subred(plan, s, sorted(por_subred[s.nombre], key=lambda h: h["mac"].upper()), copiar_arp, tabla, arp_gateway)
     arboles: Dict[str, caminos.Arbol] = {}
     nucleo_set = None if nucleo is None else set(nucleo)
     for s in plan.subredes:

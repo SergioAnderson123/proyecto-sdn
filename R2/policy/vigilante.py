@@ -28,6 +28,7 @@ import urllib.error
 import urllib.request
 
 import caminos
+import capa3
 import flujos_proactivos as fp
 import hosts_fijos
 import recalculo as rc
@@ -76,12 +77,13 @@ def consultar_salud(url, timeout=3, max_edad_s=30):
 
 class Vigilante:
     def __init__(self, onos, preferidos, acceso, aplicar=False, estable_s=15, min_intervalo_s=60, max_cambios=200,
-                 interruptor=None, log=print, nombre=_nombre, reloj=time.monotonic, monitoreo=None, salud_principal=None, muerto_s=45, hosts_fijos=(), copiar_arp=False):
+                 interruptor=None, log=print, nombre=_nombre, reloj=time.monotonic, monitoreo=None, salud_principal=None, muerto_s=45, hosts_fijos=(), copiar_arp=False, plan=None, nucleo=None):
         self.onos, self.preferidos, self.aplicar = onos, list(preferidos), aplicar
         self.estable_s, self.min_intervalo_s, self.max_cambios = estable_s, min_intervalo_s, max_cambios
         self.interruptor, self.log, self.nombre, self.reloj = interruptor, log, nombre, reloj
         self.acceso_fijo = sin_monitoreo(acceso, monitoreo)
         self.troncales = set()                 # (switch, puerto) que alguna vez salió en un enlace
+        self.plan, self.nucleo = plan, (list(nucleo) if nucleo else None)     # capa 3: plan de subredes (capa3.Plan) y switches con rutas completas; sin plan, capa 2
         self.hosts_fijos, self.copiar_arp = list(hosts_fijos), copiar_arp     # hosts que ONOS no aprende solos; copia del ARP de acceso al controlador
         self.hosts = {}                        # MAC -> host; un host que ONOS deja de listar no se olvida
         self._huella = self._desde = self._ultimo_cambio = None
@@ -170,7 +172,10 @@ class Vigilante:
         self._olvidar_avisos("partida")
 
         acceso = {d: [p for p in ps if (d, p) not in self.troncales] for d, ps in self.acceso_fijo.items() if d in grafo}
-        deseados = rc.flujos_deseados(grafo, list(self.hosts.values()), acceso, self.preferidos, raiz, self.copiar_arp)
+        if self.plan:                                             # capa 3: rutas por prefijo, entrega por host y ARP local (el ARP del gateway es estático, no lo gestiona el vigilante)
+            deseados = rc.flujos_deseados_capa3(grafo, list(self.hosts.values()), self.plan, self.preferidos, self.nucleo)
+        else:
+            deseados = rc.flujos_deseados(grafo, list(self.hosts.values()), acceso, self.preferidos, raiz, self.copiar_arp)
         try:
             instalados = [f for d in grafo for f in self.onos.flujos_de_app(d, fp.TABLA_REENVIO)]
         except ONOSNoDisponible as e:
@@ -189,7 +194,7 @@ class Vigilante:
             self._aviso("demasiados", f"AVISO: el cambio es de {total} flujos (límite {self.max_cambios}): parece un dato incompleto. No se aplica.")
             return "demasiados cambios"
 
-        if self.aplicar and rc.altas_puras(dif, instalados):         # host nuevo: solo se añaden reglas unicast; sin esperar ni respetar el intervalo
+        if self.aplicar and (rc.altas_puras_capa3(dif) if self.plan else rc.altas_puras(dif, instalados)):         # host nuevo: solo reglas de host; sin esperar ni respetar el intervalo
             self._aplicar(dif)
             self._reiniciar_espera()
             self.log(f"ALTA RÁPIDA: {rc.resumen(dif, self.nombre)} (host nuevo; no cambia ninguna regla existente).")
@@ -260,6 +265,8 @@ def main(argv=None):
     a.add_argument("--min-intervalo", type=float, default=60, help="segundos mínimos entre dos cambios")
     a.add_argument("--max-cambios", type=int, default=200)
     a.add_argument("--hosts-fijos", metavar="ARCHIVO", help="JSON con hosts que ONOS no aprende (server, portal); se suman a los de ONOS")
+    a.add_argument("--subredes", metavar="ARCHIVO", help="MODO CAPA 3: plan de subredes (JSON de capa3.cargar_plan, con nombres de switch como core-1, acc-1...)")
+    a.add_argument("--nucleo", metavar="SWITCHES", help="con --subredes: switches con una ruta por cada prefijo (p. ej. core-1,core-2,borde); los demás acceso llevan solo la ruta por defecto hacia arriba")
     a.add_argument("--copiar-arp", action="store_true", help="copia al controlador el ARP que entra por puertos de acceso (apagado por defecto)")
     a.add_argument("--interruptor", default="/etc/vigilante/desactivar")
     a.add_argument("--aplicar", action="store_true", help="sin esta bandera solo avisa")
@@ -284,7 +291,17 @@ def main(argv=None):
             acceso = json.load(f)
     except OSError:
         acceso = None
-    if not acceso:
+    plan = None
+    if arg.subredes:
+        try:
+            with open(arg.subredes, encoding="utf-8") as f:
+                plan = capa3.cargar_plan(json.load(f), nombres=NOMBRES)
+        except (OSError, ValueError) as e:                   # PlanInvalido es un ValueError
+            log(f"NO ARRANCO: {e}")
+            return 2
+        log(f"MODO CAPA 3: {len(plan.subredes)} subredes ({', '.join(s.nombre for s in plan.subredes)}).")
+    nucleo = [{v: k for k, v in NOMBRES.items()}.get(x.strip(), x.strip()) for x in arg.nucleo.split(",") if x.strip()] if arg.nucleo else None
+    if not acceso and not plan:
         if arg.aplicar:
             log(f"NO ARRANCO con --aplicar: falta {arg.acceso}. Créalo con --generar-acceso (con la red completa).")
             return 2
@@ -301,7 +318,7 @@ def main(argv=None):
     salud = (lambda: consultar_salud(arg.respaldo_de)) if arg.respaldo_de else None
     v = Vigilante(onos, PREFERIDOS, acceso, aplicar=arg.aplicar, estable_s=arg.estable, min_intervalo_s=arg.min_intervalo,
                   max_cambios=arg.max_cambios, interruptor=arg.interruptor, log=log, salud_principal=salud, muerto_s=arg.muerto,
-                  hosts_fijos=fijos, copiar_arp=arg.copiar_arp)
+                  hosts_fijos=fijos, copiar_arp=arg.copiar_arp, plan=plan, nucleo=nucleo)
     rol = f"RESPALDO de {arg.respaldo_de} (asume el mando tras {arg.muerto:g}s sin respuesta)" if arg.respaldo_de else "PRINCIPAL"
     if arg.salud_puerto:
         servir_salud(arg.salud_puerto, lambda: {"rol": "respaldo" if arg.respaldo_de else "principal", "ultimo_ciclo": v.ultimo_ciclo,

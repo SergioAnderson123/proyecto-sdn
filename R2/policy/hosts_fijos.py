@@ -6,6 +6,7 @@ Archivo JSON (lista), p. ej. /etc/vigilante/hosts_fijos.json:
 `device` puede ser el nombre (borde, core-1, core-2, acc-1, acc-2) o el deviceId `of:...`. Un archivo mal formado detiene el arranque: es
 preferible no arrancar a ignorar en silencio un servidor.
 """
+import ipaddress
 import json
 import re
 
@@ -31,10 +32,17 @@ def cargar(ruta, nombres=None):
         dev = por_nombre.get(dev, dev)
         if not _MAC.match(mac):
             raise ValueError(f"{ruta}: MAC inválida en el host #{i + 1}: {mac}")
-        if not dev.startswith("of:"):
+        if dev not in nombres and not dev.startswith("of:"):
             raise ValueError(f"{ruta}: dispositivo desconocido en el host #{i + 1}: {h['device']}")
         if mac.upper() in vistas:
             raise ValueError(f"{ruta}: MAC repetida: {mac}")
         vistas.add(mac.upper())
-        salida.append({"mac": mac.upper(), "device": dev, "port": puerto, "ips": [], "nombre": h.get("nombre", mac)})
+        ips = []
+        if h.get("ip"):                                    # opcional: necesaria en capa 3 (las reglas de entrega son por IP)
+            try:
+                ipaddress.IPv4Address(str(h["ip"]))
+            except ValueError:
+                raise ValueError(f"{ruta}: IP inválida en el host #{i + 1}: {h['ip']}")
+            ips = [str(h["ip"])]
+        salida.append({"mac": mac.upper(), "device": dev, "port": puerto, "ips": ips, "nombre": h.get("nombre", mac)})
     return salida

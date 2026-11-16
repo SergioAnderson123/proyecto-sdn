@@ -13,6 +13,7 @@ import json
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import caminos as c
+import capa3 as l3
 import flujos_proactivos as fp
 
 PRIO_DIFUSION = fp.PRIO_DIFUSION
@@ -77,8 +78,43 @@ def clave(f: dict) -> Tuple:
         if i["type"] == "OUTPUT":
             salidas.append(str(i["port"]))
         else:
+            if "mac" in i:                                     # ONOS puede devolver la MAC de una instrucción en minúsculas
+                i = dict(i, mac=str(i["mac"]).upper())
             otras.append(json.dumps(i, sort_keys=True))
     return (f["deviceId"], int(f["tableId"]), int(f["priority"]), criterios, tuple(sorted(salidas)), tuple(sorted(otras)))
+
+
+# ---------- capa 3 (subredes) ----------
+def hosts_con_ip(plan, hosts: Iterable[dict]) -> List[dict]:
+    """Cada host con UNA IP: la primera de las suyas (ONOS entrega `ips`) que caiga en una subred del plan, o su `ip` fija. Sin IP conocida el host no recibe reglas (falla cerrado)."""
+    salida = []
+    for h in hosts:
+        ip = next((i for i in h.get("ips", []) if plan.subred_de(i)), None) or h.get("ip")
+        salida.append(dict(h, ip=ip))
+    return salida
+
+
+def plan_vivo(plan, grafo: c.Grafo):
+    """El plan sin las subredes cuyo switch no está vivo (un switch caído no debe impedir calcular el resto; sus hosts quedan sin camino, que es lo correcto)."""
+    vivas = [s for s in plan.subredes if s.dispositivo in grafo]
+    return l3.Plan(plan.gw_mac, vivas) if vivas else None
+
+
+def flujos_deseados_capa3(grafo: c.Grafo, hosts: Iterable[dict], plan, preferidos: Iterable[str], nucleo: Optional[Iterable[str]] = None) -> List[dict]:
+    """Los flujos que el vigilante debe mantener en capa 3: rutas por prefijo, entrega por host, reenvío local por MAC, ARP local y descarte. SIN el ARP del gateway (estático: lo instala otro mecanismo)."""
+    vivo = plan_vivo(plan, grafo)
+    if vivo is None:
+        return fp.flujos_descarte(grafo.keys())
+    return l3.flujos_capa3(vivo, grafo, hosts_con_ip(vivo, hosts), list(preferidos), nucleo=nucleo, arp_gateway=False)
+
+
+def altas_puras_capa3(dif: Dict[str, List[dict]]) -> bool:
+    """¿El cambio son SOLO reglas de host (reenvío local por MAC, prioridad 100, o entrega por IP /32, prioridad 160) y no hay nada que borrar?
+
+    Una regla de host termina en el puerto del host de ese mismo switch: no puede formar un lazo ni cambia ninguna ruta existente, así que se aplica de inmediato."""
+    if dif["borrar"] or not dif["agregar"]:
+        return False
+    return all(int(f["tableId"]) == fp.TABLA_REENVIO and int(f["priority"]) in (l3.PRIO_L2_LOCAL, l3.PRIO_ENTREGA) for f in dif["agregar"])
 
 
 def diferencia(deseados: Iterable[dict], instalados: Iterable[dict]) -> Dict[str, List[dict]]:
