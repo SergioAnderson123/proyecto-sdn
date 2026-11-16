@@ -1,0 +1,29 @@
+# SOLO LECTURA: ¿qué hosts conoce ONOS y cuáles de las sesiones 802.1X están entre ellos? Decide si la fase E necesita --copiar-arp en el vigilante.
+#   PLAYBOOK=71_consulta_hosts.yml ./lanzar.sh
+#   PLAYBOOK=71_consulta_hosts.yml ./lanzar.sh -e guardar=/tmp/hosts_antes.json    # además guarda el JSON (para comparar antes/después de un login)
+# Pasos del experimento y qué mirar: encabezado de R2/policy/consultar_hosts.py. No cambia nada en ONOS ni en los switches.
+- name: Consulta de hosts de ONOS (lectura)
+  hosts: borde
+  gather_facts: false
+  vars:
+    guardar: ""
+    carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
+    nodos_onos: "{{ onos_nodos | map('regex_replace', '^', 'http://') | map('regex_replace', '$', ':8181') | join(',') }}"
+  tasks:
+    - name: Consultar
+      ansible.builtin.command:
+        cmd: "python3 consultar_hosts.py --onos {{ nodos_onos }}"
+        chdir: "{{ carpeta_codigo }}"
+      register: consulta
+      changed_when: false
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ consulta.stdout_lines }}"
+
+    - name: Guardar el JSON
+      ansible.builtin.shell: "python3 consultar_hosts.py --onos {{ nodos_onos }} --json > {{ guardar }}"
+      args:
+        chdir: "{{ carpeta_codigo }}"
+      changed_when: false
+      when: guardar | length > 0
