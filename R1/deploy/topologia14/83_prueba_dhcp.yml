@@ -20,13 +20,16 @@
         dest: /tmp/cliente_dhcp_prueba.py
         mode: "0755"
 
-    - name: Quitar restos de una prueba anterior
+    - name: Quitar restos de una prueba anterior (etiqueta limpiar, para solo limpiar usar --tags limpiar)
       ansible.builtin.shell:
         cmd: |
-          pkill -TERM -f '[c]liente_dhcp_prueba.py' 2>/dev/null; sleep 2
+          touch /tmp/dhcp_prueba_parar; sleep 3
+          pkill -TERM -f '[c]liente_dhcp_prueba.py' 2>/dev/null; sleep 1
           for i in 1 2 3 4 5 6; do ip link del dhc$i 2>/dev/null; rm -f /tmp/dhcp_prueba_dhc$i.json /tmp/dhc$i.log; done
+          rm -f /tmp/dhcp_prueba_parar
           true
       changed_when: false
+      tags: [probar, limpiar]
 
     - name: Crear las interfaces macvlan de prueba
       ansible.builtin.shell:
@@ -108,44 +111,49 @@
   vars:
     prueba: una
   tasks:
-    - name: Prueba agotamiento, parar los clientes con SIGTERM (cada uno libera su IP antes de salir)
-      ansible.builtin.shell:
-        cmd: "pkill -TERM -f '[c]liente_dhcp_prueba.py' 2>/dev/null; sleep 2; true"
-      changed_when: false
-      when: prueba == 'agotamiento'
+    - name: Parar, esperar el RELEASE y mostrar el registro
+      block:
+        - name: Prueba agotamiento, pedir la parada ordenada (cada cliente envia su RELEASE y termina; sin senales para no matar el shell de Ansible)
+          ansible.builtin.shell:
+            cmd: "touch /tmp/dhcp_prueba_parar; sleep 3"
+          changed_when: false
+          when: prueba == 'agotamiento'
 
-    - name: Esperar a que terminen los clientes (ya enviaron su RELEASE)
-      ansible.builtin.async_status:
-        jid: "{{ item.ansible_job_id }}"
-      loop: "{{ clientes.results }}"
-      register: fin
-      until: fin.finished
-      retries: 40
-      delay: 2
+        - name: Esperar a que terminen los clientes (ya enviaron su RELEASE)
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ clientes.results }}"
+          register: fin
+          until: fin.finished
+          retries: 40
+          delay: 2
 
-    - name: Registro de cada cliente (debe decir RELEASE enviado)
-      ansible.builtin.shell:
-        cmd: "for i in 1 2 3 4 5 6; do [ -f /tmp/dhc$i.log ] && echo \"dhc$i: $(tr '\\n' '|' < /tmp/dhc$i.log)\"; done; true"
-      register: registros
-      changed_when: false
+        - name: Registro de cada cliente (debe decir RELEASE enviado)
+          ansible.builtin.shell:
+            cmd: "for i in 1 2 3 4 5 6; do [ -f /tmp/dhc$i.log ] && echo \"dhc$i: $(tr '\\n' '|' < /tmp/dhc$i.log)\"; done; true"
+          register: registros
+          changed_when: false
 
-    - name: Lo que hizo cada cliente
-      ansible.builtin.debug:
-        msg: "{{ registros.stdout_lines }}"
+        - name: Lo que hizo cada cliente
+          ansible.builtin.debug:
+            msg: "{{ registros.stdout_lines }}"
+      always:
+        - name: Borrar las interfaces y archivos de prueba
+          ansible.builtin.shell:
+            cmd: |
+              touch /tmp/dhcp_prueba_parar; sleep 1
+              for i in 1 2 3 4 5 6; do ip link del dhc$i 2>/dev/null; rm -f /tmp/dhcp_prueba_dhc$i.json /tmp/dhc$i.log; done
+              rm -f /tmp/cliente_dhcp_prueba.py /tmp/dhcp_prueba_parar
+              echo "interfaces dhc que quedan: $(ip -br link show | grep -c dhc)"
+              echo "direcciones de ens4: $(ip -4 -o addr show dev ens4 | awk '{print $4}' | tr '\n' ' ')"
+          register: limpio
+          changed_when: true
+          tags: [probar, limpiar]
 
-    - name: Borrar las interfaces y archivos de prueba
-      ansible.builtin.shell:
-        cmd: |
-          for i in 1 2 3 4 5 6; do ip link del dhc$i 2>/dev/null; rm -f /tmp/dhcp_prueba_dhc$i.json /tmp/dhc$i.log; done
-          rm -f /tmp/cliente_dhcp_prueba.py
-          echo "interfaces dhc que quedan: $(ip -br link show | grep -c dhc)"
-          echo "direcciones de ens4: $(ip -4 -o addr show dev ens4 | awk '{print $4}' | tr '\n' ' ')"
-      register: limpio
-      changed_when: true
-
-    - name: Estado tras limpiar (h1 conserva su IP real)
-      ansible.builtin.debug:
-        msg: "{{ limpio.stdout_lines }}"
+        - name: Estado tras limpiar (h1 conserva su IP real)
+          ansible.builtin.debug:
+            msg: "{{ limpio.stdout_lines }}"
+          tags: [probar, limpiar]
 
 - name: Prueba DHCP, paso 4 - ONOS tras los RELEASE (las IP deben haberse retirado)
   hosts: borde

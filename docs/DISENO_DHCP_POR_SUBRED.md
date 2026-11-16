@@ -100,3 +100,12 @@ Cliente de prueba propio en una macvlan de h1 (MAC 02:aa:bb:00:01:01, entra por 
 - Camino hasta aquí: dhclient no sirvió (AppArmor impedía su guion y no liberaba), y el cliente lanzado con `nohup` moría al cerrarse la tarea de Ansible; con `async` de Ansible llega a liberar.
 
 **Ideas diferidas por decisión del equipo (no se hacen ahora):** (1) usar las señales de R1 (logoff y link-down que ya quitan la sesión de un equipo autenticado) para liberar también su concesión DHCP; (2) acortar la concesión (p. ej. 300 s) para acotar las IP de equipos que desaparecen sin avisar, a cambio de más renovaciones.
+
+### 9 bis. La defensa contra el agotamiento en vivo (16-nov, `83_prueba_dhcp.yml -e prueba=agotamiento`)
+
+Seis clientes con MAC distintas (02:aa:bb:00:01:01 a 06) por el mismo puerto (acc-1/1), a la vez:
+- **3 de 6 recibieron IP** (`10.0.1.100`, `.101`, `.102`, concesión 900 s); los otros 3 quedaron en `SIN_OFERTA`: la **cuota por puerto** (3) hizo su trabajo.
+- ONOS listó los 6 equipos pero **solo los 3 con IP** tienen regla de entrega /32; el log de la app trae `cuota del puerto of:0000e6925d87354b/1 agotada` (limitado a un aviso cada 10 s por puerto y motivo, para que una inundación no llene el log).
+- La respuesta correcta frente a un atacante que pide con MAC falsas: solo ocupa 3 de las 100 IP de su subred y nada más.
+
+Cabos sueltos de la prueba: (a) el playbook paraba los clientes con `pkill`, que también mataba el shell de Ansible (`rc -15`) y abortaba antes de limpiar; ahora la parada es por un archivo (`/tmp/dhcp_prueba_parar`) y la limpieza va en un bloque `always` (y se puede lanzar sola con `--tags limpiar`); (b) el log de la app muestra avisos periódicos `chaddr distinto de la MAC de origen` por el puerto de h1 **fuera** de la prueba, de un emisor de DHCP de h1 que no es el cliente de prueba: pendiente de identificar con `tcpdump` en h1 (puede ser un cliente DHCP del propio h1; la defensa lo rechaza correctamente).
