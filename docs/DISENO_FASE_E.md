@@ -103,7 +103,7 @@ host-jhon cuelga del borde: se trata como **un usuario más** (tablas de rol y c
    las dos. Además, Linux puede descartar paquetes que llegan por la segunda tarjeta si `rp_filter` es estricto (ver 6).
 5. **Los servicios en una sola VM, con UNA sola IP (decidido).** La política ya distingue los servicios por **IP y puerto TCP** (todos los puertos son únicos:
    8001-8003, 8101-8105, portal 8443); la tabla 60 solo mira la **MAC** de destino. El server tendrá **una única IP de servicios**: se propone **10.0.0.10**
-   (fuera del rango DHCP 100-199 y distinta del servidor DHCP .250; falta comprobar que está libre). Todos los servicios y el portal pasan a esa IP, cada
+   (fuera del rango DHCP 100-199 y distinta del servidor DHCP .250; **comprobado 16-nov: ens4 y ens5 del server no tienen IP de datos**; se asigna en `ens4` y Linux contesta el ARP también por `ens5`, con `rp_filter=2` ya aplicado). Todos los servicios y el portal pasan a esa IP, cada
    uno con su puerto. El cambio va en el `policy.local.yaml` de este slice (que ya mezcla sobre `policy.yaml`): el laboratorio de Mininet conserva sus .40/.50/.60.
 
 ### 3.5 R5
@@ -174,3 +174,10 @@ sigue descartado. Es un cambio pequeño en `flujos_tabla_rol` y se hace después
   (cuarentena o sesión).
 - Para meter Internet bajo la política de R2 haría falta un **gateway L3 en el borde** (puerto interno de `br0` con IP y NAT) y el `internet` como servicio.
   Queda fuera de la fase E.
+
+### 11.1 host-jhon como atacante externo (aclaración del equipo)
+host-jhon entra por el puerto 1 del borde; en el plano de datos **no tiene privilegios especiales**: sin sesión queda en cuarentena (solo DHCP, ARP y TCP al
+portal); para salir de ahí necesita un certificado válido (802.1X) o credenciales de invitado en el portal, y entonces solo alcanza lo que la matriz permite a su
+rol. Un MAC clonado o una suplantación acaban en la lista negra; el tráfico del perímetro se espeja al IDS del borde (R5), que puede bloquear su IP y revocar
+la sesión. En la fase E el puerto 1 del borde **no es de confianza** (pasa por las tablas de rol y la cuarentena) y solo sus troncales entregan IPv4 a la tabla 60.
+Pendiente de decidir si la cuarentena debe seguir dando IP por DHCP a un equipo externo.
