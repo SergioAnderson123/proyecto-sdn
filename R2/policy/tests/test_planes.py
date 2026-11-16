@@ -81,21 +81,29 @@ def test_en_la_topologia_real_el_arp_del_gateway_se_contesta_en_el_acceso_y_ning
 def test_la_plantilla_de_pabellones_carga_sin_solapes_y_cada_pabellon_agrega_a_su_16():
     filas = gp.construir()
     plan = l3.cargar_plan(gp.a_json(filas))
-    assert len(plan.subredes) == 56 and len([f for f in filas if f["pabellon"] != "—"]) == 54
+    assert len(plan.subredes) == 33 and len([f for f in filas if f["pabellon"] != "—"]) == 31
     for pab, d in gp.PABELLONES.items():
         bloque = ipaddress.ip_network(f"10.{d['id']}.0.0/16")
         propias = [s for s, f in zip(plan.subredes, filas) if f["pabellon"] == pab]
-        assert len(propias) == d["pisos"] * d["switches_por_piso"] and all(s.prefijo.subnet_of(bloque) for s in propias)
+        assert len(propias) == sum(d["switches"]) and all(s.prefijo.subnet_of(bloque) for s in propias)
     for s in plan.subredes:
         assert not any(s.prefijo.overlaps(o) for o in OCUPADAS)
 
 
 def test_un_pabellon_con_mas_de_254_switches_de_acceso_se_rechaza():
     with pytest.raises(ValueError):
-        gp.construir({"X": {"id": 90, "pisos": 100, "switches_por_piso": 3}}, [])
+        gp.construir({"X": {"id": 90, "switches": [3] * 100}}, [])
 
 
 def test_la_zona_generada_del_documento_esta_al_dia():
     doc = open(os.path.join(RAIZ, "docs", "PLAN_DIRECCIONAMIENTO.md"), encoding="utf-8").read()
     zona = doc.split(gp.INICIO, 1)[1].split(gp.FIN, 1)[0].strip()
     assert zona == gp.tablas(gp.construir()).strip(), "regenera con: python3 R2/policy/planes/generar_plan_pabellones.py --doc docs/PLAN_DIRECCIONAMIENTO.md"
+
+
+def test_los_pisos_dados_por_el_equipo_estan_en_la_plantilla():
+    """V 3 pisos (más switches en el 3.º), CIA 4, A 8 (pocos equipos), O 5."""
+    pisos = {pab: len(d["switches"]) for pab, d in gp.PABELLONES.items()}
+    assert pisos == {"V": 3, "CIA": 4, "A": 8, "O": 5}
+    assert gp.PABELLONES["V"]["switches"][2] > max(gp.PABELLONES["V"]["switches"][:2])          # el 3.º de V tiene más switches
+    assert max(gp.PABELLONES["A"]["switches"]) == 1                                              # A tiene pocos equipos

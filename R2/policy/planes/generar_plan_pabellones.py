@@ -5,7 +5,7 @@
     python3 generar_plan_pabellones.py --doc ../../docs/PLAN_DIRECCIONAMIENTO.md     # reescribe la zona generada del documento
     python3 generar_plan_pabellones.py --config campus.json  # con los datos REALES (pabellones, pisos, switches por piso)
 
-LOS NÚMEROS DE PISOS Y SWITCHES DE `PABELLONES` SON SUPUESTOS DE EJEMPLO, no datos del campus: se reemplazan con `--config`.
+Datos dados por el equipo: pisos de cada pabellón y que V tiene varios equipos en el 3.º y A pocos. Los switches por piso son SUPUESTOS (se reemplazan con `--config`).
 Esquema: 10.<id del pabellón>.<n del switch de acceso>.0/24 (un /24 por switch de acceso; cada pabellón agrega a un /16), gateway virtual .254, DHCP .100-.199.
 """
 import argparse
@@ -13,11 +13,11 @@ import ipaddress
 import json
 import sys
 
-PABELLONES = {                      # SUPUESTOS de ejemplo (id = segundo octeto)
-    "V": {"id": 10, "pisos": 6, "switches_por_piso": 2},
-    "CIA": {"id": 20, "pisos": 8, "switches_por_piso": 3},
-    "A": {"id": 30, "pisos": 5, "switches_por_piso": 2},
-    "O": {"id": 40, "pisos": 4, "switches_por_piso": 2},
+PABELLONES = {                      # id = segundo octeto; `switches` = switches de acceso de cada piso (una entrada por piso)
+    "V": {"id": 10, "switches": [1, 1, 3]},         # DATO: 3 pisos, varios equipos en el 3.º. SUPUESTO: 1 switch en los pisos 1 y 2 y 3 en el 3.º
+    "CIA": {"id": 20, "switches": [2, 2, 2, 2]},    # DATO: 4 pisos. SUPUESTO: 2 switches por piso
+    "A": {"id": 30, "switches": [1] * 8},           # DATO: 8 pisos con pocos equipos. SUPUESTO: 1 switch por piso
+    "O": {"id": 40, "switches": [2] * 5},           # DATO: 5 pisos. SUPUESTO: 2 switches por piso
 }
 ESPECIALES = [      # (nombre, switch, prefijo, descripción)
     ("servicios", "DC-SW1", "10.1.0.0/24", "Centro de datos: portal, LDAP, RADIUS, servicios académicos"),
@@ -39,8 +39,8 @@ def construir(pabellones=None, especiales=None, puertos=PUERTOS_USUARIO):
                       "pabellon": "—", "piso": "—"})
     for pab, d in pabellones.items():
         n = 0
-        for piso in range(1, d["pisos"] + 1):
-            for k in range(1, d["switches_por_piso"] + 1):
+        for piso, cuantos in enumerate(d["switches"], start=1):
+            for k in range(1, cuantos + 1):
                 n += 1
                 if n > 254:
                     raise ValueError(f"el pabellón {pab} necesita más de 254 subredes de acceso")
@@ -56,13 +56,13 @@ def a_json(filas):
 def tablas(filas, pabellones=None, especiales=None, puertos=PUERTOS_USUARIO):
     pabellones = PABELLONES if pabellones is None else pabellones
     especiales = ESPECIALES if especiales is None else especiales
-    t = ["### Resumen por pabellón (supuestos de ejemplo)", "",
-         "| Pabellón | Id | Bloque agregado | Pisos | Switches por piso | Subredes de acceso | Hosts máx. (48 por switch) |", "|---|---|---|---|---|---|---|"]
+    t = ["### Resumen por pabellón (pisos: dato; switches por piso: supuesto)", "",
+         "| Pabellón | Id | Bloque agregado | Pisos | Switches de acceso por piso | Subredes de acceso | Hosts máx. (48 por switch) |", "|---|---|---|---|---|---|---|"]
     total = 0
     for pab, d in pabellones.items():
-        subs = d["pisos"] * d["switches_por_piso"]
+        subs = sum(d["switches"])
         total += subs
-        t.append(f"| {pab} | {d['id']} | `10.{d['id']}.0.0/16` | {d['pisos']} | {d['switches_por_piso']} | {subs} | {subs * puertos:,} |")
+        t.append(f"| {pab} | {d['id']} | `10.{d['id']}.0.0/16` | {len(d['switches'])} | {', '.join(str(x) for x in d['switches'])} | {subs} | {subs * puertos:,} |")
     t += [f"| **Total** | | `10.0.0.0/8` | | | **{total}** | **{total * puertos:,}** |", "",
           "### Subredes especiales", "", "| Subred | Switch | Prefijo | Gateway | Uso |", "|---|---|---|---|---|"]
     for nombre, sw, prefijo, desc in especiales:
