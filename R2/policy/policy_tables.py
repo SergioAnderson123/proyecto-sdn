@@ -31,6 +31,9 @@ PRIO_PORTAL = 35000          # tráfico al portal y desvío del HTTP; bajo la se
 PRIO_DHCP = 40500            # DHCP del cliente (UDP 68 -> 67) al controlador: sobre la sesión (40001), si no la tabla de rol lo descarta; bajo la lista negra
 PRIO_CUARENTENA = 1000       # todo lo que no tiene sesión ni otra regla: a la tabla de cuarentena (solo ARP y portal)
 TABLA_CUARENTENA = 99        # tabla/VLAN de cuarentena si policy.yaml no dice otra
+PRIO_DESCUBRIMIENTO = 40100  # LLDP/BDDP al controlador: sobre la confianza (40001), el portal (40002) y el ARP (40003); solo con reenvio proactivo
+PRIO_DHCP_EXTERNO = 40600    # DROP del DHCP del cliente en los puertos externos (por ejemplo host-jhon en el borde): sobre el DHCP (40500) y la regla de ONOS (40000)
+TABLA_REENVIO = 60           # tabla de reenvío proactivo (flujos unicast y difusión por árbol: R2/policy/flujos_proactivos.py)
 
 
 def _fusionar(base: dict, extra: dict) -> dict:
@@ -134,6 +137,24 @@ _SALIDA = [
 ]
 
 
+def reenvio_proactivo(politica: dict) -> bool:
+    """`reenvio: proactivo` en policy.yaml: lo permitido se entrega por la tabla 60 en vez de `OUTPUT NORMAL` (que inunda y forma tormentas con lazos).
+    Por defecto `normal`: el laboratorio de Mininet (sin lazos) no cambia."""
+    return str(politica.get("reenvio", "normal")).lower() == "proactivo"
+
+
+def _normal(politica: dict) -> List[dict]:
+    """Cómo se entrega un paquete ya permitido: `NORMAL` (aprende e inunda) o, en modo proactivo, a la tabla de reenvío."""
+    if reenvio_proactivo(politica):
+        return [{"type": "TABLE", "tableId": TABLA_REENVIO}]
+    return [{"type": "OUTPUT", "port": "NORMAL"}]
+
+
+def _salida(politica: dict) -> List[dict]:
+    """Lo mismo, quitando antes la etiqueta VLAN (los hosts no hablan 802.1Q)."""
+    return [{"type": "L2MODIFICATION", "subtype": "VLAN_POP"}] + _normal(politica)
+
+
 def flujos_tabla_rol(politica: dict, dpid: str, rol: str, tabla: int) -> List[dict]:
     """Flujos de la tabla de un rol de LDAP/RADIUS (por ejemplo 'docente')."""
     rol_matriz = politica["roles"][rol]["matriz"]
@@ -141,7 +162,8 @@ def flujos_tabla_rol(politica: dict, dpid: str, rol: str, tabla: int) -> List[di
     # VLAN_VID es obligatorio: OVS rechaza pop_vlan (MATCH_INCONSISTENT) si el match no garantiza que el paquete lleva etiqueta.
     # La tabla de un rol coincide con su VLAN (el flujo de sesión hizo push_vlan con ese id).
     vlan = {"type": "VLAN_VID", "vlanId": tabla}
-    flujos = [_base(dpid, tabla, PRIO_ROL, [vlan, {"type": "ETH_TYPE", "ethType": "0x0806"}], _SALIDA)]  # ARP
+    salida = _salida(politica)     # NORMAL, o la tabla 60 con reenvio: proactivo
+    flujos = [_base(dpid, tabla, PRIO_ROL, [vlan, {"type": "ETH_TYPE", "ethType": "0x0806"}], salida)]  # ARP
     for nombre, ok in sorted(permitidos.items()):
         srv = politica["services"].get(nombre)
         if not ok or not srv:
@@ -152,24 +174,47 @@ def flujos_tabla_rol(politica: dict, dpid: str, rol: str, tabla: int) -> List[di
             {"type": "IP_PROTO", "protocol": 6},
             {"type": "IPV4_DST", "ip": f"{srv['ip']}/32"},
             {"type": "TCP_DST", "tcpPort": int(srv["tcp"])},
-        ], _SALIDA))
+        ], salida))
     portal = politica.get("portal")
     if portal:   # con sesión también debe alcanzarse el portal (para ver el estado y cerrar sesión)
         flujos.append(_base(dpid, tabla, PRIO_ROL, [
             vlan, {"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "IP_PROTO", "protocol": 6},
-            {"type": "IPV4_DST", "ip": f"{portal['ip']}/32"}, {"type": "TCP_DST", "tcpPort": int(portal["puerto"])}], _SALIDA))
+            {"type": "IPV4_DST", "ip": f"{portal['ip']}/32"}, {"type": "TCP_DST", "tcpPort": int(portal["puerto"])}], salida))
     flujos.append(_base(dpid, tabla, 0, [], []))   # sin instrucciones = DROP explícito
     return flujos
 
 
 def flujos_confianza(politica: dict, dpid: str) -> List[dict]:
+    """Puertos de confianza (servidores y troncales): su tráfico no pasa por las tablas de rol.
+
+    Con `reenvio: proactivo` la confianza SOLO cubre IPv4 y entrega a la tabla 60: la regla `in_port -> NORMAL` de siempre (40001) gana a la de ONOS que
+    sube LLDP/BDDP al controlador (40000) y se tragaría el descubrimiento de enlaces; el ARP va por la regla 40003 y EAPOL/LLDP/BDDP nunca entran aquí."""
     t = politica["trusted"].get(dpid)
     if not t:
         return []
-    salida = [{"type": "OUTPUT", "port": "NORMAL"}]
+    salida = _normal(politica)
+    ipv4 = [{"type": "ETH_TYPE", "ethType": "0x0800"}] if reenvio_proactivo(politica) else []
     if t == "all":
-        return [_base(dpid, 0, PRIO_CONFIANZA, [], salida)]
-    return [_base(dpid, 0, PRIO_CONFIANZA, [{"type": "IN_PORT", "port": int(p)}], salida) for p in t]
+        return [_base(dpid, 0, PRIO_CONFIANZA, ipv4, salida)]
+    return [_base(dpid, 0, PRIO_CONFIANZA, [{"type": "IN_PORT", "port": int(p)}] + ipv4, salida) for p in t]
+
+
+def flujos_descubrimiento(politica: dict, dpid: str) -> List[dict]:
+    """Refuerzo (solo con reenvío proactivo): LLDP (0x88cc) y BDDP (0x8942) al controlador a prioridad 40100, sobre la confianza, el portal y el ARP.
+    Sin ellos ONOS no vería los cables y el vigilante creería que se cayeron."""
+    if not reenvio_proactivo(politica):
+        return []
+    return [_base(dpid, 0, PRIO_DESCUBRIMIENTO, [{"type": "ETH_TYPE", "ethType": et}], [{"type": "OUTPUT", "port": "CONTROLLER"}])
+            for et in ("0x88cc", "0x8942")]
+
+
+def flujos_dhcp_externo(politica: dict, dpid: str) -> List[dict]:
+    """Los equipos de un puerto EXTERNO (`puertos_externos` en policy.yaml: por ejemplo host-jhon, el atacante externo simulado, en el borde) no obtienen IP por DHCP:
+    su DHCP del cliente se descarta (40600), sobre la regla de R2 (40500) y la de ONOS (40000). Pueden seguir autenticando por 802.1X o por el portal."""
+    puertos = (politica.get("puertos_externos") or {}).get(dpid, []) or []
+    return [_base(dpid, 0, PRIO_DHCP_EXTERNO, [
+        {"type": "IN_PORT", "port": int(p)}, {"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "IP_PROTO", "protocol": 17},
+        {"type": "UDP_SRC", "udpPort": 68}, {"type": "UDP_DST", "udpPort": 67}], []) for p in puertos]
 
 
 def flujos_dhcp(dpid: str) -> List[dict]:
@@ -191,16 +236,17 @@ def flujos_cuarentena(politica: dict, dpid: str) -> List[dict]:
     if tabla is None:
         return []
     vlan = {"type": "VLAN_VID", "vlanId": tabla}
+    salida = _salida(politica)
     flujos = [_base(dpid, 0, PRIO_CUARENTENA, [], [
         {"type": "L2MODIFICATION", "subtype": "VLAN_PUSH", "ethernetType": "0x8100"},
         {"type": "L2MODIFICATION", "subtype": "VLAN_ID", "vlanId": tabla},
         {"type": "TABLE", "tableId": tabla}]),
-        _base(dpid, tabla, PRIO_ROL, [vlan, {"type": "ETH_TYPE", "ethType": "0x0806"}], _SALIDA)]
+        _base(dpid, tabla, PRIO_ROL, [vlan, {"type": "ETH_TYPE", "ethType": "0x0806"}], salida)]
     portal = politica.get("portal")
     if portal:
         flujos.append(_base(dpid, tabla, PRIO_ROL, [
             vlan, {"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "IP_PROTO", "protocol": 6},
-            {"type": "IPV4_DST", "ip": f"{portal['ip']}/32"}, {"type": "TCP_DST", "tcpPort": int(portal["puerto"])}], _SALIDA))
+            {"type": "IPV4_DST", "ip": f"{portal['ip']}/32"}, {"type": "TCP_DST", "tcpPort": int(portal["puerto"])}], salida))
     flujos.append(_base(dpid, tabla, 0, [], []))   # sin instrucciones = DROP explícito
     return flujos
 
@@ -216,12 +262,13 @@ def flujos_portal(politica: dict, dpid: str) -> List[dict]:
         return []
     ip, mac, puerto = p["ip"], p["mac"], int(p["puerto"])
     tcp = [{"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "IP_PROTO", "protocol": 6}]
-    normal = [{"type": "OUTPUT", "port": "NORMAL"}]
+    normal = _normal(politica)     # NORMAL, o la tabla 60 con reenvio: proactivo (tras reescribir eth_dst, la tabla 60 reenvía por la MAC nueva)
     flujos = []
     # El REST de ONOS 2.7 no sabe emparejar ARP_TPA: se permite el ARP en general (solo resuelve direcciones; no lleva datos).
     # NORMAL lo resuelve; CONTROLLER deja que ONOS aprenda al host (el portal necesita su ubicación).
+    copia = [{"type": "OUTPUT", "port": "CONTROLLER"}]
     flujos.append(_base(dpid, 0, PRIO_PORTAL_ARP, [{"type": "ETH_TYPE", "ethType": "0x0806"}],
-                        normal + [{"type": "OUTPUT", "port": "CONTROLLER"}]))
+                        copia + normal if reenvio_proactivo(politica) else normal + copia))
     for pt_ in [puerto] + [int(d["puerto_portal"]) for d in p.get("desvios", [])]:
         flujos.append(_base(dpid, 0, PRIO_PORTAL, tcp + [{"type": "IPV4_DST", "ip": f"{ip}/32"},
                                                          {"type": "TCP_DST", "tcpPort": pt_}], normal))
@@ -244,9 +291,10 @@ def flujos_portal(politica: dict, dpid: str) -> List[dict]:
 
 def flujos_dispositivo(politica: dict, dpid: str) -> List[dict]:
     """Todo lo que R2 instala en un switch. Los de confianza total no llevan tablas de rol (no tienen usuarios)."""
-    flujos = flujos_confianza(politica, dpid) + flujos_portal(politica, dpid)
-    if politica["trusted"].get(dpid) != "all":
-        flujos += flujos_dhcp(dpid) + flujos_cuarentena(politica, dpid)
+    flujos = flujos_confianza(politica, dpid) + flujos_portal(politica, dpid) + flujos_descubrimiento(politica, dpid)
+    if politica["trusted"].get(dpid) != "all" and dpid not in (politica.get("sin_usuarios") or []):
+        # `sin_usuarios`: switches de infraestructura (los cores) sin puertos de usuario: no llevan DHCP, cuarentena ni tablas de rol
+        flujos += flujos_dhcp(dpid) + flujos_dhcp_externo(politica, dpid) + flujos_cuarentena(politica, dpid)
         for rol, datos in politica["roles"].items():
             flujos += flujos_tabla_rol(politica, dpid, rol, int(datos["tabla"]))
     return flujos
