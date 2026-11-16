@@ -236,7 +236,14 @@
       ansible.builtin.shell:
         cmd: |
           for gw in {{ gateways[inventory_hostname] | join(' ') }}; do
-            r=$(arping -c 2 -w 3 -I ens4 "$gw" 2>&1 | grep -i 'reply from' | head -1)
+            if command -v arping >/dev/null 2>&1; then
+              r=$(arping -c 2 -w 3 -I ens4 "$gw" 2>&1 | grep -i 'reply from' | head -1)
+            else
+              ip neigh del "$gw" dev ens4 2>/dev/null
+              ping -c 2 -W 1 -I ens4 "$gw" >/dev/null 2>&1
+              r=$(ip neigh show "$gw" dev ens4 | grep -i lladdr | head -1)
+              [ -n "$r" ] && r="vecino (sin arping): $r"
+            fi
             echo "$gw -> ${r:-SIN RESPUESTA}"
           done
       register: arp_gw
