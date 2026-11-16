@@ -53,6 +53,27 @@ Vive en `node-ctrl-3` como servicio `systemd` (`R1/deploy/topologia14/65_vigilan
 - **Probado en vivo (15-nov-2026):** cable acc-2↔core-1 caído (cambio aplicado en ~16 s, ARP funcionando, sin tormenta) y switch sw-core-2 caído (OVS parado: ONOS lo da por no disponible, solo core-1 cambia, -5 +4; al volver ONOS le reinstaló sus flujos, incluida la regla 40003 de la tabla 0, y el vigilante restauró core-1).
 - **Limitaciones:** si la red queda partida no hace nada; los flujos de la tabla 0 (fase C) no los gestiona (en la prueba del switch ONOS los restauró solo); "switch no disponible en ONOS" no equivale a plano de datos caído (con fail-mode secure un switch sin controlador conserva sus flujos).
 
+## Alternativas consideradas: intents y VPLS de ONOS
+**Cómo funciona un intent.** Se declara una conectividad de alto nivel (por ejemplo `HostToHostIntent` entre dos hosts, o `PointToPointIntent` entre dos puertos) y ONOS la convierte en flujos: (1) *compilación*: calcula el camino con la topología que conoce; (2) *instalación*: manda los flujos a los switches; (3) *seguimiento*: si cae un enlace del camino, ONOS recompila el intent y lo reinstala por otro camino. Los hay de un punto a varios (`SinglePointToMultiPointIntent`) y de varios a un punto (`MultiPointToSinglePointIntent`).
+
+**VPLS** (la app `org.onosproject.vpls` ya está activa en nuestro ONOS) construye exactamente eso para un dominio L2 (comprobado en el código de ONOS 2.7, `VplsIntentUtility`): para el **broadcast**, un `SinglePointToMultiPointIntent` por cada interfaz (selector `eth_dst=broadcast`: un árbol por origen) y, para el **unicast**, un `MultiPointToSinglePointIntent` por cada host (selector `eth_dst=MAC del host`: un árbol hacia cada destino).
+
+**Conclusión de la comparación: es la misma arquitectura que la nuestra** (unicast = un árbol hacia cada destino; broadcast = árboles que no forman ciclos), con otro dueño del cálculo.
+
+| | Intents / VPLS | Nuestros flujos proactivos |
+|---|---|---|
+| Unicast | un intent por host (árbol hacia el destino) | un árbol por destino: una regla por switch y host |
+| Broadcast | un intent por origen (un árbol por origen) | un árbol compartido con raíz en core-1 (a veces un salto más) |
+| Caídas | ONOS recompila los intents (no probado aquí) | vigilante propio: cable, sw-core-2 y sw-core-1 probados en vivo |
+| Política de R2 | prioridad de flujo 100 por defecto (verificado), bajo las sesiones (40001): habría que rediseñar cómo se componen política y reenvío | las tablas de rol, cuarentena y portal quedan intactas (falta la fase E) |
+| Garantía anti-lazos | la de ONOS; no demostrada por nosotros | simulador sobre cada cable, switch y par de cables + pruebas en vivo |
+
+**Por qué se eligieron flujos propios:** (1) las tormentas son de broadcast y queríamos una garantía demostrable de que ningún estado intermedio duplica la trama; (2) el pipeline de R2 (sesión → rol → reenvío) no encaja con flujos de prioridad 100 en la tabla de entrada sin rediseñarlo; (3) el profesor recomendó flujos proactivos explícitos; (4) un intent por pareja de hosts (HostToHost) crece como H², peor que el plan de capa 3.
+
+**Lo que NO está verificado** (no se ha probado en este slice): cómo resuelve ONOS que dos árboles por origen crucen un mismo switch por el mismo puerto de entrada (es la misma ambigüedad que hizo que usáramos un único árbol compartido); en qué tabla instala el driver de OVS los flujos de un intent; y cuánto tarda en reencaminar.
+
+**Cuándo reconsiderarlo:** si se abandona la política en tablas propias, si solo hiciera falta un dominio L2 sin R2, o si el árbol por origen de VPLS se demuestra sin conflictos. Experimento acotado posible: activar VPLS solo para broadcast en un puerto de prueba, con el freno de emergencia abierto y el diagnóstico 95 antes y después.
+
 ## Puntos por verificar en el entorno real
 - (resuelto) ONOS sí descubre los 7 enlaces por LLDP a través de VNRT.
 - Hay que ejecutar `vista_previa.py` con `edge_ports.txt` real (salida de `edge-ports`) antes de instalar nada.
