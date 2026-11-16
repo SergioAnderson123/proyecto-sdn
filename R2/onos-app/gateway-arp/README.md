@@ -10,6 +10,7 @@ Por qué una app y no el REST: el REST de ONOS 2.7 no acepta los criterios `ARP_
 Por cada `(switch, puerto de acceso, gateway)` de su configuración instala, en la tabla 60 con prioridad 300:
 - **coincidencia:** `in_port` + ARP petición + `ARP_TPA` = IP del gateway;
 - **acciones:** copiar `eth_src`→`eth_dst`, `eth_src` = MAC común del gateway, `arp_op` = respuesta, copiar `sha`→`tha` y `spa`→`tpa`, `sha` = MAC común, `spa` = IP del gateway, salir por el puerto de entrada (opcionalmente, antes, una copia al controlador para que ONOS aprenda al host).
+**Redes mayores:** si un switch de la configuración es Open vSwitch pero ONOS le dejó el driver `default` (ONOS 2.7 solo asigna `ovs` a OVS 2.x; el slice tiene 3.3.x), la app le pone `ovs` por `netcfg` (`basic.driver`) y sigue sola cuando ONOS lo publica; así un switch nuevo funciona con solo agregarlo al plan y regenerar la configuración (`forzarOvs`, true por defecto). Solo toca los switches listados en `gateways`.
 Reacciona a cambios de configuración y a que un switch aparezca o se reconecte; al desactivar la app retira sus flujos.
 
 ## Compilar (en tu PC, con Docker; no en las VM)
@@ -31,7 +32,7 @@ curl -u onos:rocks -X POST -H 'Content-Type: application/json' -d @config.json h
 ```
 Configuración (`config.json`), clave `gatewayarp`:
 ```json
-{"gatewayarp": {"gwMac": "02:00:5E:00:00:FE", "tabla": 60, "prioridad": 300, "copiarArp": false,
+{"gatewayarp": {"gwMac": "02:00:5E:00:00:FE", "tabla": 60, "prioridad": 300, "copiarArp": false, "forzarOvs": true,
   "gateways": [{"device": "of:0000e6925d87354b", "ip": "10.0.1.254", "ports": [1]}]}}
 ```
 Quitar la app (`DELETE /onos/v1/applications/org.campus.gatewayarp/active`) retira sus flujos.

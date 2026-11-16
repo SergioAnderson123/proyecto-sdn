@@ -13,6 +13,7 @@ import org.onosproject.net.config.ConfigFactory;
 import org.onosproject.net.config.NetworkConfigEvent;
 import org.onosproject.net.config.NetworkConfigListener;
 import org.onosproject.net.config.NetworkConfigRegistry;
+import org.onosproject.net.config.basics.BasicDeviceConfig;
 import org.onosproject.net.config.basics.SubjectFactories;
 import org.onosproject.net.device.DeviceEvent;
 import org.onosproject.net.device.DeviceListener;
@@ -143,6 +144,15 @@ public class GatewayArpApp {
                 continue;
             }
             Driver driver = driverService.getDriver(g.device);
+            if (cfg.forzarOvs() && driver != null && !"ovs".equals(driver.name())
+                    && dispositivo.manufacturer() != null && dispositivo.manufacturer().contains("Nicira")) {
+                // Un switch nuevo de la red queda con driver default si su OVS no es 2.x: se le pone ovs; la instalacion sigue cuando ONOS publique el cambio (DEVICE_UPDATED)
+                log.info("Gateway ARP: {} tiene el driver {} siendo Open vSwitch ({}): se fuerza el driver ovs", g.device, driver.name(), dispositivo.swVersion());
+                BasicDeviceConfig basico = configRegistry.addConfig(g.device, BasicDeviceConfig.class);
+                basico.driver("ovs");
+                basico.apply();
+                continue;
+            }
             if (driver == null || !driver.hasBehaviour(ExtensionTreatmentResolver.class)) {
                 log.error("Gateway ARP: el driver de {} ({}) no tiene ExtensionTreatmentResolver; se omite", g.device, driver == null ? "sin driver" : driver.name());
                 continue;

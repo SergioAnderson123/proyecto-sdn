@@ -1,0 +1,22 @@
+# PRUEBA EN VIVO, SOLO LECTURA, del vigilante en modo capa 3: lee ONOS (switches, enlaces, flujos de la tabla 60), calcula los flujos que instalaria con el plan de subredes y MUESTRA la diferencia con lo que hay.
+# NO usa --aplicar: no cambia ningun flujo. Los hosts salen de R2/policy/planes/hosts_fijos_prueba_capa3.json (IP del plan de direccionamiento A; no hace falta que los hosts las tengan).
+#   PLAYBOOK=98_prueba_vigilante_capa3.yml ./lanzar.sh
+# Lo que se espera ver: "sobra" = flujos L2 de hoy que la capa 3 reemplazaria; "falta" = rutas por prefijo y entrega /32. Sirve para dimensionar el cambio antes de aplicarlo (que NO se hace en este playbook).
+- name: Vigilante en modo capa 3, simulacion contra ONOS real (switch-borde, sin aplicar)
+  hosts: borde
+  gather_facts: false
+  vars:
+    carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
+  tasks:
+    - name: Un ciclo del vigilante en modo capa 3, solo avisando
+      ansible.builtin.command:
+        cmd: >-
+          python3 vigilante.py --onos http://{{ onos_ip }}:8181 --subredes planes/vnrt_topologia14.json --nucleo core-1,core-2,borde
+          --hosts-fijos planes/hosts_fijos_prueba_capa3.json --una-vez --estable 0 --max-cambios 5000
+        chdir: "{{ carpeta_codigo }}"
+      register: salida
+      changed_when: false
+
+    - name: Que dijo el vigilante
+      ansible.builtin.debug:
+        msg: "{{ salida.stdout_lines }}"

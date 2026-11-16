@@ -69,6 +69,11 @@ public class GatewayConfig extends Config<ApplicationId> {
     }
 
     /** Si es true, la petición ARP original también se copia al controlador (para que ONOS aprenda al host). */
+    /** Si es true (por defecto), la app pone el driver ovs a los switches OVS que ONOS dejó en default (OVS 3.x no coincide con el driver ovs de ONOS 2.7). */
+    public boolean forzarOvs() {
+        return !object.has("forzarOvs") || object.get("forzarOvs").asBoolean(true);
+    }
+
     public boolean copiarArp() {
         return object.has("copiarArp") && object.get("copiarArp").asBoolean(false);
     }

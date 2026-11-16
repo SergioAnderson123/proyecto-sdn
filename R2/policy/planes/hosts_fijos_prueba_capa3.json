@@ -1,0 +1,3 @@
+[{"nombre": "server", "mac": "fa:16:3e:92:d3:e6", "device": "core-1", "port": 5, "ip": "10.0.0.10"},
+ {"nombre": "h1-profesor", "mac": "fa:16:3e:b6:96:08", "device": "acc-1", "port": 1, "ip": "10.0.1.101"},
+ {"nombre": "h2-alumno", "mac": "fa:16:3e:71:08:66", "device": "acc-2", "port": 1, "ip": "10.0.2.102"}]
