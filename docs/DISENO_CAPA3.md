@@ -155,6 +155,15 @@ Con sesiones 802.1X (h1 profesor01 = docente, h2 alumno01 = alumno) y el vigilan
 - **Estado resultante:** los vigilantes L2 están parados y deshabilitados (65 `parar`); `vigilante-capa3` activo con `--aplicar` en ctrl-3 (principal) y ctrl-2 (respaldo). La IP de h1 y h2 NO es persistente (un reinicio del host vuelve a la IP vieja, sin red). **No ejecutar `65_vigilante.yml` con aplicar, ni `60_proactivo.yml`/`70_fase_e.yml -e reiniciar=true` sin pensarlo:** restablecerían el reenvío L2 sobre la capa 3.
 - **Pendiente:** la caída de un cable en vivo con la capa 3 (solo simulada), IP persistente en los hosts (netplan), DHCP por subred y hosts nuevos (ONOS no aprende sus IP), R5 y el bond del server.
 
+### V9. Caída de un cable en vivo con la capa 3 (16-nov, `80_caida_cable.yml`)
+
+Cable `acc-1/2 ↔ core-1/2` (la subida de h1 hacia core-1, raíz del árbol y donde está el server) bajado 60 s (22:07:18 a 22:08:19) mientras h1 (docente, sesión 802.1X) probaba `nc` a `10.0.0.10:8101` cada segundo.
+- **Caída:** ONOS vio el cambio en ~2 s; el vigilante esperó 15 s de estabilidad y aplicó a las 22:07:35 (1 flujo reemplazado en acc-1, borde y core-1); h1 recuperó el servicio al segundo siguiente por el camino de reserva (acc-1/3, core-2, core-1/4). **Corte total: ~17 s** (2 s de detección + 15 s de estabilidad + <1 s de aplicación). Casi todo el corte es el parámetro `--estable`.
+- **Vuelta del cable:** detectada a los 2 s y aplicada a los 16 s (respetando los 60 s mínimos entre cambios); h1 no registró ningún corte.
+- **Parpadeo de 1 s** (primer intento, por un error del playbook): h1 perdió 1 s y el vigilante no cambió nada (exige estabilidad): no hay vaivén de rutas ante un cable inestable; el intervalo mínimo de 60 s acota además el número de cambios por minuto.
+- **Ajuste posible:** `--estable` más bajo reduce el corte casi proporcionalmente (con 5 s se esperan ~7 s), a costa de reaccionar a caídas más breves; `68 -e aplicar=true -e estable=5`.
+- Corrección en el camino: la primera ejecución dejó el cable caído solo 1 s porque `pause` solo corre en el primer host del play (ahora `sleep` en el propio switch).
+
 ## 7. Estado, pruebas y siguiente
 **Hecho (sin red):** plan y validación de subredes (`Plan`, `cargar_plan`, 8 casos de plan inválido); `flujos_capa3` con rutas completas y ruta por defecto; entrega de punta a punta con MAC y TTL (12 parejas); tráfico dentro de la subred; ARP del gateway y ARP local; IP desconocida
 y TTL agotado; **caída de cada uno de los 7 cables** y de un switch (todo sigue llegando, sin inundar ni lazos); propiedades de escala (el core no depende de H; un acceso crece 2 por host local; L3 < L2/2 con 960 hosts; ruta por defecto constante). **244 pruebas en total** (R2 + prioridades + plantillas).
