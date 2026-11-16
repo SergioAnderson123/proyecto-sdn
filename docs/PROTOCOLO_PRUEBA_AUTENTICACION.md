@@ -56,7 +56,16 @@ no debe cambiar nada. Si el vigilante dice "NO ARRANCO", el archivo de hosts fij
 
 ## 4. Paso C: reenvío proactivo en cores y borde
 
-Estos switches solo llevan reglas de confianza (no hay usuarios), así que el cambio es pequeño y no afecta a nadie todavía.
+**C0 (solo lectura, obligatorio antes de reiniciar el Policy Mapper): censo de flujos por aplicación y switch.** Dice qué reglas de R2 existen hoy y si R5 deja
+algún `NORMAL` por encima. Con `reenvio` en lista, los switches fuera de la lista no reciben NADA de R2 (si recibieran las reglas antiguas, la confianza
+`in_port -> NORMAL` a 40001 se tragaría el LLDP y se inundaría por los lazos); un switch fuera de la lista queda como estaba.
+
+```bash
+curl -s -u onos:rocks http://192.168.201.1:8181/onos/v1/flows | python3 -c "import sys,json,collections; c=collections.Counter((f['appId'],f['deviceId'][-4:],f['tableId']) for f in json.load(sys.stdin)['flows']); [print(v,k) for k,v in sorted(c.items())]"
+```
+
+
+Los cores solo llevan reglas de confianza (no hay usuarios); el borde además lleva DHCP, cuarentena y tablas de rol (host-jhon). Ningún usuario con sesión cuelga de ellos todavía.
 
 ```bash
 PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true -e reenvio=core-1,core-2,borde        # escribe policy.local.yaml, aún sin reiniciar
@@ -75,7 +84,7 @@ PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true -e reenvio=core-1,core-2,bor
 PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh
 ```
 (El nombre del switch en `reenvio` es el de `plan_arboles.NOMBRES`: `acc-1`, no `sw-acc-1`. Si el generador dice "switch desconocido", corrige el nombre.)
-Ahora `acc-1` debe estar sin NORMAL de R2. Espera 1–2 minutos con el 95 limpio antes del primer login.
+Ahora `acc-1` recibe las tablas de R2 en modo proactivo (sin NORMAL); `acc-2` sigue sin ninguna regla de R2. Espera 1–2 minutos con el 95 limpio antes del primer login.
 
 ## 6. Paso E: el primer usuario (un solo equipo, en sw-acc-1)
 

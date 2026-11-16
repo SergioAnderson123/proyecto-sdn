@@ -289,18 +289,23 @@ def flujos_portal(politica: dict, dpid: str) -> List[dict]:
     return flujos
 
 
-def politica_del_switch(politica: dict, dpid: str) -> dict:
-    """`reenvio` puede ser normal | proactivo | una LISTA de switches con reenvío proactivo (para activarlo de a uno). Devuelve la política vista
-    desde `dpid`, con `reenvio` ya resuelto a normal o proactivo."""
+def politica_del_switch(politica: dict, dpid: str) -> Optional[dict]:
+    """`reenvio` puede ser normal | proactivo | una LISTA de switches (para activar el reenvío proactivo de a uno).
+
+    Con una lista, SOLO los switches de la lista reciben las tablas de R2 (en modo proactivo) y a los demás NO se les instala nada de R2: devuelve None.
+    No se les dan las reglas antiguas con NORMAL porque su regla de confianza (40001) le gana a la de ONOS que sube el LLDP (40000): el descubrimiento de enlaces
+    se inundaría por los lazos. Un switch fuera de la lista queda exactamente como estaba."""
     r = politica.get("reenvio", "normal")
     if isinstance(r, (list, tuple, set)):
-        return dict(politica, reenvio="proactivo" if dpid in r else "normal")
+        return dict(politica, reenvio="proactivo") if dpid in r else None
     return politica
 
 
 def flujos_dispositivo(politica: dict, dpid: str) -> List[dict]:
     """Todo lo que R2 instala en un switch. Los de confianza total no llevan tablas de rol (no tienen usuarios)."""
     politica = politica_del_switch(politica, dpid)
+    if politica is None:                       # `reenvio` es una lista y este switch no está en ella: no se toca
+        return []
     flujos = flujos_confianza(politica, dpid) + flujos_portal(politica, dpid) + flujos_descubrimiento(politica, dpid)
     if politica["trusted"].get(dpid) != "all" and dpid not in (politica.get("sin_usuarios") or []):
         # `sin_usuarios`: switches de infraestructura (los cores) sin puertos de usuario: no llevan DHCP, cuarentena ni tablas de rol

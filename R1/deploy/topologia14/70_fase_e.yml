@@ -4,7 +4,7 @@
 #   PLAYBOOK=70_fase_e.yml ./lanzar.sh                                   # lee las MAC del server y muestra el policy.local.yaml que se generaría
 #   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e preparar_ip=true               # además pone 10.0.0.10/24 en ens4 del server (temporal: se pierde al reiniciar)
 #   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true                  # escribe R2/policy/policy.local.yaml en node-ctrl-1 (reenvio: normal = no cambia nada)
-#   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true -e reenvio=core-1,core-2,borde   # reenvío proactivo SOLO en esos switches
+#   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true -e reenvio=core-1,core-2,borde   # R2 (proactivo) SOLO en esos switches; los demás: no se les instala nada
 #   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true -e reiniciar=true                # y reinicia el policy_mapper para que lo lea
 #   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e hosts_fijos=true               # escribe /etc/vigilante/hosts_fijos.json (node-ctrl-3 y node-ctrl-2)
 #

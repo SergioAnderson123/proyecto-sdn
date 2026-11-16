@@ -10,7 +10,8 @@ Qué decide (ver docs/DISENO_FASE_E.md):
   - sin_usuarios: los cores (no llevan tablas de rol, DHCP ni cuarentena).
   - puertos_externos: puertos cuyo equipo NO recibe IP por DHCP (host-jhon en el borde).
   - services: los de policy.yaml, todos con la IP única del server; portal: esa misma IP, su MAC y el puerto HTTPS.
-  - reenvio: normal (nada cambia), proactivo (todos los switches) o una lista de nombres (solo esos): sirve para activar de a un switch.
+  - reenvio: normal (nada cambia), proactivo (todos los switches) o una lista de nombres: SOLO esos switches reciben las tablas de R2 (proactivas) y
+    a los demás no se les instala nada de R2 (siguen como estaban). Sirve para activar de a un switch.
 Exige los 14 enlaces vivos: con un cable caído sus puertos parecerían de acceso.
 """
 import argparse
@@ -114,7 +115,7 @@ def main(argv=None):
     a.add_argument("--puerto-portal", type=int, default=8443)
     a.add_argument("--server", default=SERVER_POR_DEFECTO, help="switch:puerto donde conecta el server (confianza)")
     a.add_argument("--externos", default=EXTERNOS_POR_DEFECTO, help="switch:puerto de equipos externos (sin DHCP); vacío = ninguno")
-    a.add_argument("--reenvio", default="normal", help="normal | proactivo | lista de switches (core-1,core-2,borde)")
+    a.add_argument("--reenvio", default="normal", help="normal | proactivo | lista de switches (core-1,core-2,borde): solo esos reciben R2")
     a.add_argument("--enlaces", type=int, default=ENLACES_ESPERADOS)
     a.add_argument("--salida", help="archivo de destino; sin él se imprime")
     arg = a.parse_args(argv)

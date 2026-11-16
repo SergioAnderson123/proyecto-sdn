@@ -100,17 +100,25 @@ def _politica(reenvio):
     return p
 
 
-def test_con_una_lista_solo_esos_switches_usan_la_tabla_60_y_los_demas_siguen_con_normal():
+def test_con_una_lista_solo_esos_switches_reciben_r2_y_a_los_demas_no_se_les_instala_nada():
     p = _politica([C1, B])
     for d in (C1, B):
         assert _usa_tabla_60(pt.flujos_dispositivo(p, d)) and not _usa_normal(pt.flujos_dispositivo(p, d)), NOMBRES[d]
     for d in (C2, A1, A2):
-        assert _usa_normal(pt.flujos_dispositivo(p, d)) and not any(f["priority"] == 40100 for f in pt.flujos_dispositivo(p, d)), NOMBRES[d]
+        assert pt.flujos_dispositivo(p, d) == [], NOMBRES[d]                  # nada de R2: ni confianza con NORMAL ni cuarentena ni tablas de rol
 
 
-def test_la_lista_vacia_equivale_a_normal_y_proactivo_a_todos():
-    normal, todos, vacia = _politica("normal"), _politica("proactivo"), _politica([])
+def test_ningun_switch_queda_con_reglas_antiguas_de_normal_mientras_se_activa_de_a_uno():
+    """La regla de confianza `in_port -> NORMAL` (40001) tragaría el LLDP: con la lista, ningún switch puede quedar en ese estado."""
+    for lista in ([C1], [C1, C2, B], [C1, C2, B, A1], [C1, C2, B, A1, A2]):
+        p = _politica(lista)
+        for d in NOMBRES:
+            assert not _usa_normal(pt.flujos_dispositivo(p, d)), (NOMBRES[d], lista)
+
+
+def test_la_lista_vacia_no_instala_nada_y_proactivo_instala_en_todos():
+    todos, vacia = _politica("proactivo"), _politica([])
     for d in NOMBRES:
-        assert json.dumps(pt.flujos_dispositivo(vacia, d), sort_keys=True) == json.dumps(pt.flujos_dispositivo(normal, d), sort_keys=True)
+        assert pt.flujos_dispositivo(vacia, d) == []
         assert _usa_tabla_60(pt.flujos_dispositivo(todos, d))
     assert pt.reenvio_proactivo(_politica([C1])) is False                  # la comprobación global solo es cierta con la palabra proactivo
