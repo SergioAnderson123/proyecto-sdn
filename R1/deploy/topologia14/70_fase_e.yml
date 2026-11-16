@@ -34,7 +34,7 @@
         var: macs.stdout_lines
       tags: [server]
 
-    - name: "Poner la IP única de los servicios en {{ nic_core1 }} (las dos tarjetas contestan ARP: rp_filter=2 ya está aplicado)"
+    - name: "Poner la IP única de los servicios en {{ nic_core1 }} (medido: solo ens4 contesta el ARP; ens5 lo descarta. El server solo es alcanzable por sw-core-1)"
       ansible.builtin.shell: |
         ip link set {{ nic_core1 }} up
         ip link set {{ nic_core2 }} up
