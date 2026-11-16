@@ -1,6 +1,6 @@
 # DHCP por subred como app de ONOS (propuesta de diseño)
 
-**Estado:** la lógica del servidor (ámbitos, defensas, construcción de OFFER/ACK/NAK) está **escrita y probada** con 20 pruebas Java en Docker (`R2/onos-app/campus-dhcp`); falta la conexión con ONOS (paquetes, HostProvider, configuración), el generador, el playbook y las pruebas en vivo. Resuelve a la vez dos cosas pendientes de la capa 3: (1) DHCP por subred (la app `org.onosproject.dhcp` tiene **un solo rango**, `10.0.0.100-199`, y en capa 3 cada subred necesita el suyo) y (2) que el vigilante conozca la IP de un equipo **cuando se la dan**, que es lo que necesita un invitado para llegar al portal antes de validarse (`PLAN_CONMUTACION_CAPA3.md` §4 bis).
+**Estado:** la lógica del servidor (ámbitos, defensas, OFFER/ACK/NAK) está escrita y probada con 20 pruebas Java en Docker, la conexión con ONOS **compila** (paquetes, `HostProvider`, configuración, vencimiento), y están el generador de configuración y los playbooks `82_dhcp_app.yml` (instalar o quitar) y `83_prueba_dhcp.yml` (prueba con interfaces macvlan en h1). **Falta ejecutarlo en vivo** (ver §8). Resuelve a la vez dos cosas pendientes de la capa 3: (1) DHCP por subred (la app `org.onosproject.dhcp` tiene **un solo rango**, `10.0.0.100-199`, y en capa 3 cada subred necesita el suyo) y (2) que el vigilante conozca la IP de un equipo **cuando se la dan**, que es lo que necesita un invitado para llegar al portal antes de validarse (`PLAN_CONMUTACION_CAPA3.md` §4 bis).
 
 ## 1. Idea
 Una app de ONOS propia, `org.campus.dhcp`, que:
@@ -64,7 +64,7 @@ Límite conocido: la cuota por puerto asume pocos equipos por puerto (cable a un
 
 ## 8. Plan de trabajo
 1. ~~Esqueleto de la app y la lógica del ámbito, con pruebas en Docker.~~ Hecho (20 pruebas).
-2. Generador de configuración y su prueba.
-3. Compilar el `.oar` y un playbook de instalación (desactiva el DHCP estándar, instala la nuestra, publica la configuración).
-4. Prueba en vivo con la interfaz macvlan de h1 (aislada, reversible).
+2. ~~Generador de configuración y su prueba.~~ Hecho (`generar_config_dhcp.py`, 5 pruebas; el ARP del servidor DHCP `.250` de cada subred se añade a la app Gateway ARP para que la renovación por unicast funcione).
+3. ~~Compilar el `.oar` y un playbook de instalación.~~ Hecho (`campus-dhcp-1.0.0.oar` compila; `82_dhcp_app.yml`, sin ejecutar).
+4. Prueba en vivo con interfaces macvlan en h1 (aislada, reversible): `83_prueba_dhcp.yml` (una; y `-e prueba=agotamiento` para ver la cuota por puerto en acción). **Pendiente de ejecutar.** Riesgo: si VNRT filtra por MAC de origen en el puerto de h1, las interfaces no reciben respuesta.
 5. Documentar y, solo entonces, decidir si h1 y h2 pasan a DHCP.

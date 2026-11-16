@@ -17,11 +17,14 @@ from plan_arboles import NOMBRES
 AQUI = os.path.dirname(os.path.abspath(__file__))
 
 
-def construir(plan: l3.Plan, copiar_arp: bool = False, tabla: int = 60, prioridad: int = l3.PRIO_ARP_GATEWAY, plan_prueba: l3.Plan = None) -> dict:
+def construir(plan: l3.Plan, copiar_arp: bool = False, tabla: int = 60, prioridad: int = l3.PRIO_ARP_GATEWAY, plan_prueba: l3.Plan = None, dhcp: dict = None) -> dict:
     """La configuración (clave `gatewayarp`) que lee la app de ONOS. Con `plan_prueba` se añaden también sus gateways, cada uno con SU MAC (la de la prueba aislada), en la misma tabla."""
     gateways = [{"device": s.dispositivo, "ip": str(s.gateway), "ports": list(s.puertos)} for s in plan.subredes]
     if plan_prueba is not None:
         gateways += [{"device": s.dispositivo, "ip": str(s.gateway), "ports": list(s.puertos), "gwMac": plan_prueba.gw_mac} for s in plan_prueba.subredes]
+    if dhcp:                                                  # el servidor DHCP virtual de cada subred (.250) tambien contesta ARP, con la MAC del servidor: asi la renovacion por unicast funciona
+        d = dhcp["campusdhcp"]
+        gateways += [{"device": s["device"], "ip": s["servidor"], "ports": list(s["puertos"]), "gwMac": d["servidorMac"]} for s in d["subredes"]]
     return {"gatewayarp": {"gwMac": plan.gw_mac, "tabla": tabla, "prioridad": prioridad, "copiarArp": bool(copiar_arp), "gateways": gateways}}
 
 
@@ -29,6 +32,7 @@ def main(argv=None):
     a = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     a.add_argument("--plan", required=True, help="JSON del plan (con nombres de switch como core-1, acc-1...)")
     a.add_argument("--plan-prueba", help="plan de la PRUEBA AISLADA (subredes 10.99.x con su propia MAC de gateway): se añade a la configuración")
+    a.add_argument("--dhcp", help="configuracion de la app DHCP por subred (generar_config_dhcp.py): anade la IP del servidor DHCP de cada subred como gateway que contesta ARP")
     a.add_argument("--salida")
     a.add_argument("--copiar-arp", action="store_true")
     arg = a.parse_args(argv)
@@ -46,15 +50,23 @@ def main(argv=None):
         except (OSError, ValueError) as e:
             print("DETENIDO:", e)
             return 2
+    dhcp = None
+    if arg.dhcp:
+        try:
+            with open(arg.dhcp, encoding="utf-8") as f:
+                dhcp = json.load(f)
+        except (OSError, ValueError) as e:
+            print("DETENIDO:", e)
+            return 2
     desconocidos = [s.nombre for s in plan.subredes if not s.dispositivo.startswith("of:")]
     if desconocidos:
         print("DETENIDO: estas subredes usan un switch que no es un deviceId de ONOS ni un nombre conocido:", ", ".join(desconocidos))
         return 2
-    texto = json.dumps(construir(plan, arg.copiar_arp, plan_prueba=plan_prueba), indent=1)
+    texto = json.dumps(construir(plan, arg.copiar_arp, plan_prueba=plan_prueba, dhcp=dhcp), indent=1)
     if arg.salida:
         with open(arg.salida, "w", encoding="utf-8", newline="\n") as f:
             f.write(texto + "\n")
-        print(f"Escrito {arg.salida} ({len(plan.subredes) + (len(plan_prueba.subredes) if plan_prueba else 0)} gateways)")
+        print(f"Escrito {arg.salida} ({len(json.loads(texto)['gatewayarp']['gateways'])} gateways)")
     else:
         print(texto)
     return 0

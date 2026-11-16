@@ -1,0 +1,159 @@
+# PRUEBA EN VIVO de la app DHCP por subred (82) con interfaces MACVLAN en h1: cada una tiene su propia MAC (02:aa:bb:00:01:NN) y entra por acc-1/1 como un equipo distinto, SIN tocar la IP real de h1.
+#   PLAYBOOK=83_prueba_dhcp.yml ./lanzar.sh                              # prueba=una: un cliente pide IP, se mira ONOS y el vigilante, y libera
+#   PLAYBOOK=83_prueba_dhcp.yml ./lanzar.sh -e prueba=agotamiento        # 6 clientes con MAC distintas a la vez: la CUOTA por puerto (3) debe dejar solo 3 con IP
+# Requisitos: 82_dhcp_app.yml aplicado (la app DHCP estandar desactivada). Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh.
+# Seguridad: las interfaces de prueba no instalan rutas ni DNS (guion files/dhclient_prueba.sh) y se borran SIEMPRE al final; h1 no pierde su IP, su ruta ni su sesion. Si VNRT filtra por MAC de origen en el puerto de h1 (port security) las
+# interfaces no recibiran respuesta: el resultado sera "SIN IP" en todas, sin ningun efecto en la red; entonces la prueba habria que hacerla con la interfaz real.
+- name: Prueba DHCP, paso 1 - clientes macvlan en h1 piden IP
+  hosts: h1-profesor
+  become: true
+  gather_facts: false
+  vars:
+    prueba: una
+    n: "{{ 1 if prueba == 'una' else 6 }}"
+  tasks:
+    - name: El cliente dhclient debe existir (si falta se instala isc-dhcp-client)
+      ansible.builtin.shell:
+        cmd: "command -v dhclient || (apt-get update -qq && apt-get install -y -qq isc-dhcp-client && command -v dhclient)"
+      register: cliente
+      changed_when: "'isc-dhcp-client' in cliente.stdout or cliente.stdout | length == 0"
+
+    - name: Copiar el guion de la prueba
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/dhclient_prueba.sh"
+        dest: /tmp/dhclient_prueba.sh
+        mode: "0755"
+
+    - name: Crear las interfaces macvlan de prueba
+      ansible.builtin.shell:
+        cmd: |
+          for i in $(seq {{ n }}); do
+            ip link del dhc$i 2>/dev/null
+            ip link add link ens4 name dhc$i address 02:aa:bb:00:01:0$i type macvlan mode bridge
+            ip link set dhc$i up
+          done
+          ip -br link show | grep dhc
+      register: ifaces
+      changed_when: true
+
+    - name: Cada cliente pide IP por DHCP (todos a la vez, hasta 25 s)
+      ansible.builtin.shell:
+        cmd: |
+          for i in $(seq {{ n }}); do
+            rm -f /tmp/dhcp_prueba_dhc$i.txt
+            timeout 25 dhclient -1 -v -sf /tmp/dhclient_prueba.sh -pf /tmp/dhc$i.pid -lf /tmp/dhc$i.leases dhc$i > /tmp/dhc$i.log 2>&1 &
+          done
+          wait
+          conseguidas=0
+          for i in $(seq {{ n }}); do
+            if grep -q '^ip=' /tmp/dhcp_prueba_dhc$i.txt 2>/dev/null; then
+              echo "dhc$i 02:aa:bb:00:01:0$i -> $(grep '^ip=' /tmp/dhcp_prueba_dhc$i.txt) $(grep '^router=' /tmp/dhcp_prueba_dhc$i.txt) $(grep '^servidor=' /tmp/dhcp_prueba_dhc$i.txt)"
+              conseguidas=$((conseguidas + 1))
+            else
+              echo "dhc$i 02:aa:bb:00:01:0$i -> SIN IP"
+            fi
+          done
+          echo "clientes con IP: $conseguidas de {{ n }}"
+      register: pedido
+      changed_when: false
+
+    - name: Lo que recibio cada cliente
+      ansible.builtin.debug:
+        msg: "{{ pedido.stdout_lines }}"
+
+- name: Prueba DHCP, paso 2 - lo que ONOS y el vigilante saben (switch-borde)
+  hosts: borde
+  gather_facts: false
+  vars:
+    api: "http://{{ onos_ip }}:8181/onos/v1"
+    karaf: [sshpass, -p, "{{ onos_pass }}", ssh, -p, "8101", -o, StrictHostKeyChecking=no, -o, UserKnownHostsFile=/dev/null, "{{ onos_user }}@{{ onos_ip }}"]
+  tasks:
+    - name: Esperar 8 s (el vigilante revisa cada 5 s)
+      ansible.builtin.shell:
+        cmd: "sleep 8"
+      changed_when: false
+
+    - name: Equipos de la prueba en ONOS y reglas de entrega /32 en acc-1
+      ansible.builtin.command:
+        cmd: "python3 {{ playbook_dir }}/files/hosts_dhcp_prueba.py --onos http://{{ onos_ip }}:8181 --usuario {{ onos_user }}:{{ onos_pass }}"
+      register: onos
+      changed_when: false
+
+    - name: Log de la app DHCP en ONOS (ultimas lineas)
+      ansible.builtin.shell:
+        cmd: "{{ karaf | join(' ') }} 'log:display' 2>/dev/null | grep -i 'DHCP por subred' | tail -12 | cut -c1-200"
+      register: logapp
+      changed_when: false
+      failed_when: false
+
+    - name: Informe
+      ansible.builtin.debug:
+        msg:
+          - "{{ onos.stdout_lines }}"
+          - "{{ logapp.stdout_lines }}"
+          - "Esperado (prueba=una): 1 equipo con IP de 10.0.1.100 a 199, ubicado en acc-1/1, con regla_entrega_32=SI. Esperado (prueba=agotamiento): solo 3 equipos con IP (maxPorPuerto) y en el log un aviso de cuota agotada."
+
+- name: Prueba DHCP, paso 3 - liberar (prueba una), comprobar y limpiar SIEMPRE
+  hosts: h1-profesor
+  become: true
+  gather_facts: false
+  vars:
+    prueba: una
+    n: "{{ 1 if prueba == 'una' else 6 }}"
+  tasks:
+    - name: Liberar la IP del cliente 1 (RELEASE) para ver que ONOS la retira (solo prueba=una)
+      ansible.builtin.shell:
+        cmd: "timeout 10 dhclient -r -sf /tmp/dhclient_prueba.sh -pf /tmp/dhc1.pid -lf /tmp/dhc1.leases dhc1 > /tmp/dhc1_release.log 2>&1; sleep 1; cat /tmp/dhcp_prueba_dhc1.txt"
+      register: liberado
+      changed_when: false
+      failed_when: false
+      when: prueba == 'una'
+
+    - name: Esperar 8 s y mirar ONOS otra vez (prueba una)
+      ansible.builtin.shell:
+        cmd: "sleep 8"
+      changed_when: false
+      when: prueba == 'una'
+
+- name: Prueba DHCP, paso 3b - ONOS tras liberar (prueba una)
+  hosts: borde
+  gather_facts: false
+  vars:
+    prueba: una
+  tasks:
+    - name: Equipos de la prueba en ONOS tras el RELEASE (la IP debe haberse retirado)
+      ansible.builtin.command:
+        cmd: "python3 {{ playbook_dir }}/files/hosts_dhcp_prueba.py --onos http://{{ onos_ip }}:8181 --usuario {{ onos_user }}:{{ onos_pass }}"
+      register: tras
+      changed_when: false
+      when: prueba == 'una'
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ tras.stdout_lines | default([]) }}"
+      when: prueba == 'una'
+
+- name: Prueba DHCP, limpieza (siempre)
+  hosts: h1-profesor
+  become: true
+  gather_facts: false
+  vars:
+    n: 6
+  tasks:
+    - name: Parar los clientes y borrar las interfaces y archivos de prueba
+      ansible.builtin.shell:
+        cmd: |
+          for i in $(seq {{ n }}); do
+            [ -f /tmp/dhc$i.pid ] && kill $(cat /tmp/dhc$i.pid) 2>/dev/null
+            ip link del dhc$i 2>/dev/null
+            rm -f /tmp/dhc$i.pid /tmp/dhc$i.leases /tmp/dhc$i.log /tmp/dhcp_prueba_dhc$i.txt /tmp/dhc${i}_release.log
+          done
+          rm -f /tmp/dhclient_prueba.sh
+          echo "interfaces dhc que quedan: $(ip -br link show | grep -c dhc)"
+          echo "direcciones de ens4: $(ip -4 -o addr show dev ens4 | awk '{print $4}' | tr '\n' ' ')"
+      register: limpio
+      changed_when: true
+
+    - name: Estado tras limpiar (h1 conserva su IP real)
+      ansible.builtin.debug:
+        msg: "{{ limpio.stdout_lines }}"

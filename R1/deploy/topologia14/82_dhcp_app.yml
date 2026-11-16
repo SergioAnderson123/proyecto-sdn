@@ -1,0 +1,195 @@
+# APP DE ONOS "DHCP por subred" (R2/onos-app/campus-dhcp, docs/DISENO_DHCP_POR_SUBRED.md): instala la app, desactiva la app DHCP estandar de ONOS (dos servidores se pelean) y publica la configuracion
+# (ambitos de las subredes de acceso, sacados del plan) y la del ARP del servidor DHCP de cada subred (.250) en la app Gateway ARP.
+#   PLAYBOOK=82_dhcp_app.yml ./lanzar.sh -e confirmar=true                       # instala, desactiva org.onosproject.dhcp, publica configuraciones
+#   PLAYBOOK=82_dhcp_app.yml ./lanzar.sh -e confirmar=true -e reinstalar=true    # reemplaza la app por el .oar del repositorio
+#   PLAYBOOK=82_dhcp_app.yml ./lanzar.sh -e accion=quitar -e confirmar=true      # RETROCESO: desactiva la nuestra, reactiva org.onosproject.dhcp y quita las entradas .250 del ARP
+# Efecto en la red: ninguno sobre los hosts actuales (h1, h2 y el server tienen IP fija y no piden DHCP). Cambia QUIEN contesta el DHCP de las subredes de acceso (de la app estandar, un solo rango, a la nuestra, un ambito por subred).
+# Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh. Probar despues con 83_prueba_dhcp.yml (interfaces macvlan en h1, sin tocar su IP real).
+- name: DHCP por subred, instalar o quitar desde switch-borde
+  hosts: borde
+  gather_facts: false
+  vars:
+    accion: instalar
+    confirmar: false
+    reinstalar: false
+    app: org.campus.dhcp
+    estandar: org.onosproject.dhcp
+    api: "http://{{ onos_ip }}:8181/onos/v1"
+    repo: "{{ playbook_dir }}/../../.."
+    oar: "{{ repo }}/R2/onos-app/campus-dhcp/dist/campus-dhcp-1.0.0.oar"
+    plan: "{{ repo }}/R2/policy/planes/vnrt_topologia14.json"
+    config_dhcp: /tmp/campus_dhcp_config.json
+    config_arp: /tmp/gateway_arp_config_dhcp.json
+    config_arp_sin: /tmp/gateway_arp_config_sin_dhcp.json
+    karaf: [sshpass, -p, "{{ onos_pass }}", ssh, -p, "8101", -o, StrictHostKeyChecking=no, -o, UserKnownHostsFile=/dev/null, "{{ onos_user }}@{{ onos_ip }}"]
+  tasks:
+    - name: Instalar y quitar cambian quien contesta el DHCP, exigen -e confirmar=true
+      ansible.builtin.assert:
+        that: confirmar | bool
+        fail_msg: "Repetir con -e confirmar=true"
+        quiet: true
+
+    - name: El .oar y el plan deben estar en este clon (git pull)
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: ["{{ oar }}", "{{ plan }}"]
+      register: archivos
+
+    - name: Detener si falta alguno
+      ansible.builtin.assert:
+        that: archivos.results | selectattr('stat.exists') | list | length == 2
+        fail_msg: "Falta el .oar o el plan en este clon: hacer git pull"
+        quiet: true
+
+    - name: Generar la configuracion del DHCP (ambitos de las subredes de acceso)
+      ansible.builtin.command:
+        cmd: "python3 generar_config_dhcp.py --plan {{ plan }} --salida {{ config_dhcp }}"
+        chdir: "{{ repo }}/R2/policy"
+      changed_when: true
+
+    - name: Generar la configuracion del ARP de los gateways CON el servidor DHCP de cada subred
+      ansible.builtin.command:
+        cmd: "python3 generar_config_gateway_arp.py --plan {{ plan }} --dhcp {{ config_dhcp }} --salida {{ config_arp }}"
+        chdir: "{{ repo }}/R2/policy"
+      changed_when: true
+
+    - name: Generar la configuracion del ARP SIN el servidor DHCP (para el retroceso)
+      ansible.builtin.command:
+        cmd: "python3 generar_config_gateway_arp.py --plan {{ plan }} --salida {{ config_arp_sin }}"
+        chdir: "{{ repo }}/R2/policy"
+      changed_when: true
+
+    # ---------------- instalar ----------------
+    - name: Desactivar la app DHCP estandar de ONOS (si estaba activa)
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ estandar }}/active"
+        method: DELETE
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 204, 404]
+      when: accion == 'instalar'
+
+    - name: Ver si nuestra app ya esta instalada
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      register: existente
+      when: accion == 'instalar'
+
+    - name: Desinstalar la version anterior (solo con -e reinstalar=true)
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}"
+        method: DELETE
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 204]
+      when: accion == 'instalar' and existente.status == 200 and reinstalar | bool
+
+    - name: Esperar 8 s (desactivacion y desinstalacion)
+      ansible.builtin.shell:
+        cmd: "sleep 8"
+      changed_when: false
+      when: accion == 'instalar'
+
+    - name: Subir el .oar y activarla (si no estaba o se reinstala)
+      ansible.builtin.command:
+        argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/octet-stream", --data-binary, "@{{ oar }}", "{{ api }}/applications?activate=true"]
+      when: accion == 'instalar' and (existente.status == 404 or reinstalar | bool)
+      changed_when: true
+
+    - name: Activarla (si estaba instalada pero no activa)
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}/active"
+        method: POST
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 201, 204]
+      when: accion == 'instalar' and existente.status == 200 and existente.json.state | default('') != 'ACTIVE' and not (reinstalar | bool)
+
+    - name: Esperar 5 s y asegurar el feature en Karaf (ONOS puede dejar la app ACTIVE con el feature Uninstalled)
+      ansible.builtin.shell:
+        cmd: "sleep 5"
+      changed_when: false
+      when: accion == 'instalar'
+
+    - name: Instalar el feature campus-dhcp en Karaf
+      ansible.builtin.command:
+        argv: "{{ karaf + ['feature:install campus-dhcp'] }}"
+      register: feature
+      changed_when: "'Adding features' in feature.stdout"
+      failed_when: false
+      when: accion == 'instalar'
+
+    - name: Esperar 6 s a que el componente arranque
+      ansible.builtin.shell:
+        cmd: "sleep 6"
+      changed_when: false
+      when: accion == 'instalar'
+
+    - name: Publicar la configuracion del DHCP
+      ansible.builtin.command:
+        argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/json", --data-binary, "@{{ config_dhcp }}", "{{ api }}/network/configuration/apps/{{ app }}"]
+      when: accion == 'instalar'
+      changed_when: true
+
+    - name: Publicar la configuracion del ARP con el servidor DHCP de cada subred
+      ansible.builtin.command:
+        argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/json", --data-binary, "@{{ config_arp }}", "{{ api }}/network/configuration/apps/org.campus.gatewayarp"]
+      when: accion == 'instalar'
+      changed_when: true
+
+    # ---------------- quitar (retroceso) ----------------
+    - name: Desactivar nuestra app
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}/active"
+        method: DELETE
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 204, 404]
+      when: accion == 'quitar'
+
+    - name: Reactivar la app DHCP estandar de ONOS
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ estandar }}/active"
+        method: POST
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 201, 204]
+      when: accion == 'quitar'
+
+    - name: Volver a publicar la configuracion del ARP sin el servidor DHCP
+      ansible.builtin.command:
+        argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/json", --data-binary, "@{{ config_arp_sin }}", "{{ api }}/network/configuration/apps/org.campus.gatewayarp"]
+      when: accion == 'quitar'
+      changed_when: true
+
+    # ---------------- comprobacion ----------------
+    - name: Esperar 8 s
+      ansible.builtin.shell:
+        cmd: "sleep 8"
+      changed_when: false
+
+    - name: Estado de las apps
+      ansible.builtin.shell:
+        cmd: |
+          for a in {{ app }} {{ estandar }} org.campus.gatewayarp; do
+            echo "$a: $(curl -s -u {{ onos_user }}:{{ onos_pass }} {{ api }}/applications/$a | python3 -c 'import sys,json; print(json.load(sys.stdin).get("state"))' 2>/dev/null)"
+          done
+          echo "flujos de la app Gateway ARP: $(curl -s -u {{ onos_user }}:{{ onos_pass }} {{ api }}/flows/application/org.campus.gatewayarp | python3 -c 'import sys,json; f=json.load(sys.stdin)["flows"]; print(len(f), "total,", sum(1 for x in f if x["state"]=="ADDED"), "ADDED")')"
+      register: estado
+      changed_when: false
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg:
+          - "{{ estado.stdout_lines }}"
+          - "Esperado tras instalar: org.campus.dhcp ACTIVE, org.onosproject.dhcp INSTALLED, Gateway ARP con 6 flujos ADDED (4 gateways + el servidor DHCP de acc-1 y acc-2). Tras quitar: dhcp estandar ACTIVE, nuestra INSTALLED, 4 flujos."
+          - "Log de la app: ssh -p 8101 onos@{{ onos_ip }} log:display | grep -i 'DHCP por subred'"

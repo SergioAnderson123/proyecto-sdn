@@ -51,5 +51,19 @@ class TestPlanDePrueba(unittest.TestCase):
         self.assertNotEqual(prueba.gw_mac, plan.gw_mac)
 
 
+
+class TestConDhcp(unittest.TestCase):
+    def test_el_servidor_dhcp_de_cada_subred_contesta_arp_con_su_mac(self):
+        import generar_config_dhcp as gd
+        with open(PLAN, encoding="utf-8") as f:
+            plan = l3.cargar_plan(json.load(f), nombres=NOMBRES)
+        dhcp = gd.construir(plan)
+        c = g.construir(plan, dhcp=dhcp)["gatewayarp"]
+        extra = [e for e in c["gateways"] if e["ip"].endswith(".250")]
+        self.assertEqual(sorted(e["ip"] for e in extra), ["10.0.1.250", "10.0.2.250"])
+        self.assertTrue(all(e["gwMac"] == dhcp["campusdhcp"]["servidorMac"] for e in extra))
+        self.assertEqual(len(c["gateways"]), len(plan.subredes) + 2)
+
+
 if __name__ == "__main__":
     unittest.main()
