@@ -21,8 +21,10 @@ ESTADO = "/tmp/prueba_meters_onos.json"
 
 def pedir(arg, metodo, ruta, cuerpo=None):
     datos = json.dumps(cuerpo).encode() if cuerpo is not None else None
-    r = urllib.request.Request(arg.onos + "/onos/v1" + ruta, data=datos, method=metodo, headers={
-        "Authorization": "Basic " + base64.b64encode(arg.usuario.encode()).decode(), "Content-Type": "application/json"})
+    cabeceras = {"Authorization": "Basic " + base64.b64encode(arg.usuario.encode()).decode()}
+    if datos is not None:                                  # solo con cuerpo: ONOS responde 415 a un DELETE o GET que declare Content-Type
+        cabeceras["Content-Type"] = "application/json"
+    r = urllib.request.Request(arg.onos + "/onos/v1" + ruta, data=datos, method=metodo, headers=cabeceras)
     try:
         with urllib.request.urlopen(r, timeout=15) as x:
             return x.status, dict(x.headers), x.read().decode(errors="replace")
