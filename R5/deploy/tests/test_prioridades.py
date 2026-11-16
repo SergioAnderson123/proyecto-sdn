@@ -109,3 +109,9 @@ def test_la_cuarentena_es_lo_ultimo_de_la_tabla_0_y_su_tabla_es_nueva(mapa):
     assert 0 < mapa["r2"]["cuarentena"] < 20000 < mapa["r2"]["portal"]
     usadas = set(mapa["r2"]["tablas"].values()) | {0, 30}
     assert mapa["r2"]["tabla_cuarentena"] not in usadas
+
+
+def test_la_entrada_de_la_prueba_aislada_de_capa_3_queda_entre_la_sesion_y_las_reglas_de_r5(mapa):
+    import recalculo as rc
+    assert rc.PRIO_ENTRADA == mapa["r2"]["entrada_capa3_aislada"]
+    assert mapa["r2"]["sesion"] < mapa["r2"]["entrada_capa3_aislada"] < mapa["r5"]["espejo"] < mapa["r5"]["drop"] < mapa["r1"]["drop_temporal"]

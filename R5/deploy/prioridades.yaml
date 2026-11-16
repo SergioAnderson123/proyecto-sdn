@@ -15,6 +15,7 @@ r2:
   portal_arp: 40002     # portal cautivo: ARP de quien no tiene sesión (R1 solo lo manda al controlador)
   portal_retorno: 40002 # portal cautivo: reescribe la respuesta del portal al destino original (sobre la confianza de la troncal)
   reenvio_arp: 40003    # reenvío proactivo (topologia14): el ARP de la tabla 0 salta a la tabla 60 (difusión por árbol); sobre la sesión (40001) y el portal (40002)
+  entrada_capa3_aislada: 40060  # SOLO prueba aislada de la capa 3 (77_prueba_vigilante_aislado.yml): IPv4 con la MAC del gateway de PRUEBA salta a la tabla 62; sobre la sesión (40001) y bajo el espejo (41000), el DROP de R5 (42000) y la lista negra (45000). NO usar con hosts reales: se salta la autorización de las tablas de rol
   portal: 35000        # portal cautivo: tráfico al portal y desvío del HTTP; bajo la sesión, así que con sesión nunca se desvía
   descubrimiento: 40100  # reenvío proactivo: LLDP/BDDP al controlador, sobre la confianza (40001), el portal (40002) y el ARP (40003); sin ellos ONOS no ve los cables
   dhcp_externo: 40600   # reenvío proactivo: DROP del DHCP del cliente en los puertos externos (host-jhon, en el borde); sobre el DHCP (40500), bajo el espejo de R5 (41000)
