@@ -1,5 +1,7 @@
 # Plan de conmutación a capa 3 (con retroceso)
 
+> **Estado (16-nov): CONMUTADO en la slice.** Los pasos 1 a 3 se ejecutaron y se verificaron con sesión 802.1X (docente *refused*, alumno *timed out* en el 8101); ver V8 en `DISENO_CAPA3.md`. Para volver atrás sigue vigente la sección 5. Pendiente: caída de un cable en vivo e IP persistente en los hosts.
+
 Cómo pasar la producción del slice de reenvío L2 (tabla 60: unicast por MAC y difusión ARP por árbol) a **capa 3 por subredes** (plan A de `PLAN_DIRECCIONAMIENTO.md`) sin dejar la red sin servicio por más de unos segundos, y cómo volver atrás. Diseño: `DISENO_CAPA3.md`. Estado de lo ya probado: V1–V7 allí.
 
 ## 1. Lo que ya está probado y lo que no

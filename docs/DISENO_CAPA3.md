@@ -145,6 +145,16 @@ Subredes de prueba 10.99.x, MAC de gateway de prueba `02:00:5E:99:99:FE`, `allow
 - Lo que se encontró por el camino: ONOS devuelve el `tableId` de `goto_table` como texto (el vigilante reponía las reglas de entrada en cada ciclo; corregido y con prueba); la app corriendo era la versión vieja hasta reinstalarla con `76 -e reinstalar=true` (el 77 ahora lo comprueba).
 - **No cubierto en vivo:** la caída de un cable (afectaría a la producción); sigue probado solo en simulación (todos los estados intermedios sin lazo).
 
+### V8. Conmutación a capa 3 en producción (16-nov, planes 66 a 69 y secuencia de `PLAN_CONMUTACION_CAPA3.md`)
+
+Con sesiones 802.1X (h1 profesor01 = docente, h2 alumno01 = alumno) y el vigilante en modo capa 3 aplicando en la **tabla 60** con las subredes reales.
+- **Punto de partida (L2):** docente a `10.0.0.10:8101` *refused*; alumno al 8101 *timed out* y al 8001 *refused*. `95` limpio.
+- **Paso 2** (vigilante capa 3 aplica): la tabla 60 pasó de 42 flujos (8/11/7/8/8) a 27 (5/7/5/5/5): 30 menos (los L2) y 15 más (3 entregas /32 y las rutas), tal como lo simulado; 14 enlaces, app con 4 flujos, `95` limpio, el vigilante dice `sin cambios`.
+- **Paso 3** (h1 y h2 sin la IP vieja, ruta por el gateway): docente (`10.0.1.101`) al 8101 → *refused*; alumno (`10.0.2.102`) → *timed out*. Es decir, **la política por rol sigue intacta con capa 3** y el tráfico del docente cruza las subredes por el gateway. Contador de los flujos de entrega /32: 0 → 2 paquetes (el SYN hacia el server y la respuesta hacia h1). `95` limpio, sin tormenta.
+- Hallazgos del camino: el `ping` no sirve (R2 solo deja TCP a servicios del catálogo); la compuerta del playbook 69 leía mal una línea con dos contadores (corregido).
+- **Estado resultante:** los vigilantes L2 están parados y deshabilitados (65 `parar`); `vigilante-capa3` activo con `--aplicar` en ctrl-3 (principal) y ctrl-2 (respaldo). La IP de h1 y h2 NO es persistente (un reinicio del host vuelve a la IP vieja, sin red). **No ejecutar `65_vigilante.yml` con aplicar, ni `60_proactivo.yml`/`70_fase_e.yml -e reiniciar=true` sin pensarlo:** restablecerían el reenvío L2 sobre la capa 3.
+- **Pendiente:** la caída de un cable en vivo con la capa 3 (solo simulada), IP persistente en los hosts (netplan), DHCP por subred y hosts nuevos (ONOS no aprende sus IP), R5 y el bond del server.
+
 ## 7. Estado, pruebas y siguiente
 **Hecho (sin red):** plan y validación de subredes (`Plan`, `cargar_plan`, 8 casos de plan inválido); `flujos_capa3` con rutas completas y ruta por defecto; entrega de punta a punta con MAC y TTL (12 parejas); tráfico dentro de la subred; ARP del gateway y ARP local; IP desconocida
 y TTL agotado; **caída de cada uno de los 7 cables** y de un switch (todo sigue llegando, sin inundar ni lazos); propiedades de escala (el core no depende de H; un acceso crece 2 por host local; L3 < L2/2 con 960 hosts; ruta por defecto constante). **244 pruebas en total** (R2 + prioridades + plantillas).
