@@ -104,6 +104,9 @@ el ARP cuya IP objetivo es un gateway de prueba (`10.99.x.254`) y el IPv4 cuya M
 - **El ARP del gateway virtual NO se puede instalar por REST** (necesita `ARP_TPA`, `ARP_OP` y las instrucciones ARP). Es **estático** (una regla por puerto de acceso, no cambia con los hosts): se instala con `ovs-ofctl` desde Ansible en cada switch de acceso
   (y se reinstala si OVS se reinicia), con `allowExtraneousRules=true` en ONOS si este los borrara. Esa es la hipótesis de V2. La alternativa es una app de ONOS en Java.
 
+**Resultado de la primera corrida de V2 (16-nov, en vivo, sin `allowExtraneousRules`):** `ovs-ofctl` instaló los flujos sin error en los 5 switches, pero **ONOS los borra por "extraños" en pocos segundos**: justo tras instalar (3 s) solo quedaban los de `sw-core-2` (5 de 5); a los 30 s, ninguno. Por eso la parte funcional (V3 y V4) falló con 100 % de pérdida: no era
+un fallo del diseño sino que los flujos ya no estaban. La limpieza funcionó (0 flujos de prueba y solo la IP de producción en los hosts) y la producción no se alteró (el ARP al server siguió respondiendo). Consecuencia: los flujos estáticos del ARP del gateway **exigen `allowExtraneousRules=true`** en ONOS; el playbook 97 ahora lo pone por defecto durante la prueba y lo revierte.
+
 **Decisión (tras V1):** V1 rechazó el ARP, así que queda el camino de los flujos de ARP estáticos con `ovs-ofctl` (más `allowExtraneousRules=true` si ONOS los borra: `-e permitir_extranos=true`), **si V2 y V4 funcionan**. Si V2 falla (Open vSwitch no acepta algo o ONOS no tolera los flujos) → app de ONOS en Java.
 
 ## 7. Estado, pruebas y siguiente

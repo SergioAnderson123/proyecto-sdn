@@ -1,7 +1,7 @@
 # PRUEBA DE VIABILIDAD de la capa 3 en el slice (fases V2 a V4 de docs/DISENO_CAPA3.md, sección 6): monta una mini red de capa 3 con subredes de PRUEBA (10.99.x.0/24) sobre los 5 switches
 # reales, con flujos instalados por `ovs-ofctl`, y la usa con tráfico real entre h1-profesor, h2-alumno y el server. NO toca el tráfico de producción (ver R2/policy/viabilidad_capa3.py).
-#   PLAYBOOK=97_viabilidad_capa3.yml ./lanzar.sh                              # hace todo y limpia al final
-#   PLAYBOOK=97_viabilidad_capa3.yml ./lanzar.sh -e permitir_extranos=true    # además pone allowExtraneousRules=true en ONOS durante la prueba (y lo revierte al final)
+#   PLAYBOOK=97_viabilidad_capa3.yml ./lanzar.sh                              # hace todo y limpia al final (pone allowExtraneousRules=true en ONOS durante la prueba y lo revierte)
+#   PLAYBOOK=97_viabilidad_capa3.yml ./lanzar.sh -e permitir_extranos=false   # SIN esa opción: reproduce lo que pasó el 16-nov, ONOS borra los flujos "extraños" en pocos segundos
 #   PLAYBOOK=97_viabilidad_capa3.yml ./lanzar.sh --tags limpiar               # SOLO limpia (úsalo si la prueba se interrumpió)
 # Qué pasa, en orden: 1) genera los flujos con los cables reales de ONOS; 2) los instala en cada switch y mide cuántos SOBREVIVEN a ONOS (que puede borrarlos por "extraños"); 3) en los 3 hosts añade una
 # IP secundaria de prueba y una ruta 10.99.0.0/16 por el gateway virtual, y prueba ARP del gateway, ping entre subredes (TTL) y un destino inexistente; 4-5) limpia SIEMPRE (flujos por cookie, IP, rutas,
@@ -12,7 +12,7 @@
   vars:
     carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
     salida: /tmp/viab_capa3
-    permitir_extranos: false
+    permitir_extranos: true     # el 16-nov se comprobó que sin esto ONOS borra los flujos instalados con ovs-ofctl en pocos segundos (4 de 5 switches a los 3 s; todos a los 30 s)
   tasks:
     - name: Generar los flujos y los comandos de los hosts
       ansible.builtin.command:
@@ -38,6 +38,22 @@
         body: {allowExtraneousRules: "true"}
         status_code: [200, 201, 204]
       when: permitir_extranos | bool
+      tags: [probar]
+
+    - name: Leer cómo quedó la configuración de ONOS (para comprobar que la propiedad existe y su nombre)
+      ansible.builtin.uri:
+        url: "http://{{ onos_ip }}:8181/onos/v1/configuration/org.onosproject.net.flow.impl.FlowRuleManager"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: config_onos
+      ignore_errors: true
+      tags: [probar]
+
+    - name: Propiedades de FlowRuleManager
+      ansible.builtin.debug:
+        msg: "{{ config_onos.json | default({}) | to_json }}"
       tags: [probar]
 
 - name: Viabilidad capa 3, paso 2 - instalar los flujos con ovs-ofctl y ver cuántos sobreviven a ONOS
