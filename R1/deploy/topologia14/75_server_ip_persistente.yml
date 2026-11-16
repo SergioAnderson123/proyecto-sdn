@@ -31,17 +31,29 @@
         msg: "{{ estado.stdout_lines }}"
       tags: [ip]
 
-    - name: Otro archivo ya configura la interfaz (no se pisa)
+    - name: "Otros archivos que ya asignan direcciones o DHCP4 a la interfaz (mencionarla sin más no estorba, netplan combina los archivos)"
       ansible.builtin.shell:
-        cmd: "grep -l '{{ iface }}' /etc/netplan/*.yaml 2>/dev/null | grep -v '{{ archivo }}' || true"
+        cmd: |
+          python3 - <<'EOF'
+          import glob, yaml
+          conflictos = []
+          for f in sorted(glob.glob('/etc/netplan/*.yaml')):
+              if f.endswith('{{ archivo | basename }}'):
+                  continue
+              d = yaml.safe_load(open(f)) or {}
+              e = ((d.get('network') or {}).get('ethernets') or {}).get('{{ iface }}')
+              if e and (e.get('addresses') or e.get('dhcp4') is True):
+                  conflictos.append(f)
+          print(' '.join(conflictos))
+          EOF
       register: otros
       changed_when: false
       tags: [ip]
 
-    - name: Detener si otro archivo ya define la interfaz
+    - name: Detener si otro archivo ya asigna direcciones o DHCP4 a la interfaz
       ansible.builtin.assert:
         that: otros.stdout | trim | length == 0
-        fail_msg: "Ya hay otro archivo de netplan que menciona {{ iface }}: {{ otros.stdout | trim }}. Revísalo a mano antes de añadir el nuestro."
+        fail_msg: "Otro archivo de netplan ya asigna direcciones o DHCP4 a {{ iface }}: {{ otros.stdout | trim }}. Revísalo a mano antes de añadir el nuestro."
         quiet: true
       when: aplicar | bool
       tags: [ip]
