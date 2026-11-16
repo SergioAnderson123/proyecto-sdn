@@ -51,3 +51,7 @@ sudo ovs-vsctl show                                                             
 - Formato de la salida de `masters` (el assert de `45_maestro.yml` no detiene el despliegue si difiere).
 - RADIUS: `clients.conf` ahora acepta `192.168.201.0/24` (cualquier ONOS); hay que reconstruir la imagen (lo hace `--tags servicios`).
 - El Policy Mapper no comparte sesiones entre réplicas (están en memoria): replicarlo a node-ctrl-2 exige un almacén compartido.
+
+## ONOS <-> RADIUS en node-ctrl-1 (hallazgo del 16-nov)
+El AAA de ONOS abre un socket UDP local con el mismo número de puerto que el del servidor RADIUS (1812). Con RADIUS publicado en el host (`ports: 1812:1812/udp`), el `docker-proxy` ocupa ese puerto y el AAA de node-ctrl-1 falla al arrancar con `BindException: Address already in use`, queda con el socket cerrado y **nunca** puede enviar a RADIUS (`Cannot send packet to RADIUS server`). No sirve cambiar `radiusServerUdpPort` (se probó con 18120: no cambia el puerto local).
+Solución: el contenedor `radius` ya no publica puertos y tiene IP fija `10.50.0.250` en la red `sdn`; ONOS (red del host) llega por esa IP (`radiusIp=10.50.0.250`; `clients.conf` ya acepta `10.50.0.0/24`). `73_radius_red_docker.yml` lo aplica en vivo. Cuando RADIUS se replique en node-ctrl-2 y 3, cada nodo tendrá el suyo en la misma red de Docker y `radiusIp` valdrá igual para los tres.

@@ -101,8 +101,7 @@
       environment:
         ONOS_URL: "http://127.0.0.1:8181/onos/v1"
         SADIS_URL: "http://{{ ansible_host }}:5000/sadis/%s"
-        RADIUS_IP: "{{ ansible_host }}"
-        RADIUS_UDP_PORT: "18120"      # puerto local de ONOS para RADIUS: el 1812 lo ocupa el docker-proxy del contenedor de RADIUS en node-ctrl-1
+        RADIUS_IP: "10.50.0.250"      # RADIUS por la red de Docker (IP fija en R1/compose.yml), no por la IP publicada del host: ver el comentario del servicio radius
       register: init
       failed_when: false
       changed_when: true

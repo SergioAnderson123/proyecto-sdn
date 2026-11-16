@@ -94,11 +94,13 @@ services:
       - policy_mapper
     hostname: radius
     command: ["-X"]
-    ports:
-      - "1812:1812/udp"
-      - "1813:1813/udp"
+    # Sin `ports`: el RADIUS NO se publica en el host. El AAA de ONOS abre un puerto UDP local con el MISMO número que el del servidor (1812); si ONOS comparte máquina
+    # con este contenedor (node-ctrl-1: ONOS usa la red del host), el docker-proxy ya tiene el 1812 y el AAA falla con "BindException: Address already in use" y no puede
+    # hablar con RADIUS. ONOS llega a RADIUS por la red de Docker: 10.50.0.250 desde el host (el AAA usa radiusIp=10.50.0.250) o el nombre `radius` desde otro contenedor.
+    # La IP fija queda fuera del rango que Docker reparte (empieza en .2), así que no choca con ldap, policy_mapper ni onos.
     networks:
-      - sdn
+      sdn:
+        ipv4_address: 10.50.0.250
 
 networks:
   sdn:

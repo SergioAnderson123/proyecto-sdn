@@ -1,0 +1,110 @@
+# ONOS <-> RADIUS por la red de Docker en node-ctrl-1 (ver el comentario del servicio radius en R1/compose.yml y la sección de R1/deploy/topologia14/CLUSTER.md).
+#   PLAYBOOK=73_radius_red_docker.yml ./lanzar.sh                      # SOLO LEE: IP del contenedor, puertos publicados y quién usa el 1812/udp
+#   PLAYBOOK=73_radius_red_docker.yml ./lanzar.sh -e aplicar=true      # recrea el contenedor radius sin puertos publicados y con IP fija, y apunta el AAA a esa IP
+# Qué cambia con aplicar=true: (1) git pull en node-ctrl-1; (2) `docker compose up -d --no-deps radius` (el contenedor se recrea: RADIUS deja de responder unos segundos; no hay
+# sesiones 802.1X que perder y no se tocan flujos); (3) la configuración AAA de ONOS: radiusIp=10.50.0.250. El AAA reconfigura su socket solo; no hace falta reiniciar la app.
+- name: ONOS habla con RADIUS por la red de Docker
+  hosts: servicios
+  gather_facts: false
+  vars:
+    aplicar: false
+    compose_r1: "{{ repo_dir }}/R1/compose.yml"
+    ip_radius: 10.50.0.250
+  tasks:
+    - name: Estado actual del contenedor radius (IP y puertos publicados)
+      ansible.builtin.shell: |
+        echo "IP: $(docker inspect radius --format '{{ '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' }}')"
+        echo "puertos publicados: [$(docker port radius 2>/dev/null | tr '\n' ' ')]"
+      register: estado
+      changed_when: false
+      tags: [radius]
+
+    - name: Quién tiene el 1812/udp en el host
+      ansible.builtin.shell: ss -ulpn | grep -E ':1812|:1813' || echo "(nadie)"
+      become: true
+      register: puertos
+      changed_when: false
+      tags: [radius]
+
+    - name: Mostrar
+      ansible.builtin.debug:
+        msg: "{{ estado.stdout_lines + puertos.stdout_lines }}"
+      tags: [radius]
+
+    - name: Actualizar el repo (la rama debe estar subida)
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ repo_dir }}"
+        version: "{{ repo_rama }}"
+        update: true
+        force: false
+      when: aplicar | bool
+      tags: [radius]
+
+    - name: Recrear radius sin puertos publicados y con IP fija
+      ansible.builtin.shell: |
+        set -e
+        docker compose -p controller -f {{ compose_r1 }} up -d --no-deps radius
+        docker update --restart unless-stopped radius
+      args:
+        executable: /bin/bash
+        chdir: "{{ repo_dir }}/R1"
+      when: aplicar | bool
+      tags: [radius]
+
+    - name: Esperar a que el contenedor tenga la IP fija
+      ansible.builtin.shell: docker inspect radius --format '{{ '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' }}'
+      register: ip_nueva
+      until: ip_nueva.stdout | trim == ip_radius
+      retries: 10
+      delay: 3
+      changed_when: false
+      when: aplicar | bool
+      tags: [radius]
+
+    - name: Apuntar el AAA de ONOS a esa IP
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8181/onos/v1/network/configuration"
+        method: POST
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          apps:
+            org.opencord.aaa:
+              AAA:
+                radiusIp: "{{ ip_radius }}"
+                radiusServerPort: "1812"
+                radiusServerUdpPort: "1812"
+                radiusSecret: "testing123"
+                radiusConnectionType: "socket"
+                radiusMac: "00:00:00:00:00:01"
+                vlanId: "-1"
+        status_code: [200, 201]
+      when: aplicar | bool
+      tags: [radius]
+
+    - name: Esperar a que el AAA reconfigure su socket
+      ansible.builtin.pause:
+        seconds: 25
+      when: aplicar | bool
+      tags: [radius]
+
+    - name: Registro del AAA y sockets UDP de ONOS
+      ansible.builtin.shell: |
+        echo "errores de enlace en el último minuto: $(docker logs onos --since 60s 2>&1 | grep -c "Can't open RADIUS socket")"
+        echo "errores de envío en el último minuto:  $(docker logs onos --since 60s 2>&1 | grep -c 'Cannot send packet')"
+        docker logs onos --since 60s 2>&1 | grep -E 'AaaManager|SocketBasedRadius|RadiusOperational' | grep -v '    at ' | tail -6 | cut -c1-170
+        ss -ulpn | grep java || true
+      become: true
+      register: aaa
+      changed_when: false
+      when: aplicar | bool
+      tags: [radius]
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ aaa.stdout_lines }}"
+      when: aplicar | bool
+      tags: [radius]
