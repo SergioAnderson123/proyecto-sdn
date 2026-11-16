@@ -67,10 +67,13 @@ curl -s -u onos:rocks http://192.168.201.1:8181/onos/v1/flows | python3 -c "impo
 
 Los cores solo llevan reglas de confianza (no hay usuarios); el borde además lleva DHCP, cuarentena y tablas de rol (host-jhon). Ningún usuario con sesión cuelga de ellos todavía.
 
+**Lo que mostró el censo (16-nov):** los 5 switches tienen flujos antiguos de R2 (`org.campus.r2`: tabla 0 con DHCP y cuarentena, y las tablas 10/20/40/50/99) porque el Policy Mapper corrió con la política del repositorio. La cuarentena (prioridad 1000) descarta hoy todo el IP, salvo ARP y el portal: la red solo pasa ARP. El Policy Mapper no borra lo que su política nueva ya no genera, así que antes de reiniciarlo se limpian los de los switches que pasan a la política nueva. R5 no tiene flujos (no hay `NORMAL` suyo).
+
 ```bash
-PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true -e reenvio=core-1,core-2,borde        # escribe policy.local.yaml, aún sin reiniciar
-PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true -e reenvio=core-1,core-2,borde -e reiniciar=true
-PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh
+PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true -e reenvio=core-1,core-2,borde                       # 1) escribe policy.local.yaml; no reinicia ni borra
+PLAYBOOK=70_fase_e.yml ./lanzar.sh -e limpiar=core-1,core-2,borde                                        # 2) solo cuenta lo que se borraría
+PLAYBOOK=70_fase_e.yml ./lanzar.sh -e limpiar=core-1,core-2,borde -e limpiar_aplicar=true -e reiniciar=true -e escribir=true -e reenvio=core-1,core-2,borde   # 3) borra y reinicia
+PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh                                                            # 4) y el censo C0 otra vez
 ```
 Qué mirar: en el 95, los switches `core-1`, `core-2` y `borde` ya **no** deben tener flujos con NORMAL de R2 (los de R5 o de ONOS pueden seguir). Comprueba además
 que ONOS sigue viendo los 14 enlaces (LLDP sube por la regla propia de prioridad 40100): `PLAYBOOK=90_estado.yml ./lanzar.sh`.

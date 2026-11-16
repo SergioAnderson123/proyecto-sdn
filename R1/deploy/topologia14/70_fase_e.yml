@@ -6,7 +6,10 @@
 #   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true                  # escribe R2/policy/policy.local.yaml en node-ctrl-1 (reenvio: normal = no cambia nada)
 #   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true -e reenvio=core-1,core-2,borde   # R2 (proactivo) SOLO en esos switches; los demás: no se les instala nada
 #   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e escribir=true -e reiniciar=true                # y reinicia el policy_mapper para que lo lea
-#   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e hosts_fijos=true               # escribe /etc/vigilante/hosts_fijos.json (node-ctrl-3 y node-ctrl-2)
+#   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e limpiar=core-1,core-2,borde                   # SOLO CUENTA los flujos antiguos de R2 de esos switches
+#   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e limpiar=core-1,core-2,borde -e limpiar_aplicar=true -e escribir=true -e reenvio=core-1,core-2,borde -e reiniciar=true
+#                                                                        # orden dentro del playbook: escribe la política, borra lo antiguo, reinicia el policy_mapper
+#   PLAYBOOK=70_fase_e.yml ./lanzar.sh -e hosts_fijos=true              # escribe /etc/vigilante/hosts_fijos.json (node-ctrl-3 y node-ctrl-2)
 #
 # Orden recomendado (se prueba cada paso con 95_diagnostico_lazos.yml; el freno es 99_freno_emergencia.yml):
 #   1) preparar_ip=true y hosts_fijos=true; luego 65_vigilante.yml -e usar_hosts_fijos=true (el vigilante añade las reglas del server: alta rápida).
@@ -51,6 +54,8 @@
   vars:
     escribir: false
     reiniciar: false
+    limpiar: ""                      # switches (core-1,core-2,borde) cuyos flujos antiguos de R2 se cuentan (y con limpiar_aplicar=true se borran)
+    limpiar_aplicar: false
     reenvio: normal                  # normal | proactivo | lista (core-1,core-2,borde,...)
     ip_server: 10.0.0.10
     puerto_portal: 8443
@@ -102,6 +107,28 @@
           --server {{ server_en }} --externos "{{ externos }}" --reenvio "{{ reenvio }}" --salida {{ carpeta }}/policy.local.yaml
         chdir: "{{ carpeta }}"
       when: escribir | bool
+      tags: [politica]
+
+    - name: "Flujos antiguos de R2 en los switches de `limpiar` (solo cuenta; el Policy Mapper no borra lo que su política nueva ya no genera)"
+      ansible.builtin.command:
+        cmd: "python3 limpiar_r2.py --dispositivos {{ limpiar }}"
+        chdir: "{{ carpeta }}"
+      register: conteo_r2
+      changed_when: false
+      when: limpiar | length > 0
+      tags: [politica]
+
+    - name: Lo que se borraría
+      ansible.builtin.debug:
+        msg: "{{ conteo_r2.stdout_lines }}"
+      when: limpiar | length > 0
+      tags: [politica]
+
+    - name: Borrar los flujos antiguos de R2 en esos switches (antes de reiniciar; en medio el tráfico IP se descarta, no se inunda)
+      ansible.builtin.command:
+        cmd: "python3 limpiar_r2.py --dispositivos {{ limpiar }} --aplicar"
+        chdir: "{{ carpeta }}"
+      when: (limpiar | length > 0) and (limpiar_aplicar | bool)
       tags: [politica]
 
     - name: Reiniciar el policy_mapper (lee policy.local.yaml al arrancar y reaplica los flujos de R2)
