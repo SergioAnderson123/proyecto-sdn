@@ -43,7 +43,7 @@
 
         - name: Flujo de prueba en la tabla 61 que pasa por el meter
           ansible.builtin.command:
-            cmd: "ovs-ofctl -O OpenFlow13 add-flow {{ bridge }} 'table={{ tabla }},priority=1,dl_type=0x88b5,actions=meter:{{ meter }},drop'"
+            cmd: "ovs-ofctl -O OpenFlow13 add-flow {{ bridge }} 'table={{ tabla }},priority=1,dl_type=0x88b5,actions=meter:{{ meter }}'"
           changed_when: true
 
         - name: Inyectar {{ tramas }} tramas de prueba por packet-out (resubmit a la tabla 61)
