@@ -127,12 +127,12 @@ Con 31 accesos todavía conviene el modo de **rutas completas** (la ruta por def
 
 **Fuera de R5:**
 - **La política de R2 no se afecta:** va por rol (VLAN) y por la IP del *destino* (el servicio), no por la IP de origen.
-- **Las conexiones TCP abiertas se cortan** al cambiar de IP. Si importa (sesiones largas, Wi-Fi con movilidad), la salida es **una subred por pabellón para Wi-Fi** (el usuario se mueve dentro del pabellón sin cambiar de IP) y aceptar el cambio solo al cambiar de pabellón.
+- **Las conexiones TCP abiertas se cortan** al cambiar de IP (alcance: solo red cableada). Es el precio de agregar por subred: el host que se pasa a otro puerto de **otro switch o pabellón** cambia de IP; dentro del mismo switch de acceso no cambia. Si hiciera falta conservar la IP al moverse, habría que ir a rutas /32 por host (justo lo que la capa 3 evita).
 - **LDAP con ubicación fija** (`description`, switch y puerto de la ficha) ya rechaza hoy a un usuario que se autentica desde otro puerto: para usuarios móviles esa ficha no debe fijarse.
 - **El DHCP** entrega un contrato nuevo en la subred nueva; el anterior se libera por vencimiento.
 
 ## 4. Decisiones abiertas (tuyas)
 1. Aprobar el **plan A** (`10.0.0.0/24` servicios, `10.0.1.0/24` acc-1, `10.0.2.0/24` acc-2, `203.0.113.0/24` externa) o pedir cambios.
-2. Datos reales para el **plan B**: pabellones, pisos, switches por piso, equipos por zona, si el Wi-Fi va en subredes propias.
+2. Datos reales para el **plan B**: pabellones, pisos, switches por piso, equipos por zona.
 3. **DHCP por subred** (`dhcprelay` + servidor con un ámbito por subred, o un DHCP propio): es independiente del reenvío.
 4. Cómo tratar el **bloqueo de R5 ante movilidad** (sección 3, punto 2).

@@ -153,22 +153,22 @@ def _respuesta_arp_gateway(gw_mac: str, gw_ip: str, copiar: bool) -> List[dict]:
 
 
 # ---------- flujos por subred ----------
-def _flujos_de_subred(plan: Plan, s: Subred, hosts: List[dict], copiar_arp: bool) -> List[dict]:
+def _flujos_de_subred(plan: Plan, s: Subred, hosts: List[dict], copiar_arp: bool, tabla: int = TABLA_REENVIO) -> List[dict]:
     d, gw = s.dispositivo, plan.gw_mac
     flujos = []
     for p in s.puertos:
-        flujos.append(fp._base(d, TABLA_REENVIO, PRIO_ARP_GATEWAY, [
+        flujos.append(fp._base(d, tabla, PRIO_ARP_GATEWAY, [
             {"type": "IN_PORT", "port": p}, {"type": "ETH_TYPE", "ethType": "0x0806"}, {"type": "ARP_OP", "op": 1},
             {"type": "ARP_TPA", "ip": f"{s.gateway}/32"}], _respuesta_arp_gateway(gw, str(s.gateway), copiar_arp)))
         otros = [q for q in s.puertos if q != p]
         if otros:                                                          # inundación LOCAL: solo puertos de acceso de esta subred, nunca troncales
-            flujos.append(fp._base(d, TABLA_REENVIO, PRIO_ARP_LOCAL, [
+            flujos.append(fp._base(d, tabla, PRIO_ARP_LOCAL, [
                 {"type": "IN_PORT", "port": p}, {"type": "ETH_TYPE", "ethType": "0x0806"}, {"type": "ETH_DST", "mac": MAC_BROADCAST}],
                 [_salida(q) for q in otros]))
     for h in hosts:
         mac = h["mac"].upper()
-        flujos.append(fp._base(d, TABLA_REENVIO, PRIO_L2_LOCAL, [{"type": "ETH_DST", "mac": mac}], [_salida(h["port"])]))
-        flujos.append(fp._base(d, TABLA_REENVIO, PRIO_ENTREGA, [
+        flujos.append(fp._base(d, tabla, PRIO_L2_LOCAL, [{"type": "ETH_DST", "mac": mac}], [_salida(h["port"])]))
+        flujos.append(fp._base(d, tabla, PRIO_ENTREGA, [
             {"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "ETH_DST", "mac": gw}, {"type": "IPV4_DST", "ip": f"{h['ip']}/32"}], [
             {"type": "L2MODIFICATION", "subtype": "ETH_SRC", "mac": gw}, {"type": "L2MODIFICATION", "subtype": "ETH_DST", "mac": mac},
             _dec_ttl(), _salida(h["port"])]))
@@ -176,11 +176,12 @@ def _flujos_de_subred(plan: Plan, s: Subred, hosts: List[dict], copiar_arp: bool
 
 
 def flujos_capa3(plan: Plan, grafo: caminos.Grafo, hosts: Iterable[dict], preferidos: Iterable[str] = (), nucleo: Optional[Iterable[str]] = None,
-                 copiar_arp: bool = False) -> List[dict]:
+                 copiar_arp: bool = False, tabla: int = TABLA_REENVIO) -> List[dict]:
     """Todos los flujos de la tabla de reenvío en modo capa 3.
 
     `nucleo`: switches que llevan UNA regla por cada prefijo (rutas completas). Con `None`, todos. Si se indica, los demás switches con subredes (los de acceso) llevan solo una
-    regla por defecto "hacia arriba" por puerto de acceso: sus reglas dejan de crecer con el número de subredes (ver el diseño). `copiar_arp`: copia al controlador el ARP del gateway."""
+    regla por defecto "hacia arriba" por puerto de acceso: sus reglas dejan de crecer con el número de subredes (ver el diseño). `copiar_arp`: copia al controlador el ARP del gateway.
+    `tabla`: tabla OpenFlow donde van los flujos (60 en producción; otra, p. ej. 62, para la prueba de viabilidad aislada de producción)."""
     preferidos = list(preferidos)
     validos, _ = hosts_validos(plan, hosts)
     por_subred = defaultdict(list)
@@ -190,9 +191,9 @@ def flujos_capa3(plan: Plan, grafo: caminos.Grafo, hosts: Iterable[dict], prefer
     for s in plan.subredes:
         if s.dispositivo not in conocidos:
             raise PlanInvalido(f"{s.nombre}: el switch {s.dispositivo} no está en la topología")
-    flujos: List[dict] = fp.flujos_descarte(grafo.keys())
+    flujos: List[dict] = [fp._base(d, tabla, PRIO_DESCARTE, [], []) for d in sorted(grafo)]
     for s in plan.subredes:
-        flujos += _flujos_de_subred(plan, s, sorted(por_subred[s.nombre], key=lambda h: h["mac"].upper()), copiar_arp)
+        flujos += _flujos_de_subred(plan, s, sorted(por_subred[s.nombre], key=lambda h: h["mac"].upper()), copiar_arp, tabla)
     arboles: Dict[str, caminos.Arbol] = {}
     nucleo_set = None if nucleo is None else set(nucleo)
     for s in plan.subredes:
@@ -200,7 +201,7 @@ def flujos_capa3(plan: Plan, grafo: caminos.Grafo, hosts: Iterable[dict], prefer
         for d in sorted(grafo):
             if d == s.dispositivo or d not in arbol or (nucleo_set is not None and d not in nucleo_set):
                 continue
-            flujos.append(fp._base(d, TABLA_REENVIO, PRIO_RUTA, [
+            flujos.append(fp._base(d, tabla, PRIO_RUTA, [
                 {"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "ETH_DST", "mac": plan.gw_mac},
                 {"type": "IPV4_DST", "ip": str(s.prefijo)}], [_dec_ttl(), _salida(arbol[d][1])]))
     if nucleo_set is not None:
@@ -214,7 +215,7 @@ def flujos_capa3(plan: Plan, grafo: caminos.Grafo, hosts: Iterable[dict], prefer
             if d not in arriba:
                 continue                                                  # sin camino a la raíz: sin ruta (descarta)
             for p in sorted(acceso[d]):
-                flujos.append(fp._base(d, TABLA_REENVIO, PRIO_SUBIDA, [
+                flujos.append(fp._base(d, tabla, PRIO_SUBIDA, [
                     {"type": "IN_PORT", "port": p}, {"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "ETH_DST", "mac": plan.gw_mac}],
                     [_dec_ttl(), _salida(arriba[d][1])]))
     return flujos

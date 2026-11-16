@@ -1,0 +1,274 @@
+# PRUEBA DE VIABILIDAD de la capa 3 en el slice (fases V2 a V4 de docs/DISENO_CAPA3.md, sección 6): monta una mini red de capa 3 con subredes de PRUEBA (10.99.x.0/24) sobre los 5 switches
+# reales, con flujos instalados por `ovs-ofctl`, y la usa con tráfico real entre h1-profesor, h2-alumno y el server. NO toca el tráfico de producción (ver R2/policy/viabilidad_capa3.py).
+#   PLAYBOOK=97_viabilidad_capa3.yml ./lanzar.sh                              # hace todo y limpia al final
+#   PLAYBOOK=97_viabilidad_capa3.yml ./lanzar.sh -e permitir_extranos=true    # además pone allowExtraneousRules=true en ONOS durante la prueba (y lo revierte al final)
+#   PLAYBOOK=97_viabilidad_capa3.yml ./lanzar.sh --tags limpiar               # SOLO limpia (úsalo si la prueba se interrumpió)
+# Qué pasa, en orden: 1) genera los flujos con los cables reales de ONOS; 2) los instala en cada switch y mide cuántos SOBREVIVEN a ONOS (que puede borrarlos por "extraños"); 3) en los 3 hosts añade una
+# IP secundaria de prueba y una ruta 10.99.0.0/16 por el gateway virtual, y prueba ARP del gateway, ping entre subredes (TTL) y un destino inexistente; 4-5) limpia SIEMPRE (flujos por cookie, IP, rutas,
+# configuración de ONOS); 6) veredicto. Antes y después: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh. Freno: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true
+- name: Viabilidad capa 3, paso 1 - generar los flujos con los cables reales (switch-borde)
+  hosts: borde
+  gather_facts: false
+  vars:
+    carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
+    salida: /tmp/viab_capa3
+    permitir_extranos: false
+  tasks:
+    - name: Generar los flujos y los comandos de los hosts
+      ansible.builtin.command:
+        cmd: "python3 viabilidad_capa3.py generar --salida {{ salida }} --onos http://{{ onos_ip }}:8181"
+        chdir: "{{ carpeta_codigo }}"
+      register: generado
+      changed_when: false
+      tags: [probar]
+
+    - name: Qué se generó
+      ansible.builtin.debug:
+        msg: "{{ generado.stdout_lines }}"
+      tags: [probar]
+
+    - name: Permitir flujos "extraños" en ONOS durante la prueba (se revierte al final)
+      ansible.builtin.uri:
+        url: "http://{{ onos_ip }}:8181/onos/v1/configuration/org.onosproject.net.flow.impl.FlowRuleManager"
+        method: POST
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        body_format: json
+        body: {allowExtraneousRules: "true"}
+        status_code: [200, 201, 204]
+      when: permitir_extranos | bool
+      tags: [probar]
+
+- name: Viabilidad capa 3, paso 2 - instalar los flujos con ovs-ofctl y ver cuántos sobreviven a ONOS
+  hosts: switches
+  become: true
+  gather_facts: false
+  vars:
+    salida: /tmp/viab_capa3
+    nombres: {switch-borde: borde, sw-core-1: core-1, sw-core-2: core-2, sw-acc-1: acc-1, sw-acc-2: acc-2}
+    cookie: "cookie=0x99c3000000000000/0xffff000000000000"
+  tasks:
+    - name: Copiar los flujos de este switch
+      ansible.builtin.copy:
+        src: "{{ salida }}/{{ nombres[inventory_hostname] }}.flows"
+        dest: /tmp/viab_capa3.flows
+        mode: "0644"
+      tags: [probar]
+
+    - name: Cuántos flujos de prueba hay ANTES (debe ser 0)
+      ansible.builtin.shell:
+        cmd: "ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} '{{ cookie }}' | grep -c 'cookie=' || true"
+      register: antes
+      changed_when: false
+      tags: [probar]
+
+    - name: Instalar con ovs-ofctl (flujos de la tabla 62 y su entrada en la tabla 0)
+      ansible.builtin.command:
+        cmd: "ovs-ofctl -O OpenFlow13 add-flows {{ bridge }} /tmp/viab_capa3.flows"
+      register: instalado
+      ignore_errors: true
+      tags: [probar]
+
+    - name: Cuántos flujos de prueba hay justo después
+      ansible.builtin.shell:
+        cmd: "sleep 3; ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} '{{ cookie }}' | grep -c 'cookie=' || true"
+      register: justo
+      changed_when: false
+      tags: [probar]
+
+    - name: Esperar 30 s a ver si ONOS los borra por extraños
+      ansible.builtin.pause:
+        seconds: 30
+      run_once: true
+      become: false
+      delegate_to: localhost
+      tags: [probar]
+
+    - name: Cuántos sobreviven tras 30 s
+      ansible.builtin.shell:
+        cmd: "ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} '{{ cookie }}' | grep -c 'cookie=' || true"
+      register: despues
+      changed_when: false
+      tags: [probar]
+
+    - name: Guardar el resultado de este switch
+      ansible.builtin.set_fact:
+        v_antes: "{{ antes.stdout | trim | int }}"
+        v_justo: "{{ justo.stdout | trim | int }}"
+        v_despues: "{{ despues.stdout | trim | int }}"
+        v_error_instalar: "{{ (instalado.stderr | default('')) if instalado.failed else '' }}"
+      tags: [probar]
+
+    - name: Resumen de este switch
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: antes={{ v_antes }}, justo tras instalar={{ v_justo }}, tras 30 s={{ v_despues }} {{ ('ERROR: ' ~ v_error_instalar) if v_error_instalar | length > 0 else '' }}"
+      tags: [probar]
+
+- name: Viabilidad capa 3, paso 3 - los hosts usan las subredes de prueba
+  hosts: h1-profesor:h2-alumno:server
+  become: true
+  gather_facts: false
+  vars:
+    salida: /tmp/viab_capa3
+    cmds: "{{ (lookup('file', salida ~ '/hosts.json') | from_json)[inventory_hostname] }}"
+  tasks:
+    - name: Poner la IP secundaria de prueba y la ruta 10.99.0.0/16 por el gateway virtual
+      ansible.builtin.command:
+        cmd: "{{ item }}"
+      loop: "{{ cmds.poner }}"
+      ignore_errors: true
+      tags: [probar]
+
+    - name: Esperar 2 s a que se asiente
+      ansible.builtin.pause:
+        seconds: 2
+      run_once: true
+      become: false
+      delegate_to: localhost
+      tags: [probar]
+
+    - name: ARP del gateway de prueba (debe contestarlo el switch con la MAC de prueba)
+      ansible.builtin.shell:
+        cmd: |
+          gw=$(ip route show 10.99.0.0/16 | awk '{print $3}')
+          arping -c 2 -w 3 -I ens4 "$gw" >/dev/null 2>&1
+          ip neigh show "$gw" | awk '{print $1, $3, $4, $5}'
+      register: arp_gw
+      changed_when: false
+      ignore_errors: true
+      tags: [probar]
+
+    - name: Ping entre subredes de prueba (con TTL) y a una IP de prueba que no existe
+      ansible.builtin.shell:
+        cmd: |
+          origen=$(ip -4 -o addr show dev ens4 | awk '{print $4}' | cut -d/ -f1 | grep '^10\.99\.')
+          for destino in {{ destinos[inventory_hostname] | join(' ') }}; do
+            salida=$(ping -c 3 -W 2 -I "$origen" "$destino" 2>&1)
+            perdida=$(echo "$salida" | grep -o '[0-9]*% packet loss' | cut -d% -f1)
+            ttl=$(echo "$salida" | grep -o 'ttl=[0-9]*' | head -1)
+            echo "$origen -> $destino perdida=${perdida:-?}% ${ttl:-sin-respuesta}"
+          done
+      vars:
+        destinos:
+          h1-profesor: ["10.99.2.102", "10.99.0.10", "10.99.2.77"]
+          h2-alumno: ["10.99.1.101"]
+          server: ["10.99.1.101"]
+      register: pings
+      changed_when: false
+      ignore_errors: true
+      tags: [probar]
+
+    - name: Producción intacta, el ARP al server de siempre (10.0.0.10) debe seguir contestando
+      ansible.builtin.shell:
+        cmd: "arping -c 2 -w 3 -I ens4 10.0.0.10 2>&1 | grep -c 'reply from' || true"
+      register: produccion
+      changed_when: false
+      when: inventory_hostname != 'server'
+      tags: [probar]
+
+    - name: Resultado de este host
+      ansible.builtin.debug:
+        msg:
+          - "{{ inventory_hostname }}: vecino del gateway = {{ arp_gw.stdout | default('sin dato') | trim }}"
+          - "{{ pings.stdout_lines | default([]) }}"
+          - "ARP de producción a 10.0.0.10: {{ produccion.stdout | default('n/a') | trim }} respuestas"
+      tags: [probar]
+
+- name: Viabilidad capa 3, paso 4 - limpiar los switches (siempre)
+  hosts: switches
+  become: true
+  gather_facts: false
+  vars:
+    cookie: "cookie=0x99c3000000000000/0xffff000000000000"
+  tasks:
+    - name: Borrar TODOS los flujos de la prueba por su cookie (los de producción no llevan esa cookie)
+      ansible.builtin.command:
+        cmd: "ovs-ofctl -O OpenFlow13 del-flows {{ bridge }} {{ cookie }}"
+      ignore_errors: true
+      tags: [probar, limpiar]
+
+    - name: Comprobar que no queda ninguno
+      ansible.builtin.shell:
+        cmd: "ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} '{{ cookie }}' | grep -c 'cookie=' || true"
+      register: quedan
+      changed_when: false
+      tags: [probar, limpiar]
+
+    - name: Quitar el archivo temporal
+      ansible.builtin.file:
+        path: /tmp/viab_capa3.flows
+        state: absent
+      tags: [probar, limpiar]
+
+    - name: Resultado de la limpieza
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: flujos de prueba que quedan = {{ quedan.stdout | trim }}"
+      tags: [probar, limpiar]
+
+- name: Viabilidad capa 3, paso 5 - limpiar los hosts y revertir ONOS (siempre)
+  hosts: h1-profesor:h2-alumno:server
+  become: true
+  gather_facts: false
+  vars:
+    salida: /tmp/viab_capa3
+  tasks:
+    - name: Quitar la ruta y la IP secundaria de prueba
+      ansible.builtin.shell:
+        cmd: |
+          ip route del 10.99.0.0/16 2>/dev/null || true
+          for ip in $(ip -4 -o addr show dev ens4 | awk '{print $4}' | grep '^10\.99\.'); do ip addr del "$ip" dev ens4; done
+          ip -4 -o addr show dev ens4 | awk '{print $4}' | tr '\n' ' '
+      register: limpio
+      changed_when: false
+      tags: [probar, limpiar]
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: direcciones de ens4 tras limpiar = {{ limpio.stdout | trim }}"
+      tags: [probar, limpiar]
+
+- name: Viabilidad capa 3, paso 5b - revertir ONOS y limpiar archivos (switch-borde)
+  hosts: borde
+  gather_facts: false
+  tasks:
+    - name: Volver a allowExtraneousRules=false (el valor por defecto de ONOS)
+      ansible.builtin.uri:
+        url: "http://{{ onos_ip }}:8181/onos/v1/configuration/org.onosproject.net.flow.impl.FlowRuleManager"
+        method: POST
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        body_format: json
+        body: {allowExtraneousRules: "false"}
+        status_code: [200, 201, 204]
+      ignore_errors: true
+      tags: [probar, limpiar]
+
+    - name: Quitar los archivos generados
+      ansible.builtin.file:
+        path: /tmp/viab_capa3
+        state: absent
+      tags: [probar, limpiar]
+
+- name: Viabilidad capa 3, veredicto
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Los flujos se instalaron y se pueden contar en los 5 switches
+      ansible.builtin.assert:
+        that:
+          - groups['switches'] | map('extract', hostvars, 'v_justo') | map('int') | min > 0
+          - groups['switches'] | map('extract', hostvars, 'v_error_instalar') | select | list | length == 0
+        fail_msg: "ovs-ofctl no instaló los flujos en algún switch (ver el resumen del paso 2)"
+        success_msg: "ovs-ofctl instaló los flujos en los 5 switches (V2: Open vSwitch acepta las acciones del ARP del gateway, dec_ttl y la reescritura de MAC)"
+      tags: [probar]
+
+    - name: Informe de supervivencia a ONOS (no falla; sirve para decidir el camino)
+      ansible.builtin.debug:
+        msg: >-
+          Sobrevivieron tras 30 s: {{ groups['switches'] | map('extract', hostvars, 'v_despues') | map('int') | list }} de
+          {{ groups['switches'] | map('extract', hostvars, 'v_justo') | map('int') | list }} (orden: groups.switches).
+          {{ 'ONOS NO los borra: los flujos instalados por ovs-ofctl conviven con ONOS tal cual.' if (groups['switches'] | map('extract', hostvars, 'v_despues') | map('int') | list) == (groups['switches'] | map('extract', hostvars, 'v_justo') | map('int') | list) else 'ONOS borró flujos extraños: repetir con -e permitir_extranos=true.' }}
+      tags: [probar]

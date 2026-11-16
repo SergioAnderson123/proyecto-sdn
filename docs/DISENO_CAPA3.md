@@ -76,8 +76,20 @@ en un formato interno que está **sin verificar contra ONOS**. Hay tres caminos,
   Hay que reinstalarlos al reiniciar OVS (un servicio systemd que los re-aplique).
 - **Una app mínima de ONOS (Java)** que instale esos flujos con la API nativa (así lo hace `openstacknetworking`) y, de paso, atienda el ARP en el controlador. Es lo más limpio y lo más caro (compilar y empaquetar un .oar).
 
-**Prueba de viabilidad (30 minutos, sin riesgo):** `python3 spike_capa3.py --dispositivo acc-1` muestra 9 flujos de prueba; con `--aplicar` los envía **de a uno** a la **tabla 61, a la que nada salta**, con prioridad 1 y sin salida real
-(son inertes: ningún paquete puede llegar a ellos) y dice cuáles acepta ONOS y cuáles rechaza (con el mensaje). `--quitar --aplicar` los borra. Con ese resultado se elige el camino.
+**Pruebas de viabilidad en el slice (de menor a mayor riesgo; todas se pueden revertir y ninguna toca el tráfico de producción):**
+| Fase | Qué responde | Cómo | Riesgo |
+|---|---|---|---|
+| **V1** | ¿El REST de ONOS acepta ARP_OP, ARP_TPA, DEC_TTL, modificación de campos ARP, salida por IN_PORT y las extensiones de Nicira? | `python3 R2/policy/spike_capa3.py --dispositivo acc-1 --aplicar` (9 flujos de prueba **de a uno**, en la **tabla 61, a la que nada salta**; `--quitar --aplicar` los borra) | Ninguno (flujos inertes) |
+| **V2** | ¿Open vSwitch acepta las acciones (ARP del gateway con copia de campos, `dec_ttl`, reescritura de MAC)? ¿ONOS borra los flujos instalados por `ovs-ofctl` ("extraños")? | `97_viabilidad_capa3.yml` (paso 2: instala con `ovs-ofctl`, cuenta antes, justo después y a los 30 s) | Ninguno: los flujos de prueba solo se alcanzan con un ARP a `10.99.x.254` o una MAC de gateway de prueba |
+| **V3** | ¿Un host real resuelve el gateway virtual y le llegan las respuestas (ARP con la MAC de prueba)? | `97` (paso 3) | Igual |
+| **V4** | ¿Funciona el enrutamiento de verdad entre tres switches (ruta por prefijo, entrega /32, reescritura de MAC, TTL) y la producción sigue igual? | `97` (pasos 3 y 4: ping h1↔h2 y h1→server con TTL esperado, destino inexistente descartado, ARP de producción a `10.0.0.10`) | Igual |
+
+**Aislamiento de V2–V4** (probado en la simulación: `test_el_trafico_de_produccion_se_comporta_igual_con_y_sin_los_flujos_de_prueba`): los flujos de capa 3 van a la **tabla 62**, a la que ningún flujo de producción salta. Se entra a ella solo por dos reglas de la tabla 0 (prioridad 40060):
+el ARP cuya IP objetivo es un gateway de prueba (`10.99.x.254`) y el IPv4 cuya MAC destino es la MAC de gateway de prueba (`02:00:5E:99:99:FE`). Nadie más usa esas direcciones. Todos los flujos llevan la cookie `0x99c3…` y se borran de una vez
+(`del-flows cookie=0x99c3000000000000/0xffff000000000000`); los de producción no la llevan. Los hosts reciben una **IP secundaria** de prueba (10.99.x.y) y una ruta `10.99.0.0/16` por su gateway virtual; la IP de producción no se toca.
+**Subredes de prueba:** `10.99.0.0/24` (core-1, puerto 5: server `10.99.0.10`), `10.99.1.0/24` (acc-1, puerto 1: h1 `10.99.1.101`) y `10.99.2.0/24` (acc-2, puerto 1: h2 `10.99.2.102`); gateway `.254`.
+**TTL esperado:** h1↔h2 llega con TTL 61 (tres saltos de enrutamiento: ruta en acc-1, ruta en core-1, entrega en acc-2) y h1→server con 62.
+**Decisión según el resultado:** si V1 acepta todo → instalar por REST (sin cambios en ONOS). Si V1 rechaza y V2/V4 funcionan → flujos de ARP estáticos con `ovs-ofctl` (más `allowExtraneousRules=true` si ONOS los borra: `-e permitir_extranos=true`). Si V2 falla → app de ONOS en Java.
 
 ## 7. Estado, pruebas y siguiente
 **Hecho (sin red):** plan y validación de subredes (`Plan`, `cargar_plan`, 8 casos de plan inválido); `flujos_capa3` con rutas completas y ruta por defecto; entrega de punta a punta con MAC y TTL (12 parejas); tráfico dentro de la subred; ARP del gateway y ARP local; IP desconocida
