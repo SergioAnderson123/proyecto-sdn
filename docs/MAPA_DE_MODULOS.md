@@ -3,26 +3,28 @@
 Una vista de todo lo que hay en el repositorio, agrupado por capa y por quién depende de quién, con los huecos y las incoherencias detectadas.
 Pruebas automáticas al escribir este mapa: R2/policy 270 (267 + 3 del generador), R5 111, topologia14 17; el resto de módulos tiene sus propias pruebas (`test_agente.py`, `test_mab_vm.py`, `R1/deploy/test_slice.py`, `R2/portal_cautivo/tests`).
 
-## 1. Vista por capas
+## 1. Módulos
 
-| Capa | Módulo | Dónde | Qué hace | Estado |
+Un módulo es una pieza con una responsabilidad, su propia carpeta o conjunto de archivos y su propio conjunto de pruebas.
+
+| Req. | Módulo | Dónde | Qué hace | Estado |
 |---|---|---|---|---|
-| **Identidad (R1)** | Agente 802.1X | `R1/agente_802_1x/` | wpa_supplicant + API de sesiones (`/sessions/logout`, token `AGENTE_TOKEN`) | en vivo |
-| | FreeRADIUS + OpenLDAP | `R1/radius/`, `R1/shared/ldap/` | EAP-TLS, roles por LDAP; en la slice RADIUS corre en Docker sin puertos publicados, IP 10.50.0.250 (playbook 73) | en vivo |
-| | Policy Mapper | `R1/shared/policy_mapper/`, `R1/policy_mapper/` | traduce rol→flujos de ONOS; solo añade flujos (se limpia con `limpiar_r2.py`) | en vivo |
-| **Restricción (R2)** | Tablas por rol | `R2/policy/policy_tables.py`, `policy.yaml`, `portal_auth.py` | tablas de rol, cuarentena, portal, DHCP, prioridades R2 | en vivo |
-| | Reenvío proactivo (L2) | `R2/policy/flujos_proactivos.py`, `caminos.py`, `plan_arboles.py`, `puertos.py`, `instalar_proactivo.py`, `explicar_ruta.py`, `vista_previa.py` | tabla 60: unicast por MAC, ARP por árbol, sin STP ni tormentas | en vivo |
-| | **Vigilante** | `R2/policy/vigilante.py`, `recalculo.py`, `hosts_fijos.py`, `consultar_hosts.py`, `onos_multi.py` | observa enlaces/hosts de ONOS, recalcula el árbol y repara flujos (borrar antes de añadir, alta rápida, hosts fijos, standby). Modo L2 en vivo; **modo capa 3** (`--subredes`, `--nucleo`) validado solo en simulación | L2 en vivo, L3 offline |
-| | **Capa 3 por subredes** | `R2/policy/capa3.py`, `ovs_formato.py`, `viabilidad_capa3.py`, `spike_capa3.py`, `benchmark_capa3.py`, `planes/` | un prefijo por switch de acceso, gateway virtual, rutas por árbol, /32 de entrega con MAC y TTL | datos de V1–V4 en vivo; vigilante L3 offline |
-| | **App ONOS "Gateway ARP" (Java)** | `R2/onos-app/gateway-arp/` + `R2/policy/generar_config_gateway_arp.py` | instala como flujos propios de ONOS la respuesta ARP del gateway (el REST de ONOS 2.7 no la admite); permite `allowExtraneousRules=false` | escrita, **sin compilar ni probar** |
-| | Portal cautivo, panel, MAB | `R2/portal_cautivo/`, `R2/panel_accesos/`, `R2/mab_vm/`, `R2/fallback/` | invitados, vista de accesos, MAB de respaldo | portal sin desplegar en la slice |
-| | Pruebas de aceptación | `R2/tests/`, `R2/mininet/` | barrido, métricas y topología Mininet | laboratorio |
-| **Perímetro (R5)** | Suricata + integrador | `R5/suricata/`, `R5/codigo/`, `R5/cli/` | alertas → bloqueo en ONOS (prioridad R5) | en vivo en laboratorio, la slice espera ajustes |
-| | Laboratorio y pruebas | `R5/lab/`, `R5/pruebas/`, `R5/tests/` | Docker, evidencias, espejo, TCAM | — |
-| | Despliegue de sensores | `R5/deploy/` | `prioridades.yaml` (mapa único de prioridades), topología de ejemplo | pensado para otra topología (ver huecos) |
-| **Operación** | Despliegue de la slice de 14 VM | `R1/deploy/topologia14/` | playbooks `00`–`99` (ver §2), `lanzar.sh`, inventario, plantillas, `TOPOLOGIA.md`, `CLUSTER.md` | en vivo |
-| | Despliegue previo | `R1/deploy/{controller,hosts,switches,slice.py}` | versión de 6 VM y utilidades | histórico |
-| **Documentos** | `docs/` | ver §3 | diseños, resultados y protocolos | — |
+| R1 | Agente 802.1X | `R1/agente_802_1x/` | wpa_supplicant + API de sesiones (`/sessions/logout`, token `AGENTE_TOKEN`) | en vivo |
+| R1 | FreeRADIUS | `R1/radius/` | EAP-TLS; en la slice corre en Docker sin puertos publicados, IP 10.50.0.250 (playbook 73) | en vivo |
+| R1 | OpenLDAP | `R1/shared/ldap/` | usuarios y roles que consulta FreeRADIUS | en vivo |
+| R1 | Policy Mapper | `R1/shared/policy_mapper/`, `R1/policy_mapper/` | traduce rol a flujos de ONOS; solo añade flujos (se limpia con `limpiar_r2.py`) | en vivo |
+| R2 | Tablas por rol | `R2/policy/policy_tables.py`, `policy.yaml`, `portal_auth.py` | tablas de rol, cuarentena, portal, DHCP, prioridades R2 | en vivo |
+| R2 | Reenvío proactivo (L2) | `R2/policy/flujos_proactivos.py`, `caminos.py`, `plan_arboles.py`, `puertos.py`, `instalar_proactivo.py`, `explicar_ruta.py`, `vista_previa.py` | ver §4 | en vivo |
+| R2 | Vigilante | `R2/policy/vigilante.py`, `recalculo.py`, `hosts_fijos.py`, `consultar_hosts.py`, `onos_multi.py` | observa enlaces y hosts de ONOS, recalcula el árbol y repara flujos. Modo L2 en vivo; modo capa 3 (`--subredes`, `--nucleo`) solo en simulación | L2 en vivo, L3 offline |
+| R2 | Capa 3 por subredes | `R2/policy/capa3.py`, `ovs_formato.py`, `planes/` (+ `viabilidad_capa3.py`, `spike_capa3.py`, `benchmark_capa3.py`) | un prefijo por switch de acceso, gateway virtual, rutas por árbol, entrega /32 con MAC y TTL | V1–V4 en vivo; vigilante L3 offline |
+| R2 | App ONOS Gateway ARP (Java) | `R2/onos-app/gateway-arp/`, `R2/policy/generar_config_gateway_arp.py` | instala como flujos propios de ONOS la respuesta ARP del gateway; permite `allowExtraneousRules=false` | escrita, sin compilar |
+| R2 | Portal cautivo | `R2/portal_cautivo/` | invitados y portal | sin desplegar en la slice |
+| R2 | Panel de accesos | `R2/panel_accesos/` | vista de accesos | laboratorio |
+| R2 | MAB de respaldo | `R2/mab_vm/`, `R2/fallback/` | MAB cuando no hay 802.1X | laboratorio |
+| R5 | Suricata + integrador | `R5/suricata/`, `R5/codigo/`, `R5/cli/` | alertas a bloqueo en ONOS (prioridad R5) | laboratorio; la slice espera ajustes |
+| R5 | Despliegue de sensores | `R5/deploy/` | `prioridades.yaml` (mapa único de prioridades), topología de ejemplo | pensado para otra topología (§6) |
+
+Fuera de la lista (no son módulos): playbooks de la slice (`R1/deploy/topologia14/`, ver §2), pruebas y laboratorios (`R2/tests/`, `R2/mininet/`, `R5/lab/`, `R5/pruebas/`, `R5/tests/`) y documentos (`docs/`, ver §3).
 
 ## 2. Playbooks de `topologia14` por fase
 
@@ -45,7 +47,18 @@ Pruebas automáticas al escribir este mapa: R2/policy 270 (267 + 3 del generador
 | Plataforma | `DESPLIEGUE_UBUNTU.md`, `CERTIFICADOS_Y_ESCALABILIDAD.md`, `topologia-v4-14vms.drawio` |
 | Equipo/curso | `avance-01-roles.md`, `plan-avance-R5.md`, `pendientes-entrega-1.md`, `entrega-1/` |
 
-## 4. Dependencias entre módulos (de abajo hacia arriba)
+## 4. Qué hay dentro del reenvío proactivo
+
+| Archivo | Función |
+|---|---|
+| `caminos.py` | grafo de enlaces y árbol de expansión por raíz (preferencia de enlaces) |
+| `plan_arboles.py` | nombres de switch a deviceId y plan de árboles de la slice |
+| `puertos.py` | puertos de acceso frente a puertos entre switches (`edge_ports`) |
+| `flujos_proactivos.py` | genera los flujos de la tabla 60: unicast por MAC (prio 100), difusión ARP por árbol (prio 200), descarte (prio 1); no instala nada |
+| `instalar_proactivo.py` | los envía a ONOS (borrar y añadir) |
+| `explicar_ruta.py`, `vista_previa.py` | herramientas de lectura: ruta de un host a otro y simulación de lo que se instalaría |
+
+## 5. Dependencias entre módulos (de abajo hacia arriba)
 
 ```
 caminos / plan_arboles / puertos  →  flujos_proactivos  →  instalar_proactivo
@@ -56,7 +69,7 @@ policy_tables / policy.yaml  →  Policy Mapper (R1)  ←  agente 802.1X + FreeR
 ```
 La app Java no importa nada de Python: solo lee la configuración que genera `generar_config_gateway_arp.py` desde el mismo plan que usa el vigilante. Esa es la costura entre ambos: **si cambia el plan, hay que regenerar la configuración y reiniciar el vigilante**.
 
-## 5. Huecos e incoherencias (ordenados por urgencia)
+## 6. Huecos e incoherencias (ordenados por urgencia)
 
 1. **App Java sin compilar.** Los nombres de la API de ONOS están escritos de memoria; falta `construir.ps1` con Docker Desktop abierto y probarla con `allowExtraneousRules=false` (playbook `76`, aún por escribir).
 2. **Vigilante en modo capa 3 solo en simulación.** No se ha probado en vivo con la app Java ni con los hosts fijos con IP.
