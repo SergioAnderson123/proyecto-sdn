@@ -122,6 +122,13 @@ Salvedades: la prueba usó ping (ICMP) con la política de R2 esquivada a propó
 
 **Decisión (tras V1):** V1 rechazó el ARP, así que queda el camino de los flujos de ARP estáticos con `ovs-ofctl` (más `allowExtraneousRules=true` si ONOS los borra: `-e permitir_extranos=true`), **si V2 y V4 funcionan**. Si V2 falla (Open vSwitch no acepta algo o ONOS no tolera los flujos) → app de ONOS en Java.
 
+### V5. La app de ONOS Gateway ARP, en vivo (16-nov, `allowExtraneousRules=false`)
+
+`R2/onos-app/gateway-arp` + `76_gateway_arp.yml` resuelven el punto abierto de V2: el ARP del gateway se instala como flujo **de ONOS** (appId propio), así que ya no hace falta `allowExtraneousRules=true`.
+- Resultado: 4 de 4 flujos `ADDED` a los 5 s y a los 40 s (uno en core-1, acc-1, acc-2 y borde; ninguno en core-2). `arping` a su gateway desde h1 y h2 y resolución del vecino desde el server: contestan los switches con la MAC `02:00:5E:00:00:FE`; el contador del flujo sube (acc-2: 0 a 3; core-1: 0 a 1). Producción intacta (arping a 10.0.0.10 sigue respondiendo).
+- Hallazgos que costó encontrar: (1) ONOS dejó la app `ACTIVE` con el feature `Uninstalled` (carrera ya vista con la app AAA): el playbook ejecuta `feature:install gateway-arp` por Karaf, que es idempotente. (2) Las constantes de Nicira de ONOS 2.7 son `NICIRA_MOV_*`. (3) Los 5 switches (OVS 3.3.9) quedaban con driver `default`, porque el driver `ovs` de ONOS 2.7 solo coincide con `sw=2.*`: sin él no hay extensiones de Nicira. Se fuerza con netcfg (`devices/<id>` `basic.driver=ovs`); el `ovs` hereda el mismo pipeline que `default`, solo añade las extensiones. Se revierte con `DELETE .../devices/<id>/basic`.
+- Pendiente: el driver ovs está forzado solo en los 4 switches del plan; core-2 sigue en `default`. Falta ver el vigilante en modo capa 3 contra ONOS con esta app.
+
 ## 7. Estado, pruebas y siguiente
 **Hecho (sin red):** plan y validación de subredes (`Plan`, `cargar_plan`, 8 casos de plan inválido); `flujos_capa3` con rutas completas y ruta por defecto; entrega de punta a punta con MAC y TTL (12 parejas); tráfico dentro de la subred; ARP del gateway y ARP local; IP desconocida
 y TTL agotado; **caída de cada uno de los 7 cables** y de un switch (todo sigue llegando, sin inundar ni lazos); propiedades de escala (el core no depende de H; un acceso crece 2 por host local; L3 < L2/2 con 960 hosts; ruta por defecto constante). **244 pruebas en total** (R2 + prioridades + plantillas).
