@@ -24,11 +24,13 @@ R2/   Restricción de recursos: tablas de rol, fallback MAB, portal cautivo y pa
   mininet/               topología R2, admisión y servicios de prueba
   mab_vm/  fallback/     fallback MAB de VM y overrides de compose
   portal_cautivo/  panel_accesos/  tests/  diagramas/
+  policy/ (red)          reenvío proactivo, vigilante, capa 3 por subredes (capa3.py, planes/) y generador de configuración de la app Java
+  onos-app/gateway-arp/  app de ONOS (Java) que instala la respuesta ARP del gateway como flujos propios de ONOS
 R5/   Seguridad perimetral: Suricata + integrador hacia ONOS
   codigo/  cli/  lab/  suricata/  tests/
   pruebas/               scripts, evidencia (JSON, capturas, pcap) y resultados de Docker y VNRT
   deploy/ids/            despliegue de los dos sensores IDS (slice de 14 VM); topologia.example.yaml describe cores, puertos y NIC; prioridades.yaml es el mapa único de prioridades R1/R2/R5
-docs/   entregables y documentos del curso (no son código de un requerimiento)
+docs/   entregables y documentos del curso (no son código de un requerimiento); el índice de todos los módulos y sus huecos está en docs/MAPA_DE_MODULOS.md
 ```
 
 R1 y R2 comparten el Policy Mapper: el código base está en `R1/shared/policy_mapper/` y los módulos de R2 en `R2/policy/`. `R1/compose.yml` monta ambas carpetas (`PYTHONPATH=/app:/r2_policy`).
