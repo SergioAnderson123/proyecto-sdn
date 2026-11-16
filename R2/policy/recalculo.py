@@ -80,6 +80,8 @@ def clave(f: dict) -> Tuple:
         else:
             if "mac" in i:                                     # ONOS puede devolver la MAC de una instrucción en minúsculas
                 i = dict(i, mac=str(i["mac"]).upper())
+            if i.get("type") == "TABLE" and "tableId" in i:    # ONOS devuelve el número de tabla de goto_table como texto ("62")
+                i = dict(i, tableId=int(i["tableId"]))
             otras.append(json.dumps(i, sort_keys=True))
     return (f["deviceId"], int(f["tableId"]), int(f["priority"]), criterios, tuple(sorted(salidas)), tuple(sorted(otras)))
 

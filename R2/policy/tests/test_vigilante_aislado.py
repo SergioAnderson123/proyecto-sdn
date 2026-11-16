@@ -94,3 +94,13 @@ def test_linea_de_comandos_rechaza_combinaciones_peligrosas(tmp_path, capsys):
     assert vg.main(base + ["--tabla", "62"]) == 2                                              # sin plan
     assert vg.main(base + ["--subredes", str(plan), "--tabla", "62"]) == 0                     # válida (ONOS no responde: no hace nada)
     assert "AISLADO en la tabla 62" in capsys.readouterr().out
+
+
+def test_onos_devuelve_el_numero_de_tabla_del_goto_como_texto_y_es_el_mismo_flujo():
+    """Regresion del 16-nov (77 en vivo): sin normalizarlo, el vigilante borraba y reponia la regla de entrada en cada ciclo."""
+    base = {"priority": rc.PRIO_ENTRADA, "deviceId": A1, "tableId": 0,
+            "selector": {"criteria": [{"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "ETH_DST", "mac": "02:00:5E:99:99:FE"}]},
+            "treatment": {"instructions": [{"type": "TABLE", "tableId": 62}]}}
+    de_onos = json.loads(json.dumps(base))
+    de_onos["treatment"]["instructions"][0]["tableId"] = "62"
+    assert rc.clave(base) == rc.clave(de_onos)

@@ -1,6 +1,7 @@
 # PRUEBA APLICADA del vigilante en modo capa 3, AISLADA de la produccion: el vigilante APLICA la capa 3 con subredes de prueba 10.99.x en la TABLA 62 (nunca en la 60) y se usa con trafico real entre h1, h2 y el server.
 #   PLAYBOOK=77_prueba_vigilante_aislado.yml ./lanzar.sh                  # hace todo y limpia al final
 #   PLAYBOOK=77_prueba_vigilante_aislado.yml ./lanzar.sh --tags limpiar   # SOLO limpia (si la prueba se interrumpio)
+#   PLAYBOOK=77_prueba_vigilante_aislado.yml ./lanzar.sh -e limpiar_al_final=false   # deja montado para mirar contadores (despues: --tags limpiar)
 # Requisito: la app Gateway ARP ya instalada (76_gateway_arp.yml). Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh. Freno: PLAYBOOK=99_freno_emergencia.yml ./lanzar.sh -e confirmar=true
 # Aislamiento (por que no puede afectar a produccion):
 #   - El vigilante en modo aislado (--tabla 62) solo lee y escribe la tabla 62 y UNA regla de entrada por switch en la tabla 0 (prioridad 40060: IPv4 cuya MAC destino es la MAC del gateway de prueba 02:00:5E:99:99:FE,
@@ -55,6 +56,23 @@
     - name: Esperar 6 s a que la app instale los flujos de los gateways
       ansible.builtin.pause:
         seconds: 6
+      tags: [probar]
+
+    - name: Flujos de la app para comprobar que corre la version con MAC propia por gateway
+      ansible.builtin.uri:
+        url: "{{ api }}/flows/application/{{ app }}"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        return_content: true
+      register: flujos_app
+      tags: [probar]
+
+    - name: Detener si los gateways de prueba no contestan con la MAC de prueba (la app instalada es una version vieja)
+      ansible.builtin.assert:
+        that:
+          - flujos_app.json.flows | map(attribute='treatment.instructions') | flatten | selectattr('mac', 'defined') | map(attribute='mac') | map('lower') | select('equalto', '02:00:5e:99:99:fe') | list | length == 6
+        fail_msg: "La app instalada en ONOS no usa la MAC de prueba (version vieja). Reinstalarla con: PLAYBOOK=76_gateway_arp.yml ./lanzar.sh -e reinstalar=true ; despues repetir este playbook. Se retira la configuracion de prueba con --tags limpiar."
       tags: [probar]
 
     - name: El vigilante aplica la capa 3 en la tabla 62 (primer ciclo)
@@ -125,9 +143,9 @@
       ignore_errors: true
       tags: [probar]
 
-    - name: Produccion intacta, ping al server de siempre (10.0.0.10)
+    - name: Produccion intacta, el ARP al server de siempre (10.0.0.10) sigue contestando (con ARP porque el IPv4 de produccion depende de la sesion 802.1X)
       ansible.builtin.shell:
-        cmd: "ping -c 2 -W 2 10.0.0.10 2>&1 | grep -o '[0-9]*% packet loss'"
+        cmd: "arping -c 2 -w 3 -I ens4 10.0.0.10 2>&1 | grep -c 'reply from' || true"
       register: produccion
       changed_when: false
       ignore_errors: true
@@ -138,7 +156,7 @@
       ansible.builtin.debug:
         msg:
           - "{{ pings.stdout_lines | default([]) }}"
-          - "produccion a 10.0.0.10: {{ produccion.stdout | default('n/a') | trim }}"
+          - "respuestas ARP de produccion de 10.0.0.10: {{ produccion.stdout | default('n/a') | trim }}"
       tags: [probar]
 
 - name: Prueba aislada, paso 3 - limpiar los hosts (siempre)
@@ -154,11 +172,13 @@
           ip -4 -o addr show dev ens4 | awk '{print $4}' | tr '\n' ' '
       register: limpio
       changed_when: false
+      when: limpiar_al_final | default(true) | bool
       tags: [probar, limpiar]
 
     - name: Direcciones de ens4 tras limpiar
       ansible.builtin.debug:
         msg: "{{ inventory_hostname }}: {{ limpio.stdout | trim }}"
+      when: limpiar_al_final | default(true) | bool
       tags: [probar, limpiar]
 
 - name: Prueba aislada, paso 4 - retirar lo del vigilante y los gateways de prueba (siempre)
@@ -180,6 +200,7 @@
       register: retiro
       changed_when: false
       ignore_errors: true
+      when: limpiar_al_final | default(true) | bool
       tags: [probar, limpiar]
 
     - name: Volver a generar la configuracion de produccion (sin los gateways de prueba)
@@ -187,17 +208,20 @@
         cmd: "python3 generar_config_gateway_arp.py --plan planes/vnrt_topologia14.json --salida {{ config }}"
         chdir: "{{ carpeta_codigo }}"
       changed_when: true
+      when: limpiar_al_final | default(true) | bool
       tags: [probar, limpiar]
 
     - name: Publicarla
       ansible.builtin.command:
         argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/json", --data-binary, "@{{ config }}", "{{ api }}/network/configuration/apps/{{ app }}"]
       changed_when: true
+      when: limpiar_al_final | default(true) | bool
       tags: [probar, limpiar]
 
     - name: Esperar 6 s
       ansible.builtin.pause:
         seconds: 6
+      when: limpiar_al_final | default(true) | bool
       tags: [probar, limpiar]
 
     - name: Cuentas finales
@@ -205,6 +229,7 @@
         cmd: "{{ contar }}"
       register: final
       changed_when: false
+      when: limpiar_al_final | default(true) | bool
       tags: [probar, limpiar]
 
     - name: Resultado de la limpieza (esperado, app 4 ADDED, tabla62 0 y entrada40060 0 en todos)
@@ -212,6 +237,7 @@
         msg:
           - "{{ retiro.stdout_lines | default([]) }}"
           - "{{ final.stdout_lines }}"
+      when: limpiar_al_final | default(true) | bool
       tags: [probar, limpiar]
 
 - name: Prueba aislada, veredicto
