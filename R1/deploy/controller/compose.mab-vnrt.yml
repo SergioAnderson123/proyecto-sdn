@@ -1,0 +1,8 @@
+# Complemento de R2/mab_vm/compose.yml para el VNRT actual.
+# No recrea ONOS, LDAP, RADIUS ni Policy Mapper.
+services:
+  r2_mab_vm:
+    environment:
+      ONOS_URL: http://192.168.201.1:8181
+      VM_ACCESS_PORTS: of:0000e6925d87354b/1,of:0000766a0c84c741/1
+      VM_MAX_CHILDREN: "2"

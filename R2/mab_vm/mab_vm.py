@@ -68,6 +68,10 @@ class MabVM:
                 raise Denied("NO_AUTHENTICATED_PARENT")
             if (parent.dpid, str(parent.port)) != (dpid, port):
                 raise Denied("PARENT_LOCATION_MISMATCH")
+            # El flujo del padre pertenece a R1 y nunca debe sustituirse por
+            # el flujo temporal de una VM con el mismo in_port + eth_src.
+            if mac == parent.mac.lower():
+                raise Denied("CHILD_MAC_IS_PARENT")
             if parent.role.lower() not in ("docente", "alumno"):
                 raise Denied("PARENT_ROLE_NOT_ALLOWED")
             if not parent.session_id or parent.session_id in self.revoking:
