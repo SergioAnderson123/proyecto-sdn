@@ -5,7 +5,9 @@
 - `88 modo=api`: `POST /sessions/ausente` cierra la sesión 802.1X real de h1 y su flujo 40001 en sw-acc-1 (1 → 0).
 - `88 modo=puerto`: al bajar la NIC del puerto 1 de sw-acc-1 la sesión desaparece a los ≤ 10 s (2 lecturas de 5 s) y el flujo se retira.
 **Hallazgo:** en VNRT, tras cerrar la sesión de un equipo que sigue vivo (el host no ve caer su enlace) el agente NO reautentica solo: hay que reiniciarlo (`72_suplicante.yml -e arrancar=true`). En un cable real caen los dos extremos y el agente hace logoff y logon al recuperar el enlace.
-**Falta en vivo:** la sospecha por baja del flujo 40001 (logoff, caso 1) con una concesión del mismo equipo: requiere una MAC con sesión y concesión a la vez (h1 con DHCP o un equipo de prueba).
+- `89` sospecha por logoff, con h1 (sesión real) y una concesión a su MAC y el sondeo periódico apagado: equipo muerto (la IP de la concesión no está en h1) → a ~15 s del `/sessions/logout` la app dice "no contesta al sondeo ARP", libera la IP (ONOS la pierde) y avisa al Policy Mapper; equipo vivo (la IP configurada en h1) → la concesión se conserva (50 s observados).
+**Hallazgo de la prueba (corregido):** el paso final del 88 no subía la NIC (buscaba el script en el repo, que la VM del switch no tiene) y el puerto de h1 quedó LINK_DOWN; ahora usa el nombre guardado y muestra el estado. Si un host no autentica tras estas pruebas, mirar `ovs-ofctl show br0` en su switch.
+**Pendiente:** dejar `sondeo_lento` en 120 al terminar las pruebas.
 
 ## El problema
 Una sesión 802.1X es **permanente** (flujo 40001 sin plazo): solo la cierran el logoff del agente, la revocación de R5, el portal o un reinicio del Policy Mapper. Y una concesión DHCP dura `leaseSeg` (900 s). Cuando un equipo desaparece sin avisar, quedan su rol abierto en ese puerto (alguien que conecte otro equipo con su MAC heredaría el rol), su IP ocupada y su regla /32 puesta.
