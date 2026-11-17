@@ -1,0 +1,137 @@
+# PRUEBA EN VIVO de la SOSPECHA por baja del flujo de sesion (caso 1 de docs/DISENO_PRESENCIA_EQUIPOS.md): h1 tiene su sesion 802.1X real y ademas una concesion DHCP a su MAC real; se cierra su sesion
+# (POST /sessions/logout, lo mismo que hace el boton Desconectar del agente) y la app DHCP, que ve caer el flujo 40001, sondea por ARP al equipo: si contesta conserva la IP, si no la libera.
+#   Antes, SIN sondeo periodico (para que solo pueda actuar la sospecha):
+#     PLAYBOOK=86_presencia.yml ./lanzar.sh --tags config -e confirmar=true -e sondeo_lento=0
+#   PLAYBOOK=89_prueba_sospecha_logoff.yml ./lanzar.sh -e prueba=muerta -e confirmar=true    # la IP de la concesion NO esta configurada en h1: no contesta el ARP; debe desaparecer de ONOS a ~15 s del cierre
+#   PLAYBOOK=89_prueba_sospecha_logoff.yml ./lanzar.sh -e prueba=viva -e confirmar=true      # la IP SI esta configurada en h1 (como secundaria): contesta; debe CONSERVARSE
+#   Al terminar: PLAYBOOK=86_presencia.yml ./lanzar.sh --tags config -e confirmar=true -e sondeo_lento=120   y   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true  (h1 queda sin sesion)
+# Requisitos: 86 aplicado, h1 con sesion (72 -e arrancar=true). Efecto: h1 PIERDE su sesion (hay que reautenticar); la concesion de prueba se libera SIEMPRE al final y la IP secundaria se quita.
+# Con sondeo_lento=0 sin la sospecha la concesion duraria sus 900 s: que desaparezca a los ~15 s solo se explica por la baja del flujo de sesion. Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh.
+- name: Prueba de la sospecha por logoff con h1
+  hosts: h1-profesor
+  become: true
+  gather_facts: false
+  vars:
+    prueba: muerta
+    confirmar: false
+    mac: "fa:16:3e:b6:96:08"
+    espera: 50
+    api: "http://{{ onos_ip }}:8181/onos/v1"
+    env_archivo: "{{ repo_dir }}/R1/deploy/.env"
+    ver_ips: >-
+      curl -s -u {{ onos_user }}:{{ onos_pass }} {{ api }}/hosts | python3 -c 'import sys, json; r = [h.get("ipAddresses") for h in json.load(sys.stdin).get("hosts", []) if h["mac"].lower() == "{{ mac }}"]; print(r[0] if r else "(h1 no esta en /hosts)")'
+  tasks:
+    - name: Exige -e confirmar=true y una prueba valida (h1 pierde su sesion)
+      ansible.builtin.assert:
+        that: (confirmar | bool) and prueba in ['muerta', 'viva']
+        fail_msg: "Uso: -e prueba=muerta|viva -e confirmar=true"
+        quiet: true
+
+    - name: Sesion de h1 en el Policy Mapper
+      ansible.builtin.shell:
+        cmd: "curl -s http://127.0.0.1:5000/sessions | python3 -c 'import sys, json; s = json.load(sys.stdin)[\"sessions\"].get(\"{{ mac }}\"); print(\"CON_SESION\" if s else \"SIN_SESION\")'"
+      delegate_to: node-ctrl-1
+      register: sesion
+      changed_when: false
+
+    - name: Sin sesion no hay prueba
+      ansible.builtin.assert:
+        that: "'CON_SESION' in sesion.stdout"
+        fail_msg: "h1 no tiene sesion 802.1X: PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true"
+        quiet: true
+
+    - name: Probar con limpieza garantizada
+      block:
+        - name: Copiar el cliente DHCP de prueba
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/files/cliente_dhcp_prueba.py"
+            dest: /tmp/cliente_dhcp_prueba.py
+            mode: "0755"
+
+        - name: Pedir una concesion con la MAC real de h1 por ens4 (la concesion queda abierta, sin RELEASE)
+          ansible.builtin.shell:
+            cmd: "rm -f /tmp/dhcp_prueba_h1.json /tmp/dhcp_prueba_parar; python3 /tmp/cliente_dhcp_prueba.py --iface ens4 --mac {{ mac }} --salida /tmp/dhcp_prueba_h1.json --mantener 0 > /tmp/dhcp_prueba_h1.log 2>&1; cat /tmp/dhcp_prueba_h1.json"
+          register: lease
+          changed_when: true
+
+        - name: La IP de la concesion
+          ansible.builtin.set_fact:
+            ip_lease: "{{ (lease.stdout | from_json).ip | default('') }}"
+
+        - name: Sin concesion no hay prueba
+          ansible.builtin.assert:
+            that: ip_lease | length > 0
+            fail_msg: "h1 no obtuvo concesion: {{ lease.stdout }} (la app DHCP debe estar activa; 82 y 86)"
+            quiet: true
+
+        - name: Con prueba=viva, configurar esa IP en ens4 como secundaria (asi el nucleo contesta el ARP del sondeo)
+          ansible.builtin.shell:
+            cmd: "ip addr add {{ ip_lease }}/24 dev ens4"
+          changed_when: true
+          when: prueba == 'viva'
+
+        - name: Esperar 8 s y ver la IP en ONOS ANTES del cierre
+          ansible.builtin.shell:
+            cmd: "sleep 8; {{ ver_ips }}"
+          delegate_to: switch-borde
+          register: antes
+          changed_when: false
+
+        - name: Cerrar la sesion de h1 (POST /sessions/logout con la clave del agente, que no se imprime)
+          ansible.builtin.shell:
+            cmd: "k=$(grep '^AGENTE_TOKEN=' {{ env_archivo }} | cut -d= -f2-); curl -s -X POST -H 'Content-Type: application/json' -H \"X-Agente-Token: $k\" -d '{\"mac\":\"{{ mac }}\"}' http://127.0.0.1:5000/sessions/logout"
+          delegate_to: node-ctrl-1
+          register: logout
+          changed_when: true
+          no_log: true
+
+        - name: Respuesta del Policy Mapper (sin la clave)
+          ansible.builtin.debug:
+            msg: "{{ logout.stdout | default('(sin datos)') }}"
+
+        - name: "Mirar la IP de h1 en ONOS cada 5 s durante {{ espera }} s"
+          ansible.builtin.shell:
+            cmd: |
+              fin=$(( $(date +%s) + {{ espera }} ))
+              while [ $(date +%s) -lt $fin ]; do
+                echo "$(date +%H:%M:%S)  ONOS ips de h1: $( {{ ver_ips }} )"
+                sleep 5
+              done
+          delegate_to: switch-borde
+          register: linea
+          changed_when: false
+
+        - name: Lo que dijo la app (log de Karaf)
+          ansible.builtin.shell:
+            cmd: "sshpass -p {{ onos_pass }} ssh -p 8101 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {{ onos_user }}@{{ onos_ip }} log:display 2>/dev/null | grep -i 'DHCP por subred' | tail -8 | cut -c1-230"
+          delegate_to: switch-borde
+          register: registro
+          changed_when: false
+          failed_when: false
+
+        - name: Resultado
+          ansible.builtin.debug:
+            msg:
+              - "Concesion de prueba: {{ ip_lease }}  |  prueba={{ prueba }}"
+              - "ANTES del cierre (ONOS): {{ antes.stdout }}"
+              - "{{ linea.stdout_lines }}"
+              - "{{ registro.stdout_lines }}"
+              - "{{ 'Esperado muerta: la IP desaparece de la lista a ~15 s del cierre (sondeo ARP sin respuesta) y el log dice: no contesta al sondeo ARP.' if prueba == 'muerta' else 'Esperado viva: la IP sigue en la lista hasta el final y el log NO dice que no conteste.' }}"
+              - "Al terminar: 86 --tags config -e sondeo_lento=120 y 72 -e arrancar=true."
+
+      always:
+        - name: Quitar la IP secundaria y liberar la concesion de prueba (RELEASE)
+          ansible.builtin.shell:
+            cmd: |
+              ip addr del {{ ip_lease | default('0.0.0.0') }}/24 dev ens4 2>/dev/null
+              python3 /tmp/cliente_dhcp_prueba.py --iface ens4 --mac {{ mac }} --salida /tmp/dhcp_prueba_h1.json --mantener 1 > /tmp/dhcp_prueba_h1.log 2>&1
+              ip addr del {{ ip_lease | default('0.0.0.0') }}/24 dev ens4 2>/dev/null
+              rm -f /tmp/dhcp_prueba_h1.json /tmp/dhcp_prueba_h1.log
+              echo limpio
+          register: limpio
+          changed_when: false
+          failed_when: false
+
+        - name: Limpieza
+          ansible.builtin.debug:
+            msg: "{{ limpio.stdout_lines | default(['sin limpiar']) }}"

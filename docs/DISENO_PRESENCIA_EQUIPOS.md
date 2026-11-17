@@ -1,6 +1,11 @@
 # Presencia de equipos: liberar la IP y el rol cuando un equipo ya no está
 
-**Estado (17-nov-2026):** escrito y probado sin red (11 pruebas Java de la lógica, 11 del Policy Mapper, 2 del generador, 297 de R2). **Probado en vivo (87):** equipo muerto → la IP desaparece de ONOS a los 35 s del ACK (sondeo lento 20 s + 15 s); equipo vivo → la IP se conserva. **Falta en vivo:** cierre de la sesión en el Policy Mapper (`88_prueba_sesion_ausente.yml`, modos `api` y `puerto`) y el logoff (caso 1).
+**Estado (17-nov-2026):** escrito y probado sin red (11 pruebas Java de la lógica, 11 del Policy Mapper, 2 del generador, 297 de R2). **Probado en vivo:**
+- `87` equipo muerto: la IP desaparece de ONOS a los 35 s del ACK (sondeo lento 20 s + 15 s); equipo vivo: la IP se conserva.
+- `88 modo=api`: `POST /sessions/ausente` cierra la sesión 802.1X real de h1 y su flujo 40001 en sw-acc-1 (1 → 0).
+- `88 modo=puerto`: al bajar la NIC del puerto 1 de sw-acc-1 la sesión desaparece a los ≤ 10 s (2 lecturas de 5 s) y el flujo se retira.
+**Hallazgo:** en VNRT, tras cerrar la sesión de un equipo que sigue vivo (el host no ve caer su enlace) el agente NO reautentica solo: hay que reiniciarlo (`72_suplicante.yml -e arrancar=true`). En un cable real caen los dos extremos y el agente hace logoff y logon al recuperar el enlace.
+**Falta en vivo:** la sospecha por baja del flujo 40001 (logoff, caso 1) con una concesión del mismo equipo: requiere una MAC con sesión y concesión a la vez (h1 con DHCP o un equipo de prueba).
 
 ## El problema
 Una sesión 802.1X es **permanente** (flujo 40001 sin plazo): solo la cierran el logoff del agente, la revocación de R5, el portal o un reinicio del Policy Mapper. Y una concesión DHCP dura `leaseSeg` (900 s). Cuando un equipo desaparece sin avisar, quedan su rol abierto en ese puerto (alguien que conecte otro equipo con su MAC heredaría el rol), su IP ocupada y su regla /32 puesta.

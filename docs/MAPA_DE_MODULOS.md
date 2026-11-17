@@ -12,12 +12,12 @@ Un módulo es una pieza con una responsabilidad, su propia carpeta o conjunto de
 | R1 | Agente 802.1X | `R1/agente_802_1x/` | wpa_supplicant + API de sesiones (`/sessions/logout`, token `AGENTE_TOKEN`) | en vivo |
 | R1 | FreeRADIUS | `R1/radius/` | EAP-TLS; en la slice corre en Docker sin puertos publicados, IP 10.50.0.250 (playbook 73) | en vivo |
 | R1 | OpenLDAP | `R1/shared/ldap/` | usuarios y roles que consulta FreeRADIUS | en vivo |
-| R1 | Policy Mapper | `R1/shared/policy_mapper/`, `R1/policy_mapper/` | traduce rol a flujos de ONOS; solo añade flujos (se limpia con `limpiar_r2.py`) | en vivo |
+| R1 | Policy Mapper | `R1/shared/policy_mapper/`, `R1/policy_mapper/` | traduce rol a flujos de ONOS; solo añade flujos (se limpia con `limpiar_r2.py`). Cierra sesiones de equipos ausentes: `POST /sessions/ausente` (clave `PRESENCIA_TOKEN`) y vigilante de puertos sin enlace | en vivo (ausente y puerto probados con 88) |
 | R2 | Tablas por rol | `R2/policy/policy_tables.py`, `policy.yaml`, `portal_auth.py` | tablas de rol, cuarentena, portal, DHCP, prioridades R2 | en vivo |
 | R2 | Vigilante y reenvío proactivo | `R2/policy/vigilante.py`, `recalculo.py`, `hosts_fijos.py`, `consultar_hosts.py`, `onos_multi.py` y la base que comparten con la instalación inicial: `flujos_proactivos.py`, `caminos.py`, `plan_arboles.py`, `puertos.py`, `instalar_proactivo.py`, `explicar_ruta.py`, `vista_previa.py` (ver §4) | genera e instala los flujos de la tabla 60 y el vigilante los mantiene: observa enlaces y hosts de ONOS, recalcula el árbol y repara. Modo L2 en vivo; modo capa 3 (`--subredes`, `--nucleo`) solo en simulación | L2 en vivo, L3 offline |
 | R2 | Capa 3 por subredes | `R2/policy/capa3.py`, `ovs_formato.py`, `planes/` (+ `viabilidad_capa3.py`, `spike_capa3.py`, `benchmark_capa3.py`) | un prefijo por switch de acceso, gateway virtual, rutas por árbol, entrega /32 con MAC y TTL | V1–V4 en vivo; vigilante L3 offline |
 | R2 | App ONOS Gateway ARP (Java) | `R2/onos-app/gateway-arp/`, `R2/policy/generar_config_gateway_arp.py` | instala como flujos propios de ONOS la respuesta ARP del gateway; permite `allowExtraneousRules=false` | compila y probada en vivo (4/4 flujos, allowExtraneousRules=false) |
-| R2 | App ONOS DHCP por subred (Java) | `R2/onos-app/campus-dhcp/` | servidor DHCP con ámbito por switch y puerto, defensas contra el agotamiento, registro de la IP en ONOS (`docs/DISENO_DHCP_POR_SUBRED.md`) | probada en vivo (82 y 83); sondeo de presencia (`docs/DISENO_PRESENCIA_EQUIPOS.md`) con 35 pruebas, falta probarlo en vivo (86 y 87) |
+| R2 | App ONOS DHCP por subred y presencia (Java) | `R2/onos-app/campus-dhcp/` (`Presencia.java` es el sondeo), `R2/policy/generar_config_dhcp.py` | servidor DHCP con ámbito por switch y puerto, defensas contra el agotamiento, registro de la IP en ONOS (`docs/DISENO_DHCP_POR_SUBRED.md`); **presencia**: sondea por ARP a los equipos con concesión, libera la IP del que no contesta y avisa al Policy Mapper para cerrar su sesión (`docs/DISENO_PRESENCIA_EQUIPOS.md`) | DHCP en vivo (82 y 83); presencia en vivo con 87 y 88, falta la sospecha por logoff (89); 35 pruebas Java |
 | R2 | Portal cautivo | `R2/portal_cautivo/` | invitados y portal | sin desplegar en la slice |
 | R2 | Panel de accesos | `R2/panel_accesos/` | vista de accesos | laboratorio |
 | R2 | MAB de respaldo | `R2/mab_vm/`, `R2/fallback/` | MAB cuando no hay 802.1X | laboratorio |
@@ -34,7 +34,7 @@ Fuera de la lista (no son módulos): playbooks de la slice (`R1/deploy/topologia
 | Plano de control | `20_controller`, `30_switches`, `40_cluster`, `42_servicios`, `45_maestro`, `50_sensores` | ONOS, OVS, clúster, servicios, nodo maestro, sensores |
 | R2 | `60_proactivo`, `65_vigilante`, `70_fase_e`, `71_consulta_hosts`, `72_suplicante`, `73_radius_red_docker`, `74_token_agente`, `75_server_ip_persistente` | reenvío proactivo, vigilante, tablas R2, consulta de hosts, autenticación de prueba |
 | Seguridad de la operación | `90_estado`, `95_diagnostico_lazos`, `96_estres_difusion`, `96_prueba_rstp`, `99_freno_emergencia` | estado, detector de lazos, estrés, freno |
-| Capa 3 | `97_viabilidad_capa3`, `76_gateway_arp`, `98_prueba_vigilante_capa3` (solo lectura), `77_prueba_vigilante_aislado`, `66_preflight_conmutacion` (solo lectura), `67_hosts_plan_a`, `68_vigilante_capa3_servicio`, `69_conmutacion_hosts`, `80_caida_cable`, `81_prueba_meters`, `82_dhcp_app`, `83_prueba_dhcp`, `84_prueba_meters_onos`; diseño pendiente `docs/DISENO_DHCP_POR_SUBRED.md` | viabilidad, app Java, simulación y prueba aplicada del vigilante en la tabla 62 con subredes de prueba |
+| Capa 3 | `97_viabilidad_capa3`, `76_gateway_arp`, `98_prueba_vigilante_capa3` (solo lectura), `77_prueba_vigilante_aislado`, `66_preflight_conmutacion` (solo lectura), `67_hosts_plan_a`, `68_vigilante_capa3_servicio`, `69_conmutacion_hosts`, `80_caida_cable`, `81_prueba_meters`, `82_dhcp_app`, `83_prueba_dhcp`, `84_prueba_meters_onos`, `86_presencia` (clave, app y configuración del sondeo), `87_prueba_presencia`, `88_prueba_sesion_ausente`, `89_prueba_sospecha_logoff`; diseño pendiente `docs/DISENO_DHCP_POR_SUBRED.md` | viabilidad, app Java, simulación y prueba aplicada del vigilante en la tabla 62 con subredes de prueba |
 
 ## 3. Documentos
 
@@ -42,7 +42,7 @@ Fuera de la lista (no son módulos): playbooks de la slice (`R1/deploy/topologia
 |---|---|
 | Diseño proactivo (L2) | `DISENO_FLUJOS_PROACTIVOS.md`, `Reenvio_proactivo_sin_STP.pptx` |
 | Fase E (tráfico IP de R2 por la tabla 60) | `DISENO_FASE_E.md`, `RESULTADOS_FASE_E.md` |
-| Capa 3 y direccionamiento | `DISENO_CAPA3.md`, `PLAN_DIRECCIONAMIENTO.md` |
+| Capa 3 y direccionamiento | `DISENO_CAPA3.md`, `PLAN_DIRECCIONAMIENTO.md`, `PLAN_CONMUTACION_CAPA3.md`, `DISENO_DHCP_POR_SUBRED.md`, `DISENO_PRESENCIA_EQUIPOS.md` |
 | Pruebas | `PROTOCOLO_PRUEBA_AUTENTICACION.md`, `VALIDAR_H1_VNRT.md`, `VALIDAR_PORTAL_DHCP_VNRT.md` |
 | Plataforma | `DESPLIEGUE_UBUNTU.md`, `CERTIFICADOS_Y_ESCALABILIDAD.md`, `topologia-v4-14vms.drawio` |
 | Equipo/curso | `avance-01-roles.md`, `plan-avance-R5.md`, `pendientes-entrega-1.md`, `entrega-1/` |
@@ -66,6 +66,7 @@ caminos / plan_arboles / puertos  →  flujos_proactivos  →  instalar_proactiv
 recalculo (usa flujos_proactivos y, en modo L3, capa3) → vigilante (+ hosts_fijos, onos_multi)
 planes/*.json → capa3.cargar_plan → generar_config_gateway_arp → app ONOS Gateway ARP
 policy_tables / policy.yaml  →  Policy Mapper (R1)  ←  agente 802.1X + FreeRADIUS/LDAP
+planes/*.json → generar_config_dhcp → app ONOS campus-dhcp (DHCP + presencia) ──POST /sessions/ausente──→ Policy Mapper (R1)
 ```
 La app Java no importa nada de Python: solo lee la configuración que genera `generar_config_gateway_arp.py` desde el mismo plan que usa el vigilante. Esa es la costura entre ambos: **si cambia el plan, hay que regenerar la configuración y reiniciar el vigilante**.
 
