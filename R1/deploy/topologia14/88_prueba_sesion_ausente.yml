@@ -81,6 +81,10 @@
           register: nic
           changed_when: false
 
+        - name: Guardar el nombre de la NIC (el paso final lo necesita aunque algo falle despues)
+          ansible.builtin.set_fact:
+            nic_nombre: "{{ nic.stdout | trim }}"
+
         - name: Bajar la NIC (el switch ve el puerto sin enlace)
           ansible.builtin.command:
             cmd: "ip link set dev {{ nic.stdout | trim }} down"
@@ -99,14 +103,18 @@
           register: linea
           changed_when: false
       always:
-        - name: Subir la NIC otra vez (siempre)
+        - name: Subir la NIC otra vez (siempre; usa el nombre guardado, la VM del switch no tiene el repositorio)
           ansible.builtin.shell:
-            cmd: "n=$(python3 {{ repo_dir }}/R1/deploy/topologia14/files/nic_de_puerto.py {{ puerto }} 2>/dev/null); [ -n \"$n\" ] && ip link set dev $n up; echo subida"
+            cmd: "ip link set dev {{ nic_nombre }} up; sleep 2; ip -br link show {{ nic_nombre }}"
           delegate_to: "{{ sw }}"
           become: true
+          register: subida
           changed_when: true
-          failed_when: false
-          when: modo == 'puerto'
+          when: nic_nombre is defined
+
+        - name: Estado final de la NIC (debe decir UP)
+          ansible.builtin.debug:
+            msg: "{{ subida.stdout | default('NO SE SUBIO LA NIC: no se llego a conocer su nombre; subirla a mano en ' ~ sw) }}"
       when: modo == 'puerto'
 
     - name: Linea de tiempo del modo puerto
