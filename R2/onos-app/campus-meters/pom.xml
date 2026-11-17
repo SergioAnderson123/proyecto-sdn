@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- App de ONOS "Meters por puerto": crea los medidores de R1 (EAPOL y DHCP, banda DROP) y las reglas aditivas que los usan en cada puerto de acceso del plan; los repone si el switch vuelve y los retira al desactivarla.
+     Ver docs/DISENO_METERS_POR_PUERTO.md. Compilar: ver README.md (en Docker, con Maven y JDK 11). -->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.onosproject</groupId>
+        <artifactId>onos-dependencies</artifactId>
+        <version>2.7.0</version>
+    </parent>
+
+    <groupId>org.campus</groupId>
+    <artifactId>campus-meters</artifactId>
+    <version>1.0.0</version>
+    <packaging>bundle</packaging>
+
+    <description>Medidores (meters) por puerto de acceso contra la inundacion de EAPOL y DHCP, creados desde el plan de subredes</description>
+    <url>https://github.com/SergioAnderson123/proyecto-sdn</url>
+
+    <properties>
+        <onos.version>2.7.0</onos.version>
+        <onos.app.name>org.campus.meters</onos.app.name>
+        <onos.app.title>Meters por puerto (EAPOL y DHCP)</onos.app.title>
+        <onos.app.origin>PUCP TEL354 Grupo 4</onos.app.origin>
+        <onos.app.category>Utility</onos.app.category>
+        <onos.app.url>https://github.com/SergioAnderson123/proyecto-sdn</onos.app.url>
+        <onos.app.readme>Meters de R1 por puerto de acceso: EAPOL 20 pps y DHCP 10 pps (banda DROP), con reglas aditivas que el controlador no ve cuando se desborda; se reponen al reconectar el switch y se retiran al desactivar la app.</onos.app.readme>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.onosproject</groupId>
+            <artifactId>onos-api</artifactId>
+            <version>${onos.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.onosproject</groupId>
+            <artifactId>onlab-osgi</artifactId>
+            <version>${onos.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.onosproject</groupId>
+            <artifactId>onlab-misc</artifactId>
+            <version>${onos.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.osgi</groupId>
+            <artifactId>org.osgi.service.component.annotations</artifactId>
+            <version>1.4.0</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.30</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.2</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.felix</groupId>
+                <artifactId>maven-bundle-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.onosproject</groupId>
+                <artifactId>onos-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

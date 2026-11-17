@@ -21,5 +21,7 @@ r2:
   dhcp_externo: 40600   # reenvío proactivo: DROP del DHCP del cliente en los puertos externos (host-jhon, en el borde); sobre el DHCP (40500), bajo el espejo de R5 (41000)
   dhcp: 40500           # DHCP del cliente (UDP 68 -> 67) al controlador, con o sin sesión; sobre la sesión (40001) y bajo la lista negra (45000) y el DROP de R5 (42000)
   presencia_arp_tabla60: 310  # TABLA 60 (reenvio), no la 0: la app campus-dhcp sube al controlador la respuesta ARP dirigida a la MAC del gateway (sondeo de presencia); sobre el ARP del gateway (300) y bajo nada que compita (el ARP-request del gateway es arp_op=1)
+  meter_dhcp_puerto: 40510   # campus-meters (tabla 0): DHCP del cliente por puerto de acceso con su medidor (10 pps, rafaga 10) al controlador; sobre el DHCP general (40500), bajo el DROP del DHCP externo (40600) y el espejo de R5 (41000)
+  meter_eapol_puerto: 50010  # campus-meters (tabla 0): EAPOL por puerto de acceso con su medidor (20 pps, rafaga 20) al controlador; sobre el EAPOL de sesion de R1 (50000)
   cuarentena: 1000      # sin sesión ni otra regla: push de la VLAN de cuarentena y salto a su tabla (solo ARP y portal)
   tabla_cuarentena: 99  # tabla/VLAN de cuarentena (policy.yaml: cuarentena.tabla)

@@ -1,0 +1,174 @@
+# APP DE ONOS "Meters por puerto" (R2/onos-app/campus-meters, docs/DISENO_METERS_POR_PUERTO.md): crea los medidores de R1 (EAPOL 20 pps rafaga 20, DHCP 10 pps rafaga 10; banda DROP) y las reglas ADITIVAS que
+# los usan en cada puerto de acceso del plan. Se repone sola si un switch vuelve y retira reglas Y medidores al desactivarla.
+#   PLAYBOOK=90_meters_app.yml ./lanzar.sh                                                     # SOLO LEE: app, medidores y reglas con medidor en los switches de acceso
+#   PLAYBOOK=90_meters_app.yml ./lanzar.sh -e accion=instalar -e confirmar=true                # primero SOLO DHCP en sw-acc-2 (lo recomendado para empezar)
+#   PLAYBOOK=90_meters_app.yml ./lanzar.sh -e accion=instalar -e confirmar=true -e solo=acc-1,acc-2 -e clases=dhcp,eapol    # todos los accesos y las dos clases
+#   PLAYBOOK=90_meters_app.yml ./lanzar.sh -e accion=instalar -e confirmar=true -e reinstalar=true                           # reemplaza la app por el .oar del repositorio
+#   PLAYBOOK=90_meters_app.yml ./lanzar.sh -e accion=quitar -e confirmar=true                  # RETROCESO: desactiva la app; sus reglas y medidores se retiran
+# Efecto en la red: aparece una regla por puerto y clase (DHCP prio 40510, EAPOL prio 50010) que manda al controlador solo hasta el limite del medidor: lo que pase del limite se descarta en el switch. El trafico normal
+# (un cliente DHCP, una autenticacion 802.1X) no llega al limite. Con EAPOL activo, volver a autenticar a h1 y h2 despues (72 -e arrancar=true) para comprobar que EAP-TLS cabe en 20 pps de rafaga 20.
+# Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh. Prueba de que el medidor descarta: 91_prueba_meters_app.yml.
+- name: Meters por puerto, instalar o quitar desde switch-borde
+  hosts: borde
+  gather_facts: false
+  vars:
+    accion: estado
+    confirmar: false
+    reinstalar: false
+    solo: acc-2
+    clases: dhcp
+    app: org.campus.meters
+    api: "http://{{ onos_ip }}:8181/onos/v1"
+    repo: "{{ playbook_dir }}/../../.."
+    oar: "{{ repo }}/R2/onos-app/campus-meters/dist/campus-meters-1.0.0.oar"
+    plan: "{{ repo }}/R2/policy/planes/vnrt_topologia14.json"
+    config: /tmp/campus_meters_config.json
+    karaf: [sshpass, -p, "{{ onos_pass }}", ssh, -p, "8101", -o, StrictHostKeyChecking=no, -o, UserKnownHostsFile=/dev/null, "{{ onos_user }}@{{ onos_ip }}"]
+  tasks:
+    - name: Instalar y quitar exigen -e confirmar=true
+      ansible.builtin.assert:
+        that: (confirmar | bool) and accion in ['instalar', 'quitar']
+        fail_msg: "Repetir con -e accion=instalar|quitar -e confirmar=true"
+        quiet: true
+      when: accion != 'estado'
+
+    - name: El .oar y el plan deben estar en este clon (git pull)
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: ["{{ oar }}", "{{ plan }}"]
+      register: archivos
+      when: accion == 'instalar'
+
+    - name: Detener si falta alguno
+      ansible.builtin.assert:
+        that: archivos.results | selectattr('stat.exists') | list | length == 2
+        fail_msg: "Falta el .oar o el plan en este clon: hacer git pull"
+        quiet: true
+      when: accion == 'instalar'
+
+    - name: Generar la configuracion (switches y clases elegidos, puertos del plan)
+      ansible.builtin.command:
+        cmd: "python3 generar_config_meters.py --plan {{ plan }} --solo {{ solo }} --clases {{ clases }} --salida {{ config }}"
+        chdir: "{{ repo }}/R2/policy"
+      changed_when: true
+      when: accion == 'instalar'
+
+    # ---------------- instalar ----------------
+    - name: Ver si la app ya esta instalada
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}"
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      register: existente
+      when: accion == 'instalar'
+
+    - name: Desinstalar la version anterior (solo con -e reinstalar=true; al desactivarse retira reglas y medidores)
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}"
+        method: DELETE
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 204]
+      when: accion == 'instalar' and existente.status == 200 and reinstalar | bool
+
+    - name: Esperar 8 s (desactivacion y desinstalacion)
+      ansible.builtin.shell:
+        cmd: "sleep 8"
+      changed_when: false
+      when: accion == 'instalar'
+
+    - name: Subir el .oar y activarla (si no estaba o se reinstala)
+      ansible.builtin.command:
+        argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/octet-stream", --data-binary, "@{{ oar }}", "{{ api }}/applications?activate=true"]
+      when: accion == 'instalar' and (existente.status == 404 or reinstalar | bool)
+      changed_when: true
+
+    - name: Activarla (si estaba instalada pero no activa)
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}/active"
+        method: POST
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 201, 204]
+      when: accion == 'instalar' and existente.status == 200 and existente.json.state | default('') != 'ACTIVE' and not (reinstalar | bool)
+
+    - name: Esperar 5 s y asegurar el feature en Karaf (ONOS puede dejar la app ACTIVE con el feature Uninstalled)
+      ansible.builtin.shell:
+        cmd: "sleep 5"
+      changed_when: false
+      when: accion == 'instalar'
+
+    - name: Instalar el feature campus-meters en Karaf
+      ansible.builtin.command:
+        argv: "{{ karaf + ['feature:install campus-meters'] }}"
+      register: feature
+      changed_when: "'Adding features' in feature.stdout"
+      failed_when: false
+      when: accion == 'instalar'
+
+    - name: Esperar 6 s a que el componente arranque
+      ansible.builtin.shell:
+        cmd: "sleep 6"
+      changed_when: false
+      when: accion == 'instalar'
+
+    - name: Publicar la configuracion (la app la recarga sola y empieza a crear medidores)
+      ansible.builtin.command:
+        argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/json", --data-binary, "@{{ config }}", "{{ api }}/network/configuration/apps/{{ app }}"]
+      when: accion == 'instalar'
+      changed_when: true
+
+    # ---------------- quitar (retroceso) ----------------
+    - name: Desactivar la app (al desactivarse retira reglas y medidores)
+      ansible.builtin.uri:
+        url: "{{ api }}/applications/{{ app }}/active"
+        method: DELETE
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 204, 404]
+      when: accion == 'quitar'
+
+    - name: Esperar 12 s a que los medidores y las reglas se asienten
+      ansible.builtin.shell:
+        cmd: "sleep 12"
+      changed_when: false
+      when: accion != 'estado'
+
+    - name: Estado de la app y lo que dice su log
+      ansible.builtin.shell:
+        cmd: |
+          echo "{{ app }}: $(curl -s -u {{ onos_user }}:{{ onos_pass }} {{ api }}/applications/{{ app }} | python3 -c 'import sys,json; print(json.load(sys.stdin).get("state"))' 2>/dev/null)"
+          echo "flujos de la app: $(curl -s -u {{ onos_user }}:{{ onos_pass }} {{ api }}/flows/application/{{ app }} | python3 -c 'import sys,json; f=json.load(sys.stdin)["flows"]; print(len(f), "total,", sum(1 for x in f if x["state"]=="ADDED"), "ADDED")')"
+          sshpass -p {{ onos_pass }} ssh -p 8101 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {{ onos_user }}@{{ onos_ip }} log:display 2>/dev/null | grep -i 'Meters' | tail -8 | cut -c1-220
+      register: estado
+      changed_when: false
+      failed_when: false
+
+    - name: Resultado en ONOS
+      ansible.builtin.debug:
+        msg: "{{ estado.stdout_lines }}"
+
+- name: Lo que hay en los switches de acceso (solo lectura)
+  hosts: accs
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Medidores y reglas con medidor de este switch
+      ansible.builtin.shell:
+        cmd: |
+          echo "--- medidores ---"
+          ovs-ofctl -O OpenFlow13 dump-meters {{ bridge }} 2>&1 | grep -E "meter=|rate=" | tr '\n' ' ' | sed 's/meter=/\nmeter=/g' | tail -n +2
+          echo "--- reglas con medidor (tabla 0) ---"
+          ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=0 | grep "meter:" | sed 's/cookie=[^,]*, duration=[^,]*, table=0, //; s/send_flow_rem //' | cut -c1-200
+          echo "--- fin ---"
+      register: mm
+      changed_when: false
+
+    - name: Mostrar
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ mm.stdout_lines }}"
