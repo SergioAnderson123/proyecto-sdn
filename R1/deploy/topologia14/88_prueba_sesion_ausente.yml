@@ -1,0 +1,144 @@
+# PRUEBA EN VIVO del cierre de sesion de un equipo AUSENTE en el Policy Mapper (R1), con la sesion 802.1X real de h1 (hace falta: 72_suplicante.yml -e arrancar=true).
+#   PLAYBOOK=88_prueba_sesion_ausente.yml ./lanzar.sh -e modo=api -e confirmar=true      # llama a POST /sessions/ausente (lo que hara la app DHCP tras el sondeo): la sesion y su flujo 40001 deben desaparecer
+#   PLAYBOOK=88_prueba_sesion_ausente.yml ./lanzar.sh -e modo=puerto -e confirmar=true   # baja la NIC del puerto 1 de sw-acc-1 (por el lado del switch): el Policy Mapper debe cerrar la sesion a los 10 s
+# Despues de cada prueba el agente de h1 vuelve a autenticar solo (al volver el enlace hace logoff y logon; con modo=api su siguiente reintento): se muestra si la sesion regresa.
+# Efecto en la red: h1 pierde su sesion unos segundos (y con modo=puerto el enlace de su puerto, que se SUBE siempre al final). No toca a h2 ni los demas switches.
+# Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh.
+- name: Cierre de sesion de un equipo ausente
+  hosts: servicios
+  gather_facts: false
+  vars:
+    modo: api
+    confirmar: false
+    mac: "fa:16:3e:b6:96:08"
+    sw: sw-acc-1
+    puerto: 1
+    espera: 30
+    env_archivo: "{{ repo_dir }}/R1/deploy/.env"
+    ver_sesion: >-
+      curl -s http://127.0.0.1:5000/sessions | python3 -c 'import sys, json; s = json.load(sys.stdin)["sessions"].get("{{ mac }}"); print("sesion: %s (%s, %s) flujo %s" % (s["username"], s["rol"], s["metodo"], s["flow_id"]) if s else "sesion: (no hay)")'
+  tasks:
+    - name: Hace falta -e confirmar=true (h1 pierde su sesion unos segundos)
+      ansible.builtin.assert:
+        that: (confirmar | bool) and modo in ['api', 'puerto']
+        fail_msg: "Uso: -e modo=api|puerto -e confirmar=true"
+        quiet: true
+
+    - name: Sesion de h1 antes
+      ansible.builtin.shell:
+        cmd: "{{ ver_sesion }}"
+      register: antes
+      changed_when: false
+
+    - name: Mostrar
+      ansible.builtin.debug:
+        msg: "{{ antes.stdout }}"
+
+    - name: Sin sesion no hay prueba
+      ansible.builtin.assert:
+        that: "'no hay' not in antes.stdout"
+        fail_msg: "h1 no tiene sesion 802.1X: PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true"
+        quiet: true
+
+    - name: Flujo de sesion en el switch antes (tabla 0, prio 40001, dl_src de h1)
+      ansible.builtin.shell:
+        cmd: "ovs-ofctl -O OpenFlow13 dump-flows br0 table=0 | grep -c 'priority=40001.*dl_src={{ mac }}' || true"
+      delegate_to: "{{ sw }}"
+      become: true
+      register: flujo_antes
+      changed_when: false
+
+    # ------------- modo api -------------
+    - name: Leer la clave de presencia (no se imprime)
+      ansible.builtin.shell:
+        cmd: "grep '^PRESENCIA_TOKEN=' {{ env_archivo }} | cut -d= -f2-"
+      register: clave
+      changed_when: false
+      no_log: true
+      when: modo == 'api'
+
+    - name: POST /sessions/ausente
+      ansible.builtin.shell:
+        cmd: "curl -s -X POST -H 'Content-Type: application/json' -H \"X-Presencia-Token: $CLAVE\" -d '{\"mac\":\"{{ mac }}\",\"motivo\":\"prueba 88\"}' http://127.0.0.1:5000/sessions/ausente"
+      environment:
+        CLAVE: "{{ clave.stdout | trim }}"
+      register: respuesta
+      changed_when: true
+      when: modo == 'api'
+
+    - name: Respuesta del Policy Mapper
+      ansible.builtin.debug:
+        msg: "{{ respuesta.stdout }}"
+      when: modo == 'api'
+
+    # ------------- modo puerto -------------
+    - name: Bajar y subir el puerto, con subida garantizada
+      block:
+        - name: NIC del sistema que es el puerto {{ puerto }} de {{ sw }}
+          ansible.builtin.script: "{{ playbook_dir }}/files/nic_de_puerto.py {{ puerto }}"
+          delegate_to: "{{ sw }}"
+          become: true
+          register: nic
+          changed_when: false
+
+        - name: Bajar la NIC (el switch ve el puerto sin enlace)
+          ansible.builtin.command:
+            cmd: "ip link set dev {{ nic.stdout | trim }} down"
+          delegate_to: "{{ sw }}"
+          become: true
+          changed_when: true
+
+        - name: "Mirar las sesiones cada 3 s durante {{ espera }} s"
+          ansible.builtin.shell:
+            cmd: |
+              fin=$(( $(date +%s) + {{ espera }} ))
+              while [ $(date +%s) -lt $fin ]; do
+                echo "$(date +%H:%M:%S)  $( {{ ver_sesion }} )"
+                sleep 3
+              done
+          register: linea
+          changed_when: false
+      always:
+        - name: Subir la NIC otra vez (siempre)
+          ansible.builtin.shell:
+            cmd: "n=$(python3 {{ repo_dir }}/R1/deploy/topologia14/files/nic_de_puerto.py {{ puerto }} 2>/dev/null); [ -n \"$n\" ] && ip link set dev $n up; echo subida"
+          delegate_to: "{{ sw }}"
+          become: true
+          changed_when: true
+          failed_when: false
+          when: modo == 'puerto'
+      when: modo == 'puerto'
+
+    - name: Linea de tiempo del modo puerto
+      ansible.builtin.debug:
+        msg: "{{ linea.stdout_lines }}"
+      when: modo == 'puerto' and linea.stdout_lines is defined
+
+    # ------------- resultado -------------
+    - name: Esperar 5 s y mirar la sesion y el flujo
+      ansible.builtin.shell:
+        cmd: "sleep 5; {{ ver_sesion }}"
+      register: despues
+      changed_when: false
+
+    - name: Flujo de sesion en el switch despues
+      ansible.builtin.shell:
+        cmd: "ovs-ofctl -O OpenFlow13 dump-flows br0 table=0 | grep -c 'priority=40001.*dl_src={{ mac }}' || true"
+      delegate_to: "{{ sw }}"
+      become: true
+      register: flujo_despues
+      changed_when: false
+
+    - name: Esperar 40 s a que el agente de h1 vuelva a autenticar y mirar otra vez
+      ansible.builtin.shell:
+        cmd: "sleep 40; {{ ver_sesion }}"
+      register: final
+      changed_when: false
+
+    - name: Veredicto
+      ansible.builtin.debug:
+        msg:
+          - "ANTES:   {{ antes.stdout }} | flujos de sesion en {{ sw }}: {{ flujo_antes.stdout | trim }}"
+          - "DESPUES: {{ despues.stdout }} | flujos de sesion en {{ sw }}: {{ flujo_despues.stdout | trim }}"
+          - "40 s mas tarde (el agente reautentica): {{ final.stdout }}"
+          - "Esperado: DESPUES sin sesion y 0 flujos; y la sesion de vuelta al final (si no vuelve: PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true)."

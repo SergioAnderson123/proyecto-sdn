@@ -1,6 +1,6 @@
 # Presencia de equipos: liberar la IP y el rol cuando un equipo ya no está
 
-**Estado (16-nov-2026):** escrito y probado sin red (11 pruebas Java de la lógica, 11 del Policy Mapper, 2 del generador, 297 de R2). **Falta probarlo en vivo**: `86_presencia.yml` y `87_prueba_presencia.yml`.
+**Estado (17-nov-2026):** escrito y probado sin red (11 pruebas Java de la lógica, 11 del Policy Mapper, 2 del generador, 297 de R2). **Probado en vivo (87):** equipo muerto → la IP desaparece de ONOS a los 35 s del ACK (sondeo lento 20 s + 15 s); equipo vivo → la IP se conserva. **Falta en vivo:** cierre de la sesión en el Policy Mapper (`88_prueba_sesion_ausente.yml`, modos `api` y `puerto`) y el logoff (caso 1).
 
 ## El problema
 Una sesión 802.1X es **permanente** (flujo 40001 sin plazo): solo la cierran el logoff del agente, la revocación de R5, el portal o un reinicio del Policy Mapper. Y una concesión DHCP dura `leaseSeg` (900 s). Cuando un equipo desaparece sin avisar, quedan su rol abierto en ese puerto (alguien que conecte otro equipo con su MAC heredaría el rol), su IP ocupada y su regla /32 puesta.
