@@ -81,6 +81,7 @@ async def _iniciar_sincronizacion() -> None:
         print(f"  [R2 SESIONES] {n} flujo(s) de sesión huérfanos eliminados al arrancar; los usuarios deben autenticar de nuevo")
     asyncio.create_task(_sincronizar_periodico())
     asyncio.create_task(_expirar_sesiones_portal())
+    asyncio.create_task(_vigilar_puertos_de_sesion())
 
 
 class Revocacion(BaseModel):
@@ -136,6 +137,90 @@ async def logout_del_agente(r: LogoutAgente, x_agente_token: str = Header(defaul
     print(f"\n[<<< LOGOUT] Sesión de {sesion.username} ({mac}) cerrada por el agente; flujo {sesion.flow_id} eliminado de {sesion.dpid}")
     eventos.registrar("logout", sesion.username, mac, sesion.dpid, sesion.port, "Logout avisado por el agente: flujo de sesión eliminado", sesion.rol)
     return {"status": "cerrada", "usuario": sesion.username}
+
+
+# ---------------------------------------------------------------------------
+# Sesiones de equipos que ya no estan: apagado forzado o enlace caido. Una sesion es permanente (flujo 40001 sin plazo), asi que sin esto quedaria
+# viva para siempre y el rol seguiria abierto en ese puerto. Dos mecanismos: (1) el sondeo de presencia de la app DHCP de ONOS avisa por
+# /sessions/ausente cuando un equipo deja de contestar el ARP; (2) este proceso mira los puertos de las sesiones y cierra las de un puerto sin enlace.
+# ---------------------------------------------------------------------------
+PRESENCIA_TOKEN = os.getenv("PRESENCIA_TOKEN", "")
+PUERTO_CAIDO_VECES = int(os.getenv("PUERTO_CAIDO_VECES", "2"))            # lecturas seguidas con el puerto sin enlace antes de cerrar (evita un parpadeo)
+PUERTO_REVISION_SEG = int(os.getenv("PUERTO_REVISION_SEG", "5"))
+_puerto_caido_veces: dict = {}                                            # mac -> lecturas seguidas con el puerto sin enlace
+
+
+async def _cerrar_por_ausencia(mac: str, motivo: str) -> dict:
+    """Cierra la sesion de un equipo ausente (cualquier metodo, tambien un ascenso: no se restaura el rol base de quien ya no esta). Sin lista negra."""
+    sesion = session_store.remove_session(mac)
+    _puerto_caido_veces.pop(mac, None)
+    if not sesion:
+        return {"status": "sin_sesion"}
+    await eliminar_flujo_onos(sesion.dpid, sesion.flow_id)
+    print(f"\n[<<< AUSENTE] Sesión de {sesion.username} ({mac}) cerrada: {motivo}; flujo {sesion.flow_id} eliminado de {sesion.dpid}")
+    eventos.registrar("logout", sesion.username, mac, sesion.dpid, sesion.port, f"Equipo ausente ({motivo}): flujo de sesión eliminado", sesion.rol)
+    return {"status": "cerrada", "usuario": sesion.username}
+
+
+class EquipoAusente(BaseModel):
+    mac: str
+    motivo: str = "sin respuesta al sondeo"
+
+
+@app.post("/sessions/ausente")
+async def equipo_ausente(r: EquipoAusente, x_presencia_token: str = Header(default="")):
+    """La app DHCP de ONOS comprobo (ARP) que el equipo ya no esta: se cierra su sesion y su flujo 40001. Clave propia (PRESENCIA_TOKEN), distinta de la de
+    los agentes de los hosts: quien controla un host no debe poder cerrar la sesion de otro. Sin clave configurada, el endpoint queda desactivado."""
+    if not PRESENCIA_TOKEN or not hmac.compare_digest(x_presencia_token, PRESENCIA_TOKEN):
+        raise HTTPException(status_code=403, detail="Clave de presencia invalida o endpoint desactivado")
+    return await _cerrar_por_ausencia(r.mac.lower().replace("-", ":"), r.motivo[:80])
+
+
+async def _puertos_sin_enlace(dpids: list) -> dict:
+    """{dpid: {numero_de_puerto: habilitado}} leido de ONOS; un switch que ONOS no contesta no aparece (no se sabe nada de el)."""
+    salida = {}
+    async with httpx.AsyncClient() as cliente:
+        for dpid in dpids:
+            try:
+                r = await cliente.get(f"{ONOS_BASE_URL}/devices/{dpid}/ports", auth=ONOS_AUTH, timeout=3.0)
+                if r.status_code != 200:
+                    continue
+                salida[dpid] = {str(p.get("port")): bool(p.get("isEnabled", True)) for p in r.json().get("ports", [])}
+            except Exception:
+                continue
+    return salida
+
+
+def macs_con_puerto_caido(sesiones: list, puertos: dict, previas: dict, veces: int) -> tuple:
+    """Funcion pura: de las sesiones y el estado de los puertos devuelve (macs a cerrar, nuevo contador). Un puerto cuenta como caido solo si ONOS lo lista
+    y dice que no tiene enlace; un switch o puerto que ONOS no lista se ignora. Se cierra al llegar a `veces` lecturas seguidas."""
+    contador, cerrar = {}, []
+    for s in sesiones:
+        estado = puertos.get(s.dpid, {}).get(str(s.port))
+        if estado is False:
+            n = previas.get(s.mac, 0) + 1
+            contador[s.mac] = n
+            if n >= veces:
+                cerrar.append(s.mac)
+    return cerrar, contador
+
+
+async def _vigilar_puertos_de_sesion() -> None:
+    """Cada PUERTO_REVISION_SEG mira el enlace del puerto de cada sesion; las de un puerto sin enlace (cable fuera, equipo apagado en un switch real) se cierran."""
+    global _puerto_caido_veces
+    while True:
+        await asyncio.sleep(PUERTO_REVISION_SEG)
+        try:
+            sesiones = list(session_store._sessions_by_mac.values())
+            if not sesiones:
+                _puerto_caido_veces = {}
+                continue
+            puertos = await _puertos_sin_enlace(sorted({s.dpid for s in sesiones}))
+            cerrar, _puerto_caido_veces = macs_con_puerto_caido(sesiones, puertos, _puerto_caido_veces, PUERTO_CAIDO_VECES)
+            for mac in cerrar:
+                await _cerrar_por_ausencia(mac, "puerto sin enlace")
+        except Exception as e:  # el lazo no debe morir por un error puntual
+            print(f"  [PUERTOS DE SESION ERROR] {e}")
 
 
 class PortalLogin(BaseModel):

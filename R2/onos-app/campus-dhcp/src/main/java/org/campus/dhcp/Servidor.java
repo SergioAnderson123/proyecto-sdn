@@ -165,6 +165,37 @@ public final class Servidor {
         return eventos;
     }
 
+    /** Los switches que tienen algun ambito (para instalar ahi el flujo que sube las respuestas del sondeo). */
+    public java.util.Set<String> dispositivos() {
+        java.util.Set<String> ids = new java.util.TreeSet<>();
+        for (Subred s : subredes) {
+            ids.add(s.device);
+        }
+        return ids;
+    }
+
+    /** Las concesiones confirmadas de todos los ambitos, listas para el sondeo de presencia. */
+    public List<Presencia.Objetivo> objetivos() {
+        List<Presencia.Objetivo> lista = new ArrayList<>();
+        for (Subred s : subredes) {
+            for (Pool.Concesion c : pools.get(s.nombre).concesiones()) {
+                lista.add(new Presencia.Objetivo(c.mac, c.ip, c.puerto, s.gateway));
+            }
+        }
+        return lista;
+    }
+
+    /** Libera la concesion de un equipo que se dio por ausente. Devuelve el evento LIBERADA, o null si no tenia concesion confirmada. */
+    public Evento liberarMac(MacAddress mac) {
+        for (Subred s : subredes) {
+            Pool.Concesion c = pools.get(s.nombre).liberar(mac);
+            if (c != null) {
+                return new Evento(Evento.Tipo.LIBERADA, c.mac, c.ip, s.nombre, c.puerto);
+            }
+        }
+        return null;
+    }
+
     private Salida discover(Subred subred, Pool pool, DHCP dhcp, MacAddress mac, String clavePuerto, long ahora) {
         if (!limitador.permitir(clavePuerto, ahora)) {
             return Salida.ignorar("limite de tasa del puerto " + clavePuerto);

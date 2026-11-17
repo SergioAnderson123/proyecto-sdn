@@ -25,6 +25,24 @@ class TestConfigDhcp(unittest.TestCase):
         self.assertEqual((s["prefijo"], s["gateway"], s["inicio"], s["fin"], s["servidor"]), ("10.0.1.0/24", "10.0.1.254", "10.0.1.100", "10.0.1.199", "10.0.1.250"))
         self.assertTrue(s["device"].startswith("of:") and s["puertos"] == [1])
 
+    def test_lleva_la_mac_del_gateway_y_el_sondeo_de_presencia_por_defecto(self):
+        c = g.construir(self.plan)["campusdhcp"]
+        self.assertEqual(c["gwMac"], self.plan.gw_mac)
+        self.assertEqual(c["presencia"], {"intervaloSeg": 5, "intentos": 3, "sondeoLentoSeg": 120})
+        self.assertNotIn("policyMapperToken", c["presencia"])                       # la clave nunca viene del plan: solo del entorno al generar
+
+    def test_la_url_y_la_clave_del_policy_mapper_vienen_de_la_linea_de_comandos_y_del_entorno(self):
+        import tempfile
+        salida = os.path.join(tempfile.mkdtemp(), "c.json")
+        os.environ["PRESENCIA_TOKEN"] = "clave-de-prueba"
+        try:
+            self.assertEqual(g.main(["--plan", PLAN, "--pm-url", "http://192.168.201.1:5000", "--sondeo-lento", "60", "--salida", salida]), 0)
+        finally:
+            del os.environ["PRESENCIA_TOKEN"]
+        with open(salida, encoding="utf-8") as f:
+            pres = json.load(f)["campusdhcp"]["presencia"]
+        self.assertEqual((pres["policyMapperUrl"], pres["policyMapperToken"], pres["sondeoLentoSeg"]), ("http://192.168.201.1:5000", "clave-de-prueba", 60))
+
     def test_el_ambito_no_incluye_el_gateway_ni_el_servidor_ni_las_ip_fijas(self):
         for s in g.construir(self.plan)["campusdhcp"]["subredes"]:
             base = s["prefijo"].rsplit(".", 1)[0]

@@ -43,7 +43,8 @@ def _ambito(s: l3.Subred, dns, lease: int, extra: dict = None) -> dict:
     return a
 
 
-def construir(plan: l3.Plan, subredes=None, dns=("8.8.8.8",), lease: int = 3600, max_por_puerto: int = 3, servidor_mac: str = SERVIDOR_MAC, politica: dict = None, extras: dict = None) -> dict:
+def construir(plan: l3.Plan, subredes=None, dns=("8.8.8.8",), lease: int = 3600, max_por_puerto: int = 3, servidor_mac: str = SERVIDOR_MAC, politica: dict = None, extras: dict = None,
+              presencia: dict = None) -> dict:
     """La configuracion (clave `campusdhcp`) que lee la app. `subredes` = nombres a servir (por defecto, las que empiezan por "acc")."""
     elegidas = [s for s in plan.subredes if (s.nombre in subredes if subredes else s.nombre.startswith("acc"))]
     if subredes:
@@ -54,7 +55,10 @@ def construir(plan: l3.Plan, subredes=None, dns=("8.8.8.8",), lease: int = 3600,
         raise l3.PlanInvalido("ninguna subred elegida para DHCP")
     pol = {"maxPorPuerto": max_por_puerto, "ofertaSeg": 15, "solicitudesPorSeg": 2.0, "rafaga": 8, "declinadaSeg": 300}
     pol.update(politica or {})
-    return {"campusdhcp": {"servidorMac": servidor_mac, "politica": pol, "subredes": [_ambito(s, dns, lease, (extras or {}).get(s.nombre)) for s in elegidas]}}
+    pres = {"intervaloSeg": 5, "intentos": 3, "sondeoLentoSeg": 120}                  # sondeo de presencia: 3 ARP cada 5 s tras una sospecha (15 s) y una comprobacion cada 120 s
+    pres.update(presencia or {})
+    return {"campusdhcp": {"servidorMac": servidor_mac, "gwMac": plan.gw_mac, "politica": pol, "presencia": pres,
+                           "subredes": [_ambito(s, dns, lease, (extras or {}).get(s.nombre)) for s in elegidas]}}
 
 
 def main(argv=None):
@@ -64,6 +68,8 @@ def main(argv=None):
     a.add_argument("--dns", default="8.8.8.8", help="servidores DNS separados por comas")
     a.add_argument("--lease", type=int, default=3600, help="segundos de concesion por defecto (cada subred del plan puede traer el suyo en su bloque dhcp)")
     a.add_argument("--max-por-puerto", type=int, default=3, help="concesiones y ofertas simultaneas por puerto de acceso (defensa contra el agotamiento)")
+    a.add_argument("--pm-url", default="", help="URL del Policy Mapper (http://IP:5000) al que se avisa de un equipo ausente; sin ella solo se libera la IP")
+    a.add_argument("--sondeo-lento", type=int, default=120, help="segundos entre comprobaciones de presencia de cada equipo con concesion (0 = solo tras una sospecha)")
     a.add_argument("--salida")
     arg = a.parse_args(argv)
     try:
@@ -71,7 +77,8 @@ def main(argv=None):
             datos = json.load(f)
         plan = l3.cargar_plan(datos, nombres=NOMBRES)
         extras = {s.get("nombre"): s["dhcp"] for s in datos.get("subredes", []) if isinstance(s.get("dhcp"), dict)}
-        cfg = construir(plan, [x for x in arg.subredes.split(",") if x] if arg.subredes else None, [x for x in arg.dns.split(",") if x], arg.lease, arg.max_por_puerto, extras=extras)
+        cfg = construir(plan, [x for x in arg.subredes.split(",") if x] if arg.subredes else None, [x for x in arg.dns.split(",") if x], arg.lease, arg.max_por_puerto, extras=extras,
+                        presencia={"sondeoLentoSeg": arg.sondeo_lento, **({"policyMapperUrl": arg.pm_url, "policyMapperToken": os.environ.get("PRESENCIA_TOKEN", "")} if arg.pm_url else {})})
     except (OSError, ValueError) as e:
         print("DETENIDO:", e)
         return 2

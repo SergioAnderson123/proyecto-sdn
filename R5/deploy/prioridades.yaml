@@ -20,5 +20,6 @@ r2:
   descubrimiento: 40100  # reenvío proactivo: LLDP/BDDP al controlador, sobre la confianza (40001), el portal (40002) y el ARP (40003); sin ellos ONOS no ve los cables
   dhcp_externo: 40600   # reenvío proactivo: DROP del DHCP del cliente en los puertos externos (host-jhon, en el borde); sobre el DHCP (40500), bajo el espejo de R5 (41000)
   dhcp: 40500           # DHCP del cliente (UDP 68 -> 67) al controlador, con o sin sesión; sobre la sesión (40001) y bajo la lista negra (45000) y el DROP de R5 (42000)
+  presencia_arp_tabla60: 310  # TABLA 60 (reenvio), no la 0: la app campus-dhcp sube al controlador la respuesta ARP dirigida a la MAC del gateway (sondeo de presencia); sobre el ARP del gateway (300) y bajo nada que compita (el ARP-request del gateway es arp_op=1)
   cuarentena: 1000      # sin sesión ni otra regla: push de la VLAN de cuarentena y salto a su tabla (solo ARP y portal)
   tabla_cuarentena: 99  # tabla/VLAN de cuarentena (policy.yaml: cuarentena.tabla)

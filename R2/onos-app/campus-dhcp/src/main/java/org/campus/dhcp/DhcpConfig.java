@@ -25,6 +25,8 @@ public class DhcpConfig extends Config<ApplicationId> {
         try {
             servidorMac();
             politica();
+            gwMac();
+            presencia();
             return !subredes().isEmpty();
         } catch (RuntimeException e) {
             return false;
@@ -37,6 +39,36 @@ public class DhcpConfig extends Config<ApplicationId> {
             throw new IllegalArgumentException("falta servidorMac");
         }
         return MacAddress.valueOf(n.asText());
+    }
+
+    /** MAC comun del gateway virtual (la del plan): emisor del ARP de sondeo y destino de las respuestas. Sin ella no hay sondeo de presencia. */
+    public MacAddress gwMac() {
+        JsonNode n = object.get("gwMac");
+        return n == null || n.asText().isEmpty() ? null : MacAddress.valueOf(n.asText());
+    }
+
+    private int presenciaInt(String clave, int defecto) {
+        JsonNode p = object.get("presencia");
+        return p != null && p.has(clave) ? p.get(clave).asInt() : defecto;
+    }
+
+    private String presenciaTexto(String clave) {
+        JsonNode p = object.get("presencia");
+        return p != null && p.has(clave) ? p.get(clave).asText() : "";
+    }
+
+    /** Sondeo de presencia (bloque "presencia"): 3 sondeos cada 5 s tras una sospecha; un ciclo de comprobacion cada 120 s (0 = sin sondeo periodico). */
+    public Presencia presencia() {
+        return new Presencia(presenciaInt("intervaloSeg", 5), presenciaInt("intentos", 3), presenciaInt("sondeoLentoSeg", 120));
+    }
+
+    /** URL del Policy Mapper (por ejemplo http://192.168.201.1:5000) y su clave de presencia; sin URL no se avisa a R1 y solo se libera la IP. */
+    public String policyMapperUrl() {
+        return presenciaTexto("policyMapperUrl");
+    }
+
+    public String policyMapperToken() {
+        return presenciaTexto("policyMapperToken");
     }
 
     public Politica politica() {

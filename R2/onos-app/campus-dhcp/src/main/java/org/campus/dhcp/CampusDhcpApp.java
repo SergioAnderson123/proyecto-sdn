@@ -1,16 +1,21 @@
 package org.campus.dhcp;
 
 import com.google.common.collect.ImmutableSet;
+import org.onlab.packet.ARP;
 import org.onlab.packet.Ethernet;
 import org.onlab.packet.IPv4;
+import org.onlab.packet.Ip4Address;
+import org.onlab.packet.MacAddress;
 import org.onlab.packet.TpPort;
 import org.onlab.packet.VlanId;
 import org.onosproject.core.ApplicationId;
 import org.onosproject.core.CoreService;
 import org.onosproject.net.ConnectPoint;
+import org.onosproject.net.DeviceId;
 import org.onosproject.net.HostId;
 import org.onosproject.net.HostLocation;
 import org.onosproject.net.Port;
+import org.onosproject.net.PortNumber;
 import org.onosproject.net.config.ConfigFactory;
 import org.onosproject.net.config.NetworkConfigEvent;
 import org.onosproject.net.config.NetworkConfigListener;
@@ -19,7 +24,14 @@ import org.onosproject.net.config.basics.SubjectFactories;
 import org.onosproject.net.device.DeviceEvent;
 import org.onosproject.net.device.DeviceListener;
 import org.onosproject.net.device.DeviceService;
+import org.onosproject.net.flow.DefaultFlowRule;
 import org.onosproject.net.flow.DefaultTrafficSelector;
+import org.onosproject.net.flow.FlowRule;
+import org.onosproject.net.flow.FlowRuleEvent;
+import org.onosproject.net.flow.FlowRuleListener;
+import org.onosproject.net.flow.FlowRuleService;
+import org.onosproject.net.flow.criteria.Criterion;
+import org.onosproject.net.flow.criteria.EthCriterion;
 import org.onosproject.net.flow.DefaultTrafficTreatment;
 import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.net.host.DefaultHostDescription;
@@ -42,7 +54,11 @@ import org.osgi.service.component.annotations.ReferenceCardinality;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -62,6 +78,9 @@ public class CampusDhcpApp {
     private static final String APP = "org.campus.dhcp";
     private static final String CLAVE_CONFIG = "campusdhcp";
     private static final long AVISO_CADA_MS = 10_000;
+    private static final int TABLA_REENVIO = 60;
+    private static final int PRIORIDAD_RESPUESTA_ARP = 310;      // ver R5/deploy/prioridades.yaml
+    private static final int PRIO_SESION = 40001;               // el flujo de sesion de R2 (tabla 0, in_port + eth_src)
 
     private final Logger log = LoggerFactory.getLogger(getClass());
 
@@ -80,10 +99,18 @@ public class CampusDhcpApp {
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected DeviceService deviceService;
 
+    @Reference(cardinality = ReferenceCardinality.MANDATORY)
+    protected FlowRuleService flowRuleService;
+
     private ApplicationId appId;
     private volatile Servidor servidor;
     private HostProviderService hostProviderService;
     private ScheduledExecutorService reloj;
+    private ScheduledExecutorService avisos;                                   // un solo hilo para hablar con el Policy Mapper sin frenar al latido
+    private volatile Presencia presencia;
+    private volatile MacAddress gwMac;
+    private volatile String pmUrl = "";
+    private volatile String pmToken = "";
     private final Map<String, Long> ultimoAviso = new HashMap<>();
 
     /** El proveedor con el que esta app le dice a ONOS que host tiene que IP. */
@@ -122,6 +149,10 @@ public class CampusDhcpApp {
     private final DeviceListener oyenteDispositivos = new DeviceListener() {
         @Override
         public void event(DeviceEvent evento) {
+            if (evento.type() == DeviceEvent.Type.DEVICE_ADDED || evento.type() == DeviceEvent.Type.DEVICE_UPDATED
+                    || evento.type() == DeviceEvent.Type.DEVICE_AVAILABILITY_CHANGED) {
+                instalarFlujosRespuesta();
+            }
             Servidor s = servidor;
             if (s == null) {
                 return;
@@ -139,6 +170,28 @@ public class CampusDhcpApp {
             for (Servidor.Evento e : liberadas) {
                 hostProviderService.removeIpFromHost(HostId.hostId(e.mac, VlanId.NONE), e.ip);
                 log.info("DHCP por subred: {} sin enlace en {}, se libera {} ({})", e.mac, e.puerto, e.ip, e.subred);
+            }
+        }
+    };
+
+    /**
+     * R1 (Policy Mapper) borra el flujo de sesion 40001 cuando termina una sesion: logoff del agente, revocacion de R5, cierre del portal. Esa baja es una SOSPECHA de que el equipo ya no esta:
+     * se le sondea por ARP y solo se libera su IP si no contesta (un equipo vivo, p. ej. revocado por R5 o con un ascenso del portal, que borra y vuelve a poner el flujo, conserva su concesion).
+     */
+    private final FlowRuleListener oyenteFlujos = new FlowRuleListener() {
+        @Override
+        public void event(FlowRuleEvent evento) {
+            if (evento.type() != FlowRuleEvent.Type.RULE_REMOVED) {
+                return;
+            }
+            FlowRule regla = evento.subject();
+            Presencia p = presencia;
+            if (p == null || regla.priority() != PRIO_SESION || regla.tableId() != 0) {
+                return;
+            }
+            Criterion c = regla.selector().getCriterion(Criterion.Type.ETH_SRC);
+            if (c instanceof EthCriterion && regla.selector().getCriterion(Criterion.Type.IN_PORT) != null) {
+                p.sospechar(((EthCriterion) c).mac(), System.currentTimeMillis());
             }
         }
     };
@@ -164,17 +217,23 @@ public class CampusDhcpApp {
         configRegistry.addListener(oyenteConfig);
         hostProviderService = hostProviderRegistry.register(proveedor);
         deviceService.addListener(oyenteDispositivos);
+        flowRuleService.addListener(oyenteFlujos);
         cargarConfig();
         packetService.addProcessor(procesador, PacketProcessor.director(1));
         packetService.requestPackets(selectorDhcp, PacketPriority.CONTROL, appId);
         reloj = Executors.newSingleThreadScheduledExecutor();
         reloj.scheduleWithFixedDelay(this::vencer, 10, 10, TimeUnit.SECONDS);
+        reloj.scheduleWithFixedDelay(this::latido, 1, 1, TimeUnit.SECONDS);
+        avisos = Executors.newSingleThreadScheduledExecutor();
         log.info("DHCP por subred iniciado (appId {})", appId.id());
     }
 
     @Deactivate
     protected void deactivate() {
         reloj.shutdownNow();
+        avisos.shutdownNow();
+        flowRuleService.removeListener(oyenteFlujos);
+        flowRuleService.removeFlowRulesById(appId);
         deviceService.removeListener(oyenteDispositivos);
         packetService.cancelPackets(selectorDhcp, PacketPriority.CONTROL, appId);
         packetService.removeProcessor(procesador);
@@ -192,7 +251,13 @@ public class CampusDhcpApp {
             return;
         }
         servidor = new Servidor(cfg.subredes(), cfg.politica());
-        log.info("DHCP por subred: {} ambitos cargados", cfg.subredes().size());
+        gwMac = cfg.gwMac();
+        presencia = gwMac == null ? null : cfg.presencia();
+        pmUrl = cfg.policyMapperUrl();
+        pmToken = cfg.policyMapperToken();
+        log.info("DHCP por subred: {} ambitos cargados; sondeo de presencia {}; aviso al Policy Mapper {}", cfg.subredes().size(),
+                presencia == null ? "desactivado (falta gwMac)" : "activo", pmUrl.isEmpty() ? "desactivado" : pmUrl);
+        instalarFlujosRespuesta();
     }
 
     /** Un paquete del controlador: si es DHCP de un puerto con ambito, contesta y avisa a ONOS; los demas se dejan pasar a otras apps. */
@@ -203,6 +268,10 @@ public class CampusDhcpApp {
         }
         InboundPacket paquete = contexto.inPacket();
         Ethernet eth = paquete.parsed();
+        if (eth != null && eth.getEtherType() == Ethernet.TYPE_ARP) {
+            respuestaDeSondeo(contexto, eth);
+            return;
+        }
         if (eth == null || eth.getEtherType() != Ethernet.TYPE_IPV4) {
             return;
         }
@@ -246,6 +315,132 @@ public class CampusDhcpApp {
             hostProviderService.removeIpFromHost(id, e.ip);
             log.info("DHCP por subred: {} libera {} ({})", e.mac, e.ip, e.subred);
         }
+    }
+
+    // ------------------------------------------------------------------ presencia (sondeo ARP)
+
+    /** Flujo propio en la tabla 60 de cada switch con ambito: las respuestas ARP dirigidas a la MAC del gateway suben al controlador (las del sondeo). Idempotente; ONOS lo repone si el switch vuelve. */
+    private void instalarFlujosRespuesta() {
+        MacAddress gw = gwMac;
+        Servidor s = servidor;
+        if (gw == null || s == null) {
+            return;
+        }
+        for (String id : s.dispositivos()) {
+            DeviceId dispositivo = DeviceId.deviceId(id);
+            if (deviceService.getDevice(dispositivo) == null || !deviceService.isAvailable(dispositivo)) {
+                continue;
+            }
+            FlowRule regla = DefaultFlowRule.builder()
+                    .forDevice(dispositivo)
+                    .fromApp(appId)
+                    .withSelector(DefaultTrafficSelector.builder().matchEthType(Ethernet.TYPE_ARP).matchArpOp(ARP.OP_REPLY).matchEthDst(gw).build())
+                    .withTreatment(DefaultTrafficTreatment.builder().setOutput(PortNumber.CONTROLLER).build())
+                    .withPriority(PRIORIDAD_RESPUESTA_ARP)
+                    .forTable(TABLA_REENVIO)
+                    .makePermanent()
+                    .build();
+            flowRuleService.applyFlowRules(regla);
+        }
+    }
+
+    /** Una respuesta ARP dirigida al gateway: si es de un equipo vigilado, esta vivo. */
+    private void respuestaDeSondeo(PacketContext contexto, Ethernet eth) {
+        Presencia p = presencia;
+        MacAddress gw = gwMac;
+        if (p == null || gw == null || !(eth.getPayload() instanceof ARP)) {
+            return;
+        }
+        ARP arp = (ARP) eth.getPayload();
+        if (arp.getOpCode() != ARP.OP_REPLY || !gw.equals(eth.getDestinationMAC())) {
+            return;
+        }
+        p.respuesta(eth.getSourceMAC(), System.currentTimeMillis());
+        contexto.block();
+    }
+
+    /** Cada segundo: los sondeos que toquen y los equipos que no contestaron. */
+    private void latido() {
+        try {
+            Servidor s = servidor;
+            Presencia p = presencia;
+            if (s == null || p == null) {
+                return;
+            }
+            for (Presencia.Orden orden : p.tick(System.currentTimeMillis(), s.objetivos())) {
+                if (orden.tipo == Presencia.Tipo.SONDEAR) {
+                    sondear(orden.objetivo);
+                } else {
+                    ausente(s, orden.objetivo);
+                }
+            }
+        } catch (RuntimeException ex) {
+            log.error("DHCP por subred: error en el sondeo de presencia", ex);
+        }
+    }
+
+    /** ARP unicast "quien tiene la IP del equipo?" desde el gateway, por el puerto del equipo. El nucleo de cualquier equipo contesta aunque tenga firewall. */
+    private void sondear(Presencia.Objetivo o) {
+        MacAddress gw = gwMac;
+        int corte = o.puerto.lastIndexOf('/');
+        if (gw == null || corte < 0) {
+            return;
+        }
+        ARP arp = new ARP();
+        arp.setHardwareType(ARP.HW_TYPE_ETHERNET);
+        arp.setProtocolType(ARP.PROTO_TYPE_IP);
+        arp.setHardwareAddressLength((byte) Ethernet.DATALAYER_ADDRESS_LENGTH);
+        arp.setProtocolAddressLength((byte) Ip4Address.BYTE_LENGTH);
+        arp.setOpCode(ARP.OP_REQUEST);
+        arp.setSenderHardwareAddress(gw.toBytes());
+        arp.setSenderProtocolAddress(Ip4Address.valueOf(o.gateway).toOctets());
+        arp.setTargetHardwareAddress(MacAddress.ZERO.toBytes());
+        arp.setTargetProtocolAddress(Ip4Address.valueOf(o.ip).toOctets());
+        Ethernet eth = new Ethernet();
+        eth.setSourceMACAddress(gw);
+        eth.setDestinationMACAddress(o.mac);
+        eth.setEtherType(Ethernet.TYPE_ARP);
+        eth.setPayload(arp);
+        packetService.emit(new DefaultOutboundPacket(DeviceId.deviceId(o.puerto.substring(0, corte)),
+                DefaultTrafficTreatment.builder().setOutput(PortNumber.portNumber(Long.parseLong(o.puerto.substring(corte + 1)))).build(),
+                ByteBuffer.wrap(eth.serialize())));
+    }
+
+    /** No contesto: se libera su IP (ONOS pierde la IP y el vigilante retira su regla /32) y se avisa al Policy Mapper para que cierre su sesion y su rol. */
+    private void ausente(Servidor s, Presencia.Objetivo o) {
+        Servidor.Evento e = s.liberarMac(o.mac);
+        if (e != null) {
+            hostProviderService.removeIpFromHost(HostId.hostId(e.mac, VlanId.NONE), e.ip);
+        }
+        log.info("DHCP por subred: {} ({}) no contesta al sondeo ARP; se libera su concesion y se avisa al Policy Mapper", o.mac, Ip4Address.valueOf(o.ip));
+        avisarPolicyMapper(o.mac);
+    }
+
+    private void avisarPolicyMapper(MacAddress mac) {
+        String url = pmUrl;
+        String token = pmToken;
+        if (url.isEmpty() || token.isEmpty()) {
+            return;
+        }
+        avisos.execute(() -> {
+            try {
+                HttpURLConnection c = (HttpURLConnection) new URL(url.replaceAll("/+$", "") + "/sessions/ausente").openConnection();
+                c.setConnectTimeout(3000);
+                c.setReadTimeout(3000);
+                c.setRequestMethod("POST");
+                c.setDoOutput(true);
+                c.setRequestProperty("Content-Type", "application/json");
+                c.setRequestProperty("X-Presencia-Token", token);
+                byte[] cuerpo = ("{\"mac\":\"" + mac + "\",\"motivo\":\"sin respuesta al sondeo ARP\"}").getBytes(StandardCharsets.UTF_8);
+                try (OutputStream salida = c.getOutputStream()) {
+                    salida.write(cuerpo);
+                }
+                log.info("DHCP por subred: el Policy Mapper contesto {} al cierre de la sesion de {}", c.getResponseCode(), mac);
+                c.disconnect();
+            } catch (Exception ex) {
+                log.warn("DHCP por subred: no se pudo avisar al Policy Mapper del cierre de {}: {}", mac, ex.toString());
+            }
+        });
     }
 
     private void vencer() {

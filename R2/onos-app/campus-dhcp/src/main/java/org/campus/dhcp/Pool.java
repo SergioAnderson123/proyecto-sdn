@@ -194,6 +194,18 @@ public final class Pool {
         return a != null && a.confirmada ? new Concesion(mac, ip, a.puerto, a.expira) : null;
     }
 
+    /** Las concesiones confirmadas (no las ofertas), para el sondeo de presencia. */
+    public synchronized List<Concesion> concesiones() {
+        List<Concesion> lista = new ArrayList<>();
+        for (Map.Entry<Integer, Asig> e : porIp.entrySet()) {
+            Asig a = e.getValue();
+            if (a.confirmada) {
+                lista.add(new Concesion(a.mac, e.getKey(), a.puerto, a.expira));
+            }
+        }
+        return lista;
+    }
+
     /** Concesiones confirmadas y ofertas pendientes (para ver la ocupacion). */
     public synchronized int ocupadas() {
         return porIp.size();

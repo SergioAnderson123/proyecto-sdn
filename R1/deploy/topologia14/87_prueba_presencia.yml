@@ -1,0 +1,130 @@
+# PRUEBA EN VIVO del sondeo de presencia (86): un equipo falso (macvlan de h1, MAC 02:aa:bb:00:01:01) obtiene IP por DHCP y despues "esta vivo" o "esta muerto", SIN tocar la IP real de h1.
+#   PLAYBOOK=87_prueba_presencia.yml ./lanzar.sh -e prueba=muerta     # el equipo tiene concesion pero NO contesta ARP (no tiene la IP configurada): hay que ver que se libera sola
+#   PLAYBOOK=87_prueba_presencia.yml ./lanzar.sh -e prueba=viva       # igual, pero con la IP configurada en la interfaz: contesta ARP y la concesion debe CONSERVARSE
+#   PLAYBOOK=87_prueba_presencia.yml ./lanzar.sh --tags limpiar       # solo limpia
+# Requisitos: 82 y 86 aplicados. Para que la prueba dure menos, publicar antes la configuracion con un sondeo lento corto:
+#   PLAYBOOK=86_presencia.yml ./lanzar.sh --tags config -e confirmar=true -e sondeo_lento=20      (y al terminar, volver a 120 con -e sondeo_lento=120)
+# Tiempos esperados con sondeo_lento=L: tras obtener la IP, el primer ARP sale a los L s; si el equipo esta muerto, la concesion se libera L + 15 s despues de ACK (3 sondeos cada 5 s);
+# ONOS pierde la IP del host y el vigilante retira su regla /32. Con el equipo vivo, la IP sigue en ONOS pasado ese plazo.
+# Mide ONOS (GET /hosts) desde switch-borde cada 5 s y lo imprime con la hora; no cambia nada en la red mas alla del equipo falso, que se borra SIEMPRE al final.
+# Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh.
+- name: Prueba de presencia con un equipo falso en h1
+  hosts: h1-profesor
+  become: true
+  gather_facts: false
+  vars:
+    prueba: muerta
+    sondeo_lento: 120
+    espera: "{{ (sondeo_lento | int) + 45 }}"
+    mac_falsa: "02:aa:bb:00:01:01"
+    api: "http://{{ onos_ip }}:8181/onos/v1"
+  tasks:
+    - name: La prueba es muerta o viva
+      ansible.builtin.assert:
+        that: prueba in ['muerta', 'viva']
+        quiet: true
+      tags: [probar]
+
+    - name: Probar con limpieza garantizada
+      block:
+        - name: Quitar restos de una prueba anterior
+          ansible.builtin.shell:
+            cmd: |
+              touch /tmp/dhcp_prueba_parar; sleep 1
+              pkill -TERM -f '[c]liente_dhcp_prueba.py' 2>/dev/null; sleep 1
+              ip link del dhc1 2>/dev/null; rm -f /tmp/dhcp_prueba_dhc1.json /tmp/dhc1.log /tmp/dhcp_prueba_parar
+              true
+          changed_when: false
+          tags: [probar, limpiar]
+
+        - name: Copiar el cliente de prueba
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/files/cliente_dhcp_prueba.py"
+            dest: /tmp/cliente_dhcp_prueba.py
+            mode: "0755"
+          tags: [probar]
+
+        - name: Crear la interfaz macvlan (un equipo distinto, con su propia MAC)
+          ansible.builtin.shell:
+            cmd: |
+              ip link add link ens4 name dhc1 address {{ mac_falsa }} type macvlan mode bridge
+              ip link set dhc1 up
+          changed_when: true
+          tags: [probar]
+
+        - name: Pedir la IP por DHCP (DISCOVER, OFFER, REQUEST, ACK; la concesion queda abierta, sin RELEASE)
+          ansible.builtin.shell:
+            cmd: "python3 /tmp/cliente_dhcp_prueba.py --iface dhc1 --mac {{ mac_falsa }} --salida /tmp/dhcp_prueba_dhc1.json --mantener 0 > /tmp/dhc1.log 2>&1; cat /tmp/dhcp_prueba_dhc1.json"
+          register: lease
+          changed_when: true
+          tags: [probar]
+
+        - name: La IP recibida
+          ansible.builtin.set_fact:
+            ip_falsa: "{{ (lease.stdout | from_json).ip | default('') }}"
+          tags: [probar]
+
+        - name: Sin IP no hay prueba
+          ansible.builtin.assert:
+            that: ip_falsa | length > 0
+            fail_msg: "El equipo falso no obtuvo IP: ver 83_prueba_dhcp.yml (la app DHCP debe estar activa)"
+            quiet: true
+          tags: [probar]
+
+        - name: Con prueba=viva, configurar la IP en la interfaz (asi el nucleo contesta el ARP del sondeo)
+          ansible.builtin.shell:
+            cmd: "ip addr add {{ ip_falsa }}/24 dev dhc1"
+          changed_when: true
+          when: prueba == 'viva'
+          tags: [probar]
+
+        - name: "Mirar ONOS cada 5 s durante {{ espera }} s (hora, IP del equipo falso en /hosts)"
+          ansible.builtin.shell:
+            cmd: |
+              fin=$(( $(date +%s) + {{ espera }} ))
+              while [ $(date +%s) -lt $fin ]; do
+                v=$(curl -s -u {{ onos_user }}:{{ onos_pass }} {{ api }}/hosts | python3 -c "
+              import sys, json
+              for h in json.load(sys.stdin).get('hosts', []):
+                  if h['mac'].lower() == '{{ mac_falsa }}':
+                      print(h.get('ipAddresses'))
+              " 2>/dev/null)
+                echo "$(date +%H:%M:%S)  ONOS: ${v:-(no esta en /hosts)}"
+                sleep 5
+              done
+          delegate_to: switch-borde
+          register: linea
+          changed_when: false
+          tags: [probar]
+
+        - name: Linea de tiempo
+          ansible.builtin.debug:
+            msg: "{{ linea.stdout_lines }}"
+          tags: [probar]
+
+        - name: Veredicto
+          ansible.builtin.debug:
+            msg:
+              - "IP del equipo falso: {{ ip_falsa }}"
+              - "{{ 'prueba=muerta: la IP debe haber desaparecido de ONOS (lista vacia o ausente) hacia ' ~ ((sondeo_lento | int) + 15) ~ ' s despues del ACK; log de la app: no contesta al sondeo ARP.' if prueba == 'muerta' else 'prueba=viva: la IP debe seguir en ONOS hasta el final: el equipo contesto el ARP.' }}"
+              - "Log: ssh -p 8101 onos@{{ onos_ip }} log:display | grep -i 'DHCP por subred' | tail -20"
+          tags: [probar]
+
+      always:
+        - name: Limpiar el equipo falso (si la IP quedo en la interfaz, un RELEASE la libera en la app) y borrar la interfaz
+          ansible.builtin.shell:
+            cmd: |
+              if ip link show dhc1 >/dev/null 2>&1; then
+                python3 /tmp/cliente_dhcp_prueba.py --iface dhc1 --mac {{ mac_falsa }} --salida /tmp/dhcp_prueba_dhc1.json --mantener 1 > /tmp/dhc1.log 2>&1 || true
+              fi
+              ip link del dhc1 2>/dev/null; rm -f /tmp/dhcp_prueba_dhc1.json /tmp/dhc1.log /tmp/dhcp_prueba_parar
+              ip -br link | grep -c dhc || true
+          register: limpio
+          changed_when: false
+          failed_when: false
+          tags: [probar, limpiar]
+
+        - name: Interfaces dhc que quedan (esperado 0)
+          ansible.builtin.debug:
+            msg: "{{ limpio.stdout_lines }}"
+          tags: [probar, limpiar]

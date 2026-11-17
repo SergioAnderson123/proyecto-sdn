@@ -1,0 +1,223 @@
+# PRESENCIA: liberar la IP y el rol de un equipo que ya no esta (apagado forzado, cable por el lado del host, logout). Ver docs/DISENO_PRESENCIA_EQUIPOS.md.
+#   PLAYBOOK=86_presencia.yml ./lanzar.sh                                   # SOLO LEE: clave, version de la app, estado
+#   PLAYBOOK=86_presencia.yml ./lanzar.sh -e aplicar=true -e confirmar=true # aplica: (1) git pull en node-ctrl-1 y clave PRESENCIA_TOKEN en el .env, RECREA el policy_mapper;
+#                                                                           # (2) reinstala la app campus-dhcp con el sondeo y publica su configuracion (gwMac, presencia y la clave)
+#   PLAYBOOK=86_presencia.yml ./lanzar.sh --tags config -e confirmar=true  # solo vuelve a publicar la configuracion de la app (por ejemplo para cambiar -e sondeo_lento=60)
+# Efecto de aplicar: el Policy Mapper se reinicia (como 74_token_agente.yml): BORRA los flujos de sesion y los usuarios autenticados deben volver a autenticar. Despues: 72_suplicante.yml.
+# La clave PRESENCIA_TOKEN es distinta de AGENTE_TOKEN (la de los hosts): quien controla un host no puede cerrar la sesion de otro. Nunca se imprime.
+- name: Clave de presencia y Policy Mapper (en node-ctrl-1)
+  hosts: servicios
+  gather_facts: false
+  vars:
+    aplicar: false
+    confirmar: false
+    env_archivo: "{{ repo_dir }}/R1/deploy/.env"
+    compose_r1: "{{ repo_dir }}/R1/compose.yml"
+  tasks:
+    - name: Estado (sin mostrar la clave)
+      ansible.builtin.shell:
+        cmd: |
+          if grep -q '^PRESENCIA_TOKEN=.\+' {{ env_archivo }} 2>/dev/null; then echo ".env: PRESENCIA_TOKEN presente"; else echo ".env: PRESENCIA_TOKEN AUSENTE"; fi
+          n=$(docker exec policy_mapper printenv PRESENCIA_TOKEN 2>/dev/null | tr -d '\n' | wc -c)
+          if [ "$n" -gt 0 ]; then echo "policy_mapper: PRESENCIA_TOKEN cargada ($n caracteres)"; else echo "policy_mapper: SIN PRESENCIA_TOKEN (el aviso de ausencia se rechaza)"; fi
+          grep -c 'sessions/ausente' {{ repo_dir }}/R1/shared/policy_mapper/policy_mapper.py 2>/dev/null | sed 's/^/policy_mapper.py con el endpoint /ausente: /'
+      register: estado
+      changed_when: false
+      tags: [token, estado]
+
+    - name: Mostrar
+      ansible.builtin.debug:
+        msg: "{{ estado.stdout_lines }}"
+      tags: [token, estado]
+
+    - name: Aplicar exige -e confirmar=true (reinicia el Policy Mapper y borra las sesiones)
+      ansible.builtin.assert:
+        that: confirmar | bool
+        fail_msg: "Repetir con -e confirmar=true: el Policy Mapper se reinicia y los usuarios deben autenticar de nuevo"
+        quiet: true
+      when: aplicar | bool
+      tags: [token]
+
+    - name: Actualizar el repo (el Policy Mapper y el compose se montan de aqui)
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ repo_dir }}"
+        version: "{{ repo_rama }}"
+        update: true
+        force: false
+      when: aplicar | bool
+      tags: [token]
+
+    - name: Generar la clave si falta (se conserva si ya existe)
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          [ -f {{ env_archivo }} ] || touch {{ env_archivo }}
+          if ! grep -q '^PRESENCIA_TOKEN=.\+' {{ env_archivo }}; then
+            sed -i -e '$a\' {{ env_archivo }}
+            echo "PRESENCIA_TOKEN=$(python3 -c 'import secrets; print(secrets.token_hex(16))')" >> {{ env_archivo }}
+            echo generada
+          else
+            echo ya_existia
+          fi
+        executable: /bin/bash
+      register: gen
+      changed_when: "'generada' in gen.stdout"
+      when: aplicar | bool
+      tags: [token]
+
+    - name: Recrear policy_mapper con la clave (misma forma que 42_servicios.yml y 74_token_agente.yml)
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          set -a; . {{ env_archivo }}; set +a
+          export ONOS_HOST={{ ansible_host }}
+          docker compose -p controller -f {{ compose_r1 }} up -d --no-deps policy_mapper
+          docker update --restart unless-stopped policy_mapper
+        executable: /bin/bash
+        chdir: "{{ repo_dir }}/R1"
+      when: aplicar | bool
+      tags: [token]
+
+    - name: Esperar a que el Policy Mapper responda
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:5000/sessions"
+        status_code: 200
+      register: pm
+      until: pm.status == 200
+      retries: 15
+      delay: 3
+      when: aplicar | bool
+      tags: [token]
+
+    - name: Comprobar que carga la clave y que el endpoint existe y rechaza una clave falsa (403)
+      ansible.builtin.shell:
+        cmd: |
+          n=$(docker exec policy_mapper printenv PRESENCIA_TOKEN 2>/dev/null | tr -d '\n' | wc -c)
+          echo "policy_mapper: PRESENCIA_TOKEN de $n caracteres"
+          c=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'X-Presencia-Token: clave-falsa' -d '{"mac":"02:00:00:00:00:00"}' http://127.0.0.1:5000/sessions/ausente)
+          echo "POST /sessions/ausente con clave falsa: HTTP $c (esperado 403)"
+          [ "$n" -gt 0 ] && [ "$c" = "403" ]
+      register: ok
+      changed_when: false
+      when: aplicar | bool
+      tags: [token]
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ ok.stdout_lines }}"
+      when: aplicar | bool
+      tags: [token]
+
+    - name: Leer la clave para pasarla a la configuracion de la app (no se imprime)
+      ansible.builtin.shell:
+        cmd: "grep '^PRESENCIA_TOKEN=' {{ env_archivo }} | cut -d= -f2-"
+      register: clave
+      changed_when: false
+      no_log: true
+      when: aplicar | bool or confirmar | bool
+      tags: [token, config]
+
+    - name: Guardar la clave solo en memoria para el siguiente juego
+      ansible.builtin.set_fact:
+        presencia_token: "{{ clave.stdout | trim }}"
+      no_log: true
+      when: (aplicar | bool or confirmar | bool) and clave.stdout is defined
+      tags: [token, config]
+
+- name: App campus-dhcp con el sondeo de presencia (desde switch-borde)
+  hosts: borde
+  gather_facts: false
+  vars:
+    aplicar: false
+    confirmar: false
+    sondeo_lento: 120
+    app: org.campus.dhcp
+    api: "http://{{ onos_ip }}:8181/onos/v1"
+    repo: "{{ playbook_dir }}/../../.."
+    oar: "{{ repo }}/R2/onos-app/campus-dhcp/dist/campus-dhcp-1.0.0.oar"
+    plan: "{{ repo }}/R2/policy/planes/vnrt_topologia14.json"
+    config_dhcp: /dev/shm/campus_dhcp_config_presencia.json            # lleva la clave: en memoria y se borra al final
+    pm_url: "http://{{ hostvars[groups['servicios'][0]].ansible_host }}:5000"
+    karaf: [sshpass, -p, "{{ onos_pass }}", ssh, -p, "8101", -o, StrictHostKeyChecking=no, -o, UserKnownHostsFile=/dev/null, "{{ onos_user }}@{{ onos_ip }}"]
+  tasks:
+    - name: Sin -e confirmar=true este juego no hace nada (el modo de solo lectura termina aqui)
+      ansible.builtin.meta: end_host
+      when: not (confirmar | bool)
+      tags: [app, config, estado]
+
+    - name: Generar la configuracion (clave por el entorno, nunca por la linea de comandos)
+      ansible.builtin.command:
+        cmd: "python3 generar_config_dhcp.py --plan {{ plan }} --pm-url {{ pm_url }} --sondeo-lento {{ sondeo_lento }} --salida {{ config_dhcp }}"
+        chdir: "{{ repo }}/R2/policy"
+      environment:
+        PRESENCIA_TOKEN: "{{ hostvars[groups['servicios'][0]].presencia_token | default('') }}"
+      no_log: true
+      changed_when: true
+      tags: [app, config]
+
+    - name: Reinstalar la app con el .oar del repositorio (solo con -e aplicar=true)
+      block:
+        - name: Desinstalar la version anterior
+          ansible.builtin.uri:
+            url: "{{ api }}/applications/{{ app }}"
+            method: DELETE
+            user: "{{ onos_user }}"
+            password: "{{ onos_pass }}"
+            force_basic_auth: true
+            status_code: [200, 204, 404]
+        - name: Esperar 8 s
+          ansible.builtin.shell:
+            cmd: "sleep 8"
+          changed_when: false
+        - name: Subir el .oar y activarla
+          ansible.builtin.command:
+            argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/octet-stream", --data-binary, "@{{ oar }}", "{{ api }}/applications?activate=true"]
+          changed_when: true
+        - name: Esperar 5 s y asegurar el feature en Karaf
+          ansible.builtin.shell:
+            cmd: "sleep 5"
+          changed_when: false
+        - name: Instalar el feature campus-dhcp
+          ansible.builtin.command:
+            argv: "{{ karaf + ['feature:install campus-dhcp'] }}"
+          register: feature
+          changed_when: "'Adding features' in feature.stdout"
+          failed_when: false
+        - name: Esperar 6 s a que arranque
+          ansible.builtin.shell:
+            cmd: "sleep 6"
+          changed_when: false
+      when: aplicar | bool
+      tags: [app]
+
+    - name: Publicar la configuracion (la app la recarga sola; las concesiones en memoria se pierden)
+      ansible.builtin.command:
+        argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/json", --data-binary, "@{{ config_dhcp }}", "{{ api }}/network/configuration/apps/{{ app }}"]
+      no_log: true
+      changed_when: true
+      tags: [app, config]
+
+    - name: Borrar el archivo con la clave
+      ansible.builtin.file:
+        path: "{{ config_dhcp }}"
+        state: absent
+      tags: [app, config]
+
+    - name: Esperar 6 s y comprobar
+      ansible.builtin.shell:
+        cmd: |
+          sleep 6
+          echo "app: $(curl -s -u {{ onos_user }}:{{ onos_pass }} {{ api }}/applications/{{ app }} | python3 -c 'import sys,json; print(json.load(sys.stdin).get("state"))' 2>/dev/null)"
+          echo "flujos propios en la tabla 60 (respuestas ARP del sondeo, prio 310): $(curl -s -u {{ onos_user }}:{{ onos_pass }} {{ api }}/flows/application/{{ app }} | python3 -c 'import sys,json; f=json.load(sys.stdin)["flows"]; print(len(f), "total,", sum(1 for x in f if x["state"]=="ADDED"), "ADDED")')"
+      register: comprobar
+      changed_when: false
+      tags: [app, config, estado]
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg:
+          - "{{ comprobar.stdout_lines }}"
+          - "Esperado: app ACTIVE y 2 flujos ADDED (uno por switch con ambito: sw-acc-1 y sw-acc-2)."
+          - "Log: ssh -p 8101 onos@{{ onos_ip }} log:display | grep -i 'DHCP por subred' (debe decir 'sondeo de presencia activo')."
+      tags: [app, config, estado]
