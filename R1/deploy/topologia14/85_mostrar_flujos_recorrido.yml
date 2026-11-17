@@ -1,0 +1,37 @@
+# SOLO LECTURA: muestra las reglas que usa un paquete de h1 (docente) hacia el servidor 10.0.0.10:8101 en sw-acc-1 y sw-core-1. No cambia nada.
+#   PLAYBOOK=85_mostrar_flujos_recorrido.yml ./lanzar.sh
+# Por switch imprime: tabla 0 (sesion, confianza troncal, ARP, DHCP), tabla 10 (rol docente, solo las reglas hacia el servicio) y tabla 60 (gateway ARP, entrega /32, ruta por prefijo, defecto).
+# Cada bloque lleva el contador de paquetes (n_packets): sirve para ver por que reglas pasa de verdad un ping/curl de h1.
+- name: Mostrar las reglas del recorrido h1 -> servidor
+  hosts: sw-acc-1,sw-core-1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Tabla 0 (entrada)
+      ansible.builtin.shell:
+        cmd: "ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=0 | sed 's/cookie=[^,]*, duration=[^,]*, table=[0-9]*, //' | sort -t, -k1 | grep -E 'priority=(40001|40003|40500|40000|50000)' | cut -c1-260"
+      register: t0
+      changed_when: false
+
+    - name: Tabla 10 (rol docente) solo reglas hacia el servicio 10.0.0.10
+      ansible.builtin.shell:
+        cmd: "ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=10 | sed 's/cookie=[^,]*, duration=[^,]*, table=[0-9]*, //' | grep -E '10\\.0\\.0\\.10|priority=1,|actions=drop' | cut -c1-260"
+      register: t10
+      changed_when: false
+
+    - name: Tabla 60 (reenvio capa 3)
+      ansible.builtin.shell:
+        cmd: "ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=60 | sed 's/cookie=[^,]*, duration=[^,]*, table=[0-9]*, //' | sort -t= -k4 -r | cut -c1-300"
+      register: t60
+      changed_when: false
+
+    - name: Imprimir
+      ansible.builtin.debug:
+        msg:
+          - "===== {{ inventory_hostname }} ====="
+          - "--- TABLA 0 ---"
+          - "{{ t0.stdout_lines }}"
+          - "--- TABLA 10 (docente, hacia el servicio) ---"
+          - "{{ t10.stdout_lines }}"
+          - "--- TABLA 60 ---"
+          - "{{ t60.stdout_lines }}"
