@@ -41,21 +41,26 @@ services:
     image: osixia/openldap:1.5.0
     container_name: ldap
     hostname: ldap
-    command: ["--copy-service"]
+    entrypoint: ["/usr/sbin/slapd"]
+    command: ["-d", "0", "-h", "ldap:/// ldapi:///", "-F", "/etc/ldap/slapd.d", "-u", "openldap", "-g", "openldap"]
+    extra_hosts:
+      - "ldap-ctrl2:192.168.201.2"
     environment:
       - LDAP_ORGANISATION=RedSDN
       - LDAP_DOMAIN=example.org
       - LDAP_ADMIN_PASSWORD=admin
     volumes:
+      - ./shared/ldap/persistent-tls:/sdn/tls:ro
       - ./shared/ldap/ldif/custom:/container/service/slapd/assets/config/bootstrap/ldif/custom
-      - ./shared/ldap/openldap-conf:/etc/openldap/slapd.d
-      - ./shared/ldap/openldap-data:/var/lib/openldap/openldap-data
+      - ./shared/ldap/persistent-config:/etc/ldap/slapd.d
+      - ./shared/ldap/persistent-data:/var/lib/ldap
       - ./shared/ldap/openldap-backups:/var/lib/openldap/openldap-backups
     ports:
       - "1389:389"
       # - "1636:636" For TLS
     networks:
-      - sdn
+      sdn:
+        ipv4_address: 10.50.0.3
 
   # policy_mapper
   policy_mapper:

@@ -11,3 +11,6 @@ R2/policy/policy.local.yaml
 
 # certificado autofirmado del portal de un despliegue (lo genera slice.py portal)
 R1/deploy/hosts/portal-tls/
+
+# LDAP persistente: datos y configuracion privados
+/R1/shared/ldap/persistent-*/

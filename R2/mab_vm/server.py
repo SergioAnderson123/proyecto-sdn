@@ -76,10 +76,13 @@ def get_parent(dpid, port):
 
         authorized = any(
             str(entry.get("macAddress", "")).lower() == mac.lower()
-            and entry.get("subscriberId") == f"{dpid}/{port}"
+            # En VNRT subscriberId puede ser un identificador SADIS sintetico.
+            # connectPoint es la ubicacion fisica observada por ONOS AAA.
+            and (entry.get("connectPoint") or entry.get("subscriberId"))
+            == f"{dpid}/{port}"
             and str(entry.get(
                 "state", entry.get("authState", "")
-            )).upper() == "AUTHORIZED"
+            )).upper() in {"AUTHORIZED", "AUTHORIZED_STATE"}
             for entry in entries
         )
         if not authorized:
@@ -153,7 +156,9 @@ def install_flow(dpid, port, mac, vlan):
         raise RuntimeError("ONOS no devolvio Location; revisar sus flujos")
     flow_id = location.rstrip("/").split("/")[-1]
 
-    for _ in range(8):
+    # El proveedor OpenFlow actualiza las estadisticas en ciclos de ~5 s.
+    # Mantener el margen por debajo del timeout de 8 s del Policy Mapper.
+    for _ in range(12):
         data, _ = request(
             "GET", f"{ONOS}/onos/v1/flows/{dpid}/{flow_id}", onos=True
         )
@@ -287,6 +292,7 @@ def monitor():
         time.sleep(5)
 
 
-threading.Thread(target=monitor, daemon=True).start()
-print("R2 MAB VM escuchando en 5001", flush=True)
-ThreadingHTTPServer(("0.0.0.0", 5001), Handler).serve_forever()
+if __name__ == "__main__":
+    threading.Thread(target=monitor, daemon=True).start()
+    print("R2 MAB VM escuchando en 5001", flush=True)
+    ThreadingHTTPServer(("0.0.0.0", 5001), Handler).serve_forever()
