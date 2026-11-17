@@ -1,6 +1,11 @@
 # Meters por puerto de acceso (app de ONOS `campus-meters`)
 
-**Estado (17-nov-2026):** la app compila y pasa 7 pruebas Java; el generador de configuración 6 pruebas Python; playbooks `90_meters_app.yml` (instalar, quitar, estado) y `91_prueba_meters_app.yml` (el medidor descarta). **Falta probarlo en vivo.**
+**Estado (17-nov-2026):** la app compila y pasa 7 pruebas Java; el generador de configuración 6 pruebas Python. **Probado en vivo:**
+- OVS 3.3.9 acepta la regla con `meter + CONTROLLER` (`priority=40510,udp,in_port=1,tp_src=68,tp_dst=67 actions=meter:1,CONTROLLER`); la app crea el medidor y pone la regla 2 s después, cuando está ADDED (90).
+- El medidor DHCP descarta de verdad: de 200 tramas inyectadas desde el host pasan **10** (la ráfaga) y se descartan **190**, en sw-acc-1 y en sw-acc-2 (91).
+- El DHCP normal bajo medidor sigue funcionando (83 en sw-acc-1: ACK, IP en ONOS, regla /32, RELEASE); sus 3 paquetes se cuentan en el medidor sin descartes.
+- EAPOL medido (20 pps, ráfaga 20): h1 y h2 reautenticaron con los medidores puestos; el medidor de EAPOL vio 8 tramas del handshake EAP-TLS y descartó 0.
+**Falta en vivo:** la reposición cuando un switch se desconecta y vuelve (`92_prueba_reconexion_meters.yml`, modos suave y real).
 
 ## Para qué
 Una inundación de EAPOL o de DHCP en un puerto de acceso llega hoy entera al controlador (los flujos de R1 y R2 mandan esos paquetes al controlador sin límite). Los medidores de R1 (`R1/flujos_R1_R2.md`) limitan eso **en el switch**, por puerto: lo que pasa del límite se descarta sin molestar al controlador ni a los demás puertos.

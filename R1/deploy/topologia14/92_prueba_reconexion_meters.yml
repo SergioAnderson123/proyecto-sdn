@@ -1,0 +1,113 @@
+# PRUEBA EN VIVO de que la app campus-meters REPONE sus medidores y reglas cuando un switch se desconecta y vuelve. Requiere: 90_meters_app.yml -e accion=instalar (en el switch elegido).
+#   PLAYBOOK=92_prueba_reconexion_meters.yml ./lanzar.sh -e modo=suave -e confirmar=true             # quita el controlador de br0 12 s y lo vuelve a poner: ONOS ve caer y volver el switch, que CONSERVA sus flujos y medidores
+#   PLAYBOOK=92_prueba_reconexion_meters.yml ./lanzar.sh -e modo=real -e confirmar=true              # reinicia openvswitch-switch: se borran TODOS los flujos y medidores del switch (como un reinicio del equipo)
+#   Otro switch: -e sw=sw-acc-1 (por defecto sw-acc-2)
+# Mide cada 5 s, en el switch, cuantos medidores hay y cuantas reglas de la tabla 0 usan un medidor, y los compara con los de ANTES; al final muestra lo que dijo la app (log de Karaf).
+# Esperado: tras un rato el switch vuelve a tener los MISMOS medidores y reglas con medidor que antes (sin medidores de mas: un medidor huerfano seria una fuga).
+# Efecto en la red: en modo=suave el switch pierde el controlador 12 s (sus flujos siguen aplicandose); en modo=real h2 (o h1) pierde conectividad unos 30 s y puede perder su sesion 802.1X (los flujos de R2 los repone ONOS y el
+# Policy Mapper; si la sesion no vuelve: 72_suplicante.yml -e arrancar=true). El controlador de br0 se restaura SIEMPRE al final (modo=suave). Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh.
+- name: Prueba de reconexion de un switch con campus-meters
+  hosts: "{{ sw | default('sw-acc-2') }}"
+  become: true
+  gather_facts: false
+  vars:
+    modo: suave
+    confirmar: false
+    espera: 60
+    guardado: /tmp/controladores_br0.txt
+    foto: >-
+      echo "medidores=$(ovs-ofctl -O OpenFlow13 dump-meters {{ bridge }} 2>/dev/null | grep -c 'meter=') reglas_con_medidor=$(ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=0 2>/dev/null | grep -c 'meter:')"
+  tasks:
+    - name: Exige -e confirmar=true y un modo valido
+      ansible.builtin.assert:
+        that: (confirmar | bool) and modo in ['suave', 'real']
+        fail_msg: "Uso: -e modo=suave|real -e confirmar=true"
+        quiet: true
+
+    - name: ANTES - medidores y reglas con medidor del switch
+      ansible.builtin.shell:
+        cmd: "{{ foto }}; ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=0 | grep 'meter:' | sed 's/cookie=[^,]*, duration=[^,]*, table=0, n_packets=[0-9]*, n_bytes=[0-9]*, //; s/send_flow_rem //' | cut -c1-160"
+      register: antes
+      changed_when: false
+
+    - name: Sin medidores no hay prueba
+      ansible.builtin.assert:
+        that: "'medidores=0' not in antes.stdout_lines[0]"
+        fail_msg: "El switch no tiene medidores de la app: PLAYBOOK=90_meters_app.yml ./lanzar.sh -e accion=instalar -e confirmar=true"
+        quiet: true
+
+    - name: Probar con restauracion garantizada
+      block:
+        - name: Modo suave - guardar el o los controladores de br0 y quitarlos
+          ansible.builtin.shell:
+            cmd: |
+              ovs-vsctl get-controller {{ bridge }} | tr '\n' ' ' > {{ guardado }}
+              cat {{ guardado }}
+              ovs-vsctl del-controller {{ bridge }}
+          register: quitados
+          changed_when: true
+          when: modo == 'suave'
+
+        - name: Modo suave - esperar 12 s sin controlador (ONOS ve caer el switch)
+          ansible.builtin.shell:
+            cmd: "sleep 12"
+          changed_when: false
+          when: modo == 'suave'
+
+        - name: Modo suave - volver a poner el controlador
+          ansible.builtin.shell:
+            cmd: "ovs-vsctl set-controller {{ bridge }} $(cat {{ guardado }})"
+          changed_when: true
+          when: modo == 'suave'
+
+        - name: Modo real - reiniciar Open vSwitch (se borran flujos y medidores del switch)
+          ansible.builtin.shell:
+            cmd: "systemctl restart openvswitch-switch; sleep 3; ovs-vsctl show | head -8"
+          register: reinicio
+          changed_when: true
+          when: modo == 'real'
+
+        - name: "Medir cada 5 s durante {{ espera }} s"
+          ansible.builtin.shell:
+            cmd: |
+              fin=$(( $(date +%s) + {{ espera }} ))
+              while [ $(date +%s) -lt $fin ]; do
+                echo "$(date +%H:%M:%S)  $( {{ foto }} )"
+                sleep 5
+              done
+          register: linea
+          changed_when: false
+      always:
+        - name: Restaurar el controlador (siempre, modo suave)
+          ansible.builtin.shell:
+            cmd: "[ -s {{ guardado }} ] && ovs-vsctl set-controller {{ bridge }} $(cat {{ guardado }}); ovs-vsctl get-controller {{ bridge }}"
+          register: restaurado
+          changed_when: false
+          failed_when: false
+          when: modo == 'suave'
+
+    - name: DESPUES - medidores y reglas con medidor del switch
+      ansible.builtin.shell:
+        cmd: "{{ foto }}; ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=0 | grep 'meter:' | sed 's/cookie=[^,]*, duration=[^,]*, table=0, n_packets=[0-9]*, n_bytes=[0-9]*, //; s/send_flow_rem //' | cut -c1-160"
+      register: despues
+      changed_when: false
+
+    - name: Lo que dijo la app (log de Karaf)
+      ansible.builtin.shell:
+        cmd: "sshpass -p {{ onos_pass }} ssh -p 8101 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {{ onos_user }}@{{ onos_ip }} log:display 2>/dev/null | grep -i 'Meters' | tail -14 | cut -c1-230"
+      delegate_to: switch-borde
+      become: false
+      register: registro
+      changed_when: false
+      failed_when: false
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg:
+          - "ANTES:   {{ antes.stdout_lines[0] }}"
+          - "{{ linea.stdout_lines | default([]) }}"
+          - "DESPUES: {{ despues.stdout_lines[0] }}"
+          - "{{ 'OK: el switch volvio a tener los mismos medidores y reglas con medidor que antes' if antes.stdout_lines[0] == despues.stdout_lines[0] else 'REVISAR: no coincide con el estado de antes (si tiene MAS medidores, quedo alguno huerfano; si tiene MENOS, la app aun no los repuso: esperar y repetir 90 estado)' }}"
+          - "Reglas con medidor despues: {{ despues.stdout_lines[1:] }}"
+          - "Log de la app: {{ registro.stdout_lines }}"
+          - "Controlador de br0 tras la prueba: {{ restaurado.stdout_lines | default(['(modo real: no se toco)']) }}"
