@@ -20,7 +20,8 @@
           if grep -q '^PRESENCIA_TOKEN=.\+' {{ env_archivo }} 2>/dev/null; then echo ".env: PRESENCIA_TOKEN presente"; else echo ".env: PRESENCIA_TOKEN AUSENTE"; fi
           n=$(docker exec policy_mapper printenv PRESENCIA_TOKEN 2>/dev/null | tr -d '\n' | wc -c)
           if [ "$n" -gt 0 ]; then echo "policy_mapper: PRESENCIA_TOKEN cargada ($n caracteres)"; else echo "policy_mapper: SIN PRESENCIA_TOKEN (el aviso de ausencia se rechaza)"; fi
-          grep -c 'sessions/ausente' {{ repo_dir }}/R1/shared/policy_mapper/policy_mapper.py 2>/dev/null | sed 's/^/policy_mapper.py con el endpoint /ausente: /'
+          e=$(grep -c 'sessions/ausente' {{ repo_dir }}/R1/shared/policy_mapper/policy_mapper.py 2>/dev/null || true)
+          echo "policy_mapper.py de node-ctrl-1 con el endpoint ausente: ${e:-0} coincidencias (0 = falta git pull; lo hace el modo aplicar)"
       register: estado
       changed_when: false
       tags: [token, estado]
