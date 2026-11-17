@@ -1,8 +1,9 @@
 # PRUEBA EN VIVO de que el medidor por puerto de la app campus-meters DESCARTA el exceso de DHCP en sw-acc-2 (puerto 1, el de h2). Requiere: 90_meters_app.yml -e accion=instalar (clase dhcp en acc-2).
 #   PLAYBOOK=91_prueba_meters_app.yml ./lanzar.sh
 #   PLAYBOOK=91_prueba_meters_app.yml ./lanzar.sh -e tramas=400 -e sw=sw-acc-1 -e puerto=1      # otro switch o puerto
-# Inyecta {{ tramas }} tramas DHCP (UDP 68 a 67, con chaddr distinto de la MAC de origen: la app DHCP las ignora, asi que no toca su ambito) EN EL SWITCH con packet-out por el puerto elegido, como si entraran por el cable,
-# y compara los contadores del medidor y de la regla antes y despues. Esperado con 10 pps y rafaga 10: pasan unas decenas (la rafaga + el ritmo mientras dura la inyeccion) y se descartan la mayoria.
+# Inyecta {{ tramas }} tramas DHCP (UDP 68 a 67, con chaddr distinto de la MAC de origen: la app DHCP las ignora, asi que no toca su ambito) DESDE EL HOST del puerto (h2 para sw-acc-2, h1 para sw-acc-1) con un socket crudo,
+# todas en milisegundos (la primera version las inyectaba con un ovs-ofctl por trama: ~10 pps, justo el limite, y no descartaba nada), y compara los contadores del medidor antes y despues.
+# Esperado con 10 pps y rafaga 10: pasan unas 10 a 20 (la rafaga) y se descartan casi todas. Con otra clase o puerto: -e prioridad=50010 (EAPOL; las tramas serian de otro tipo) no esta soportado en esta prueba.
 # No toca otros puertos ni los flujos de usuarios; las tramas llevan una MAC de origen de prueba (02:aa:bb:99:00:01). Despues, comprobar que el DHCP normal sigue funcionando: PLAYBOOK=83_prueba_dhcp.yml ./lanzar.sh
 - name: Prueba del medidor DHCP por puerto
   hosts: "{{ sw | default('sw-acc-2') }}"
@@ -12,6 +13,7 @@
     tramas: 200
     puerto: 1
     prioridad: 40510
+    origen: "{{ 'h1-profesor' if (sw | default('sw-acc-2')) == 'sw-acc-1' else 'h2-alumno' }}"      # el host conectado a ese puerto
   tasks:
     - name: Medidor y regla de la app para el puerto {{ puerto }} (prio {{ prioridad }})
       ansible.builtin.shell:
@@ -30,25 +32,29 @@
       ansible.builtin.shell:
         cmd: |
           s=$(ovs-ofctl -O OpenFlow13 meter-stats {{ bridge }} meter={{ medidor.stdout | trim }})
-          echo "$s" | sed -n 's/.*packet_in_count:\([0-9]*\).*/\1/p' | head -1
-          echo "$s" | sed -n 's/.*band 0: packet_count:\([0-9]*\).*/\1/p' | head -1
+          echo "$s" | grep -o 'packet_in_count:[0-9]*' | head -1 | cut -d: -f2
+          echo "$s" | grep -o ' packet_count:[0-9]*' | head -1 | cut -d: -f2
       register: antes
       changed_when: false
 
-    - name: Inyectar {{ tramas }} tramas DHCP por el puerto {{ puerto }} (packet-out hacia la tabla 0, como si entraran por el cable)
+    - name: Inyectar {{ tramas }} tramas DHCP desde {{ origen }} por su ens4 (socket crudo, todas seguidas)
       ansible.builtin.shell:
         cmd: |
           python3 - <<'FIN'
-          import struct, subprocess
+          import socket, struct
           def mac(s): return bytes(int(x, 16) for x in s.split(":"))
           chaddr = mac("02:aa:bb:99:00:77") + bytes(10)                       # distinto de la MAC de origen: la app DHCP la ignora
           dhcp = struct.pack("!BBBBIHHIIII", 1, 1, 6, 0, 0x1234, 0, 0x8000, 0, 0, 0, 0) + chaddr + bytes(192) + bytes([99, 130, 83, 99, 53, 1, 1, 255])
           udp = struct.pack("!HHHH", 68, 67, 8 + len(dhcp), 0) + dhcp
           ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(udp), 1, 0, 64, 17, 0, bytes(4), bytes([255, 255, 255, 255])) + udp
           trama = mac("ff:ff:ff:ff:ff:ff") + mac("02:aa:bb:99:00:01") + b"\x08\x00" + ip
+          s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+          s.bind(("ens4", 0))
           for _ in range({{ tramas }}):
-              subprocess.run(["ovs-ofctl", "-O", "OpenFlow13", "packet-out", "{{ bridge }}", "{{ puerto }}", "resubmit(,0)", trama.hex()], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              s.send(trama)
           FIN
+      delegate_to: "{{ origen }}"
+      become: true
       changed_when: true
 
     - name: Esperar 2 s y leer los contadores DESPUES
@@ -56,18 +62,21 @@
         cmd: |
           sleep 2
           s=$(ovs-ofctl -O OpenFlow13 meter-stats {{ bridge }} meter={{ medidor.stdout | trim }})
-          echo "$s" | sed -n 's/.*packet_in_count:\([0-9]*\).*/\1/p' | head -1
-          echo "$s" | sed -n 's/.*band 0: packet_count:\([0-9]*\).*/\1/p' | head -1
+          echo "$s" | grep -o 'packet_in_count:[0-9]*' | head -1 | cut -d: -f2
+          echo "$s" | grep -o ' packet_count:[0-9]*' | head -1 | cut -d: -f2
+          echo "$s" | tr '\n' ' ' | tr -s ' \t' ' '
+          echo
           ovs-ofctl -O OpenFlow13 dump-meters {{ bridge }} meter={{ medidor.stdout | trim }} | tr '\n' ' '
       register: despues
       changed_when: false
 
     - name: Resultado
       vars:
-        entraron: "{{ (despues.stdout_lines[0] | int) - (antes.stdout_lines[0] | int) }}"
+        entraron: "{{ (despues.stdout_lines[0] | default('0') | int) - (antes.stdout_lines[0] | default('0') | int) }}"
         descartadas: "{{ (despues.stdout_lines[1] | default('0') | int) - (antes.stdout_lines[1] | default('0') | int) }}"
       ansible.builtin.debug:
         msg:
-          - "medidor {{ medidor.stdout | trim }} (configuracion en el switch: {{ despues.stdout_lines[2] | default('') }})"
+          - "medidor {{ medidor.stdout | trim }} en el switch: {{ despues.stdout_lines[3] | default('') }}"
+          - "salida cruda de meter-stats: {{ despues.stdout_lines[2] | default('') }}"
           - "tramas inyectadas: {{ tramas }} | llegaron al medidor: {{ entraron }} | DESCARTADAS por la banda: {{ descartadas }} | pasaron al controlador: {{ (entraron | int) - (descartadas | int) }}"
-          - "{{ 'OK: el medidor descarta el exceso' if (descartadas | int) >= ((tramas | int) * 0.4) and (entraron | int) >= ((tramas | int) * 0.9) else 'REVISAR: se esperaba que entraran casi todas y se descartara la mayoria' }}"
+          - "{{ 'OK: el medidor descarta el exceso' if (descartadas | int) >= ((tramas | int) * 0.6) and (entraron | int) >= ((tramas | int) * 0.9) else 'REVISAR: se esperaba que entraran casi todas y se descartara la mayoria' }}"
