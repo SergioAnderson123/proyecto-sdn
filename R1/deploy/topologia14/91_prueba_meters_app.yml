@@ -4,6 +4,8 @@
 # Inyecta {{ tramas }} tramas DHCP (UDP 68 a 67, con chaddr distinto de la MAC de origen: la app DHCP las ignora, asi que no toca su ambito) DESDE EL HOST del puerto (h2 para sw-acc-2, h1 para sw-acc-1) con un socket crudo,
 # todas en milisegundos (la primera version las inyectaba con un ovs-ofctl por trama: ~10 pps, justo el limite, y no descartaba nada), y compara los contadores del medidor antes y despues.
 # Esperado con 10 pps y rafaga 10: pasan unas 10 a 20 (la rafaga) y se descartan casi todas. Con otra clase o puerto: -e prioridad=50010 (EAPOL; las tramas serian de otro tipo) no esta soportado en esta prueba.
+# OJO: son 200 tramas DHCP seguidas desde el host: R5 las ve (el espejo de R5, prio 41000, va ANTES del medidor, prio 40510) y REVOCA la sesion 802.1X de ese host con 300 s de lista negra (visto en vivo con h1: "revocada por R5; lista negra 300 s"). Es el comportamiento esperado de la cadena completa (el medidor protege al controlador; R5 detecta y castiga al emisor). Despues
+# de 300 s hay que reautenticar al host: PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true.
 # No toca otros puertos ni los flujos de usuarios; las tramas llevan una MAC de origen de prueba (02:aa:bb:99:00:01). Despues, comprobar que el DHCP normal sigue funcionando: PLAYBOOK=83_prueba_dhcp.yml ./lanzar.sh
 - name: Prueba del medidor DHCP por puerto
   hosts: "{{ sw | default('sw-acc-2') }}"
