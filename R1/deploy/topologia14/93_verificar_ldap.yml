@@ -1,0 +1,75 @@
+# VERIFICACION (solo lectura) del LDAP de ctrl-1 y ctrl-2 (multimaestro): cuantas entradas tiene cada uno, si tienen el MISMO contenido y si coincide con la semilla del repositorio
+# (R1/shared/ldap/ldif/custom/estructura.ldif). No modifica nada: solo `ldapsearch` dentro del contenedor LDAP de cada nodo y un resumen en Python (files/ldap_resumen.py).
+#   PLAYBOOK=93_verificar_ldap.yml ./lanzar.sh
+# Esperado: 16 entradas en cada nodo (dc=example,dc=org y cn=admin de la imagen + 14 de la semilla), el MISMO hash en los dos, ningun DN que falte o sobre respecto a la semilla y ninguna diferencia
+# de atributos salvo los que ata cada despliegue a su equipo (description = MAC, physicalDeliveryOfficeName = switch, roomNumber = puerto; en VNRT los fija ldap-ubicacion.sh y no coinciden con los de Mininet).
+# La clave del administrador (la de R1/compose.yml: LDAP_ADMIN_PASSWORD) se pasa por el entorno del contenedor, no por la linea de comandos del host. Si el LDAP exige TLS para el bind, se reintenta con STARTTLS.
+- name: Resumen del LDAP de cada nodo
+  hosts: node-ctrl-1,node-ctrl-2
+  gather_facts: false
+  vars:
+    semilla_local: "{{ playbook_dir }}/../../shared/ldap/ldif/custom/estructura.ldif"
+    clave_ldap: admin
+  tasks:
+    - name: Copiar el resumidor y la semilla (a /tmp del nodo)
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "0644"
+      loop:
+        - { src: "{{ playbook_dir }}/files/ldap_resumen.py", dest: /tmp/ldap_resumen.py }
+        - { src: "{{ semilla_local }}", dest: /tmp/estructura_semilla.ldif }
+
+    - name: Contenedor de LDAP de este nodo
+      ansible.builtin.shell:
+        cmd: "docker ps --format '{{ '{{.Names}}' }}' | grep -i ldap | grep -vi radius | head -1"
+      register: contenedor
+      changed_when: false
+
+    - name: Sin contenedor LDAP no hay nada que mirar
+      ansible.builtin.assert:
+        that: contenedor.stdout | trim | length > 0
+        fail_msg: "No hay un contenedor con 'ldap' en el nombre en {{ inventory_hostname }} (docker ps)"
+        quiet: true
+
+    - name: Leer todo el arbol y resumirlo (solo lectura)
+      ansible.builtin.shell:
+        cmd: |
+          C={{ contenedor.stdout | trim }}
+          B='dc=example,dc=org'; U='cn=admin,dc=example,dc=org'
+          buscar() { docker exec -e LDAPPW={{ clave_ldap }} "$C" sh -c "ldapsearch $1 -LLL -D $U -w \"\$LDAPPW\" -b $B"; }
+          out=$(buscar "-x -H ldap://localhost" 2>/dev/null) || out=$(buscar "-x -ZZ -H ldap://localhost" 2>/dev/null) || { echo "NO_SE_PUDO_LEER_EL_LDAP"; exit 0; }
+          echo "$out" | python3 /tmp/ldap_resumen.py --semilla /tmp/estructura_semilla.ldif
+      register: resumen
+      changed_when: false
+
+    - name: Interpretar el resumen
+      ansible.builtin.set_fact:
+        r: "{{ resumen.stdout | from_json }}"
+      when: "'NO_SE_PUDO' not in resumen.stdout"
+
+    - name: Mostrar lo de este nodo
+      ansible.builtin.debug:
+        msg:
+          - "{{ inventory_hostname }} ({{ contenedor.stdout | trim }}): {{ r.entradas | default('no se pudo leer') }} entradas (la semilla trae {{ r.entradas_semilla | default('?') }}; la imagen pone {{ r.base_de_la_imagen | default([]) | length }} mas)"
+          - "hash completo: {{ r.hash | default('') }}"
+          - "hash sin lo atado al equipo: {{ r.hash_sin_atado_al_equipo | default('') }}"
+          - "faltan respecto a la semilla: {{ r.faltan_respecto_a_la_semilla | default([]) }} | sobran: {{ r.sobran_respecto_a_la_semilla | default([]) }}"
+          - "diferencias de atributos (fuera de MAC/switch/puerto): {{ r.diferencias_de_atributos | default([]) }}"
+          - "atado al equipo: {{ r.atado_al_equipo | default({}) }}"
+
+- name: Veredicto entre nodos
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Comparar ctrl-1 con ctrl-2
+      vars:
+        a: "{{ hostvars['node-ctrl-1'].r | default({}) }}"
+        b: "{{ hostvars['node-ctrl-2'].r | default({}) }}"
+      ansible.builtin.debug:
+        msg:
+          - "Mismo numero de entradas: {{ (a.entradas | default(-1)) == (b.entradas | default(-2)) }} ({{ a.entradas | default('?') }} y {{ b.entradas | default('?') }})"
+          - "MISMO contenido completo (hash): {{ (a.hash | default('x')) == (b.hash | default('y')) }}"
+          - "Mismo contenido sin lo atado al equipo: {{ (a.hash_sin_atado_al_equipo | default('x')) == (b.hash_sin_atado_al_equipo | default('y')) }}"
+          - "{{ 'OK: los dos LDAP son identicos y coinciden con la semilla' if ((a.hash | default('x')) == (b.hash | default('y'))) and (a.faltan_respecto_a_la_semilla | default(['?']) | length == 0) and (a.sobran_respecto_a_la_semilla | default(['?']) | length == 0) and (a.diferencias_de_atributos | default(['?']) | length == 0) else 'REVISAR: ver el detalle de cada nodo arriba' }}"

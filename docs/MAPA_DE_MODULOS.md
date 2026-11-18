@@ -10,8 +10,8 @@ Un módulo es una pieza con una responsabilidad, su propia carpeta o conjunto de
 | Req. | Módulo | Dónde | Qué hace | Estado |
 |---|---|---|---|---|
 | R1 | Agente 802.1X | `R1/agente_802_1x/` | wpa_supplicant + API de sesiones (`/sessions/logout`, token `AGENTE_TOKEN`) | en vivo |
-| R1 | FreeRADIUS | `R1/radius/` | EAP-TLS; en la slice corre en Docker sin puertos publicados, IP 10.50.0.250 (playbook 73) | en vivo |
-| R1 | OpenLDAP | `R1/shared/ldap/` | usuarios y roles que consulta FreeRADIUS | en vivo |
+| R1 | FreeRADIUS | `R1/radius/` | EAP-TLS; en la slice corre en Docker sin puertos publicados, IP 10.50.0.250 (playbook 73); también en ctrl-2 (LDAP local) y ctrl-3 (LDAP remoto por STARTTLS) | en vivo |
+| R1 | OpenLDAP | `R1/shared/ldap/` | usuarios y roles que consulta FreeRADIUS. Semilla `ldif/custom/estructura.ldif` (14 entradas; con la base y el admin de la imagen, 16). Arranque `start-compatible.sh` (conserva una instalación migrada, arranca una vacía con el bootstrap original, se niega ante datos parciales). Datos, configuración y TLS en `persistent-*/`, fuera de Git. Multimaestro ctrl-1/ctrl-2 con STARTTLS | en vivo (`93_verificar_ldap.yml` compara los dos nodos con la semilla) |
 | R1 | Policy Mapper | `R1/shared/policy_mapper/`, `R1/policy_mapper/` | traduce rol a flujos de ONOS; solo añade flujos (se limpia con `limpiar_r2.py`). Cierra sesiones de equipos ausentes: `POST /sessions/ausente` (clave `PRESENCIA_TOKEN`) y vigilante de puertos sin enlace | en vivo (ausente y puerto probados con 88) |
 | R2 | Tablas por rol | `R2/policy/policy_tables.py`, `policy.yaml`, `portal_auth.py` | tablas de rol, cuarentena, portal, DHCP, prioridades R2 | en vivo |
 | R2 | Vigilante y reenvío proactivo | `R2/policy/vigilante.py`, `recalculo.py`, `hosts_fijos.py`, `consultar_hosts.py`, `onos_multi.py` y la base que comparten con la instalación inicial: `flujos_proactivos.py`, `caminos.py`, `plan_arboles.py`, `puertos.py`, `instalar_proactivo.py`, `explicar_ruta.py`, `vista_previa.py` (ver §4) | genera e instala los flujos de la tabla 60 y el vigilante los mantiene: observa enlaces y hosts de ONOS, recalcula el árbol y repara. Modo L2 en vivo; modo capa 3 (`--subredes`, `--nucleo`) solo en simulación | L2 en vivo, L3 offline |
@@ -21,7 +21,7 @@ Un módulo es una pieza con una responsabilidad, su propia carpeta o conjunto de
 | R2 | App ONOS Meters por puerto (Java) | `R2/onos-app/campus-meters/`, `R2/policy/generar_config_meters.py` | medidores de R1 (EAPOL 20 pps, DHCP 10 pps; banda DROP) por puerto de acceso del plan, con reglas aditivas (prio 50010 y 40510); los repone si el switch vuelve y los retira al desactivarla (`docs/DISENO_METERS_POR_PUERTO.md`) | compila y 13 pruebas; en vivo: DHCP y EAPOL medidos (90 y 91); falta la reposición al reconectar (92) |
 | R2 | Portal cautivo | `R2/portal_cautivo/` | invitados y portal | sin desplegar en la slice |
 | R2 | Panel de accesos | `R2/panel_accesos/` | vista de accesos | laboratorio |
-| R2 | MAB de respaldo | `R2/mab_vm/`, `R2/fallback/` | MAB cuando no hay 802.1X | laboratorio |
+| R2 | MAB de respaldo | `R2/mab_vm/`, `R2/fallback/` (variante `fallback-mab-vnrt-1.0.3.oar`, `build-vnrt.py`), `R1/deploy/controller/vnrt_ops/` | MAB cuando no hay 802.1X: la app de ONOS observa el ARP de los puertos 1 de los dos accesos (advisor, sin emitir ni reenviar) y consulta al backend `mab_vm` (HTTP/1.1); el backend admite hijos de una VM padre (VLAN 10) y dispositivos IoT registrados en LDAP (VLAN 30). Añade dos reglas de acceso, tabla 0 prioridad 40004 (`mab_arp_ingress.py`) | integrado en VNRT el 17-nov (`docs/ESTADO_VNRT_2026-11-17.md`); falta una emisión física desde h1 |
 | R5 | Suricata + integrador | `R5/suricata/`, `R5/codigo/`, `R5/cli/` | alertas a bloqueo en ONOS (prioridad R5) | laboratorio; la slice espera ajustes |
 | R5 | Despliegue de sensores | `R5/deploy/` | `prioridades.yaml` (mapa único de prioridades), topología de ejemplo | pensado para otra topología (§6) |
 
@@ -34,7 +34,7 @@ Fuera de la lista (no son módulos): playbooks de la slice (`R1/deploy/topologia
 | Preparación | `00_comprobar`, `01_limpiar_clasico`, `02_disco`, `05_recursos`, `10_docker` | comprobar, limpiar OVS clásico, disco, recursos, Docker |
 | Plano de control | `20_controller`, `30_switches`, `40_cluster`, `42_servicios`, `45_maestro`, `50_sensores` | ONOS, OVS, clúster, servicios, nodo maestro, sensores |
 | R2 | `60_proactivo`, `65_vigilante`, `70_fase_e`, `71_consulta_hosts`, `72_suplicante`, `73_radius_red_docker`, `74_token_agente`, `75_server_ip_persistente` | reenvío proactivo, vigilante, tablas R2, consulta de hosts, autenticación de prueba |
-| Seguridad de la operación | `90_estado`, `95_diagnostico_lazos`, `96_estres_difusion`, `96_prueba_rstp`, `99_freno_emergencia` | estado, detector de lazos, estrés, freno |
+| Seguridad de la operación | `90_estado`, `93_verificar_ldap` (solo lectura), `95_diagnostico_lazos`, `96_estres_difusion`, `96_prueba_rstp`, `99_freno_emergencia` | estado, LDAP de los dos nodos frente a la semilla, detector de lazos, estrés, freno |
 | Capa 3 | `97_viabilidad_capa3`, `76_gateway_arp`, `98_prueba_vigilante_capa3` (solo lectura), `77_prueba_vigilante_aislado`, `66_preflight_conmutacion` (solo lectura), `67_hosts_plan_a`, `68_vigilante_capa3_servicio`, `69_conmutacion_hosts`, `80_caida_cable`, `81_prueba_meters`, `82_dhcp_app`, `83_prueba_dhcp`, `84_prueba_meters_onos`, `86_presencia` (clave, app y configuración del sondeo), `87_prueba_presencia`, `88_prueba_sesion_ausente`, `89_prueba_sospecha_logoff`, `90_meters_app`, `91_prueba_meters_app`, `92_prueba_reconexion_meters`; diseño pendiente `docs/DISENO_DHCP_POR_SUBRED.md` | viabilidad, app Java, simulación y prueba aplicada del vigilante en la tabla 62 con subredes de prueba |
 
 ## 3. Documentos
@@ -45,7 +45,7 @@ Fuera de la lista (no son módulos): playbooks de la slice (`R1/deploy/topologia
 | Fase E (tráfico IP de R2 por la tabla 60) | `DISENO_FASE_E.md`, `RESULTADOS_FASE_E.md` |
 | Capa 3 y direccionamiento | `DISENO_CAPA3.md`, `PLAN_DIRECCIONAMIENTO.md`, `PLAN_CONMUTACION_CAPA3.md`, `DISENO_DHCP_POR_SUBRED.md`, `DISENO_PRESENCIA_EQUIPOS.md`, `DISENO_METERS_POR_PUERTO.md` |
 | Pruebas | `PROTOCOLO_PRUEBA_AUTENTICACION.md`, `VALIDAR_H1_VNRT.md`, `VALIDAR_PORTAL_DHCP_VNRT.md` |
-| Plataforma | `DESPLIEGUE_UBUNTU.md`, `CERTIFICADOS_Y_ESCALABILIDAD.md`, `topologia-v4-14vms.drawio` |
+| Plataforma | `DESPLIEGUE_UBUNTU.md`, `CERTIFICADOS_Y_ESCALABILIDAD.md`, `topologia-v4-14vms.drawio`, `ESTADO_VNRT_2026-11-17.md` (LDAP multimaestro, RADIUS en 3 nodos, MAB), `REGRESION_TOPOLOGIA14_2026-11-17.md` |
 | Equipo/curso | `avance-01-roles.md`, `plan-avance-R5.md`, `pendientes-entrega-1.md`, `entrega-1/` |
 
 ## 4. Qué hay dentro del módulo de reenvío proactivo y vigilante
@@ -74,6 +74,7 @@ La app Java no importa nada de Python: solo lee la configuración que genera `ge
 
 ## 6. Huecos e incoherencias (ordenados por urgencia)
 
+0. **LDAP multimaestro: la configuración de replicación no está en el repositorio.** `persistent-config/` (slapd.d con `olcSyncrepl`/`olcServerID`), `persistent-tls/` y los compose de ctrl-2 (`/home/ubuntu/sdn-identity/`) son privados y están fuera de Git a propósito, así que un despliegue desde cero no reproduce el multimaestro. Conviene versionar una plantilla sin secretos (el LDIF de `olcSyncrepl` con marcadores) y un paso de despliegue. La semilla de los alumnos y de support01 lleva valores de Mininet (`00:00:00:00:00:21`, `of:0000000000000001`): en VNRT se fijan con `ldap-ubicacion.sh` y por eso `93_verificar_ldap.yml` ignora MAC, switch y puerto al comparar con la semilla. `departmentNumber` no lo usa ningún código.
 1. **App Java probada en vivo con 76 (ver DISENO_CAPA3 V5)** (los nombres de Nicira eran `NICIRA_MOV_*`, corregidos al compilar). Falta instalarla con `allowExtraneousRules=false` (playbook `76`, aún por escribir).
 2. **Vigilante en modo capa 3 solo en simulación.** No se ha probado en vivo con la app Java ni con los hosts fijos con IP.
 3. **Plan de direccionamiento sin aplicar.** h1/h2 siguen en 10.0.0.201/.202; el plan A los pasa a 10.0.1.x / 10.0.2.x y exige DHCP por subred (hoy solo hay uno).
