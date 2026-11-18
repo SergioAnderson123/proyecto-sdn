@@ -41,8 +41,10 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -88,6 +90,9 @@ public class CampusMetersApp {
     private volatile long pausaHasta;                                 // no se piden medidores antes de este instante (milisegundos)
     /** Lo ya puesto: clave de la especificacion -> medidor y (cuando el medidor esta ADDED) su regla. Solo lo toca el hilo unico. */
     private final Map<String, Aplicado> aplicados = new HashMap<>();
+    /** Medidores propios atascados en PENDING_ADD (ONOS no los ve nacer aunque el switch los tenga): se APARTAN, sin retirarlos, para que su id siga ocupado en ONOS y el siguiente medidor reciba otro id; ONOS
+     *  reutiliza el id de uno retirado y el switch ya tiene un medidor con ese id (visto en sw-acc-1 tras reinstalar). Se retiran al rehacer el switch o desactivar la app. */
+    private final Map<DeviceId, Set<MeterId>> cuarentena = new HashMap<>();
 
     private static final class Aplicado {
         final DeviceId device;
@@ -227,8 +232,12 @@ public class CampusMetersApp {
                 if (a.desdeNoAdded == 0) {
                     a.desdeNoAdded = ahora;
                 } else if (ahora - a.desdeNoAdded > MEDIDOR_ATASCADO_MS) {
-                    log.warn("Meters: el medidor {} de {} lleva mas de {} s sin llegar a ADDED ({}); se rehace", a.meter, esp.clave(), MEDIDOR_ATASCADO_MS / 1000, existente.state());
-                    quitar(esp.clave());
+                    log.warn("Meters: el medidor {} de {} lleva mas de {} s sin llegar a ADDED ({}); se aparta (su id queda ocupado) y se pide otro con otro id", a.meter, esp.clave(), MEDIDOR_ATASCADO_MS / 1000, existente.state());
+                    aplicados.remove(esp.clave());
+                    if (a.regla != null) {
+                        flowRuleService.removeFlowRules(a.regla);
+                    }
+                    cuarentena.computeIfAbsent(device, k -> new HashSet<>()).add(a.meter);
                     pausaHasta = ahora + ESPERA_TRAS_RETIRO_MS;
                     return;
                 }
@@ -280,7 +289,10 @@ public class CampusMetersApp {
                 log.info("Meters: regla {} (prio {}) aplicada con el medidor {}", esp.clave(), esp.prioridad, a.meter);
             }
         }
-        for (Meter m : propios.values()) {                                  // medidores nuestros que ya no corresponden a nada (restos de una activacion anterior o de un cambio de plan)
+        for (Meter m : propios.values()) {                                  // medidores nuestros que ya no corresponden a nada (los de la cuarentena se dejan: su id debe seguir ocupado)
+            if (enCuarentena(device, m.id())) {
+                continue;
+            }
             boolean usado = false;
             for (Aplicado a : aplicados.values()) {
                 if (a.meter.equals(m.id()) && a.device.equals(device)) {
@@ -305,6 +317,11 @@ public class CampusMetersApp {
         return b.type() == Band.Type.DROP && b.rate() == esp.rate && b.burst() != null && b.burst() == esp.rafaga;
     }
 
+    private boolean enCuarentena(DeviceId device, MeterId id) {
+        Set<MeterId> c = cuarentena.get(device);
+        return c != null && c.contains(id);
+    }
+
     private boolean usadoPorOtro(MeterId id, String clave, DeviceId device) {
         for (Map.Entry<String, Aplicado> e : aplicados.entrySet()) {
             if (!e.getKey().equals(clave) && e.getValue().device.equals(device) && e.getValue().meter.equals(id)) {
@@ -317,7 +334,7 @@ public class CampusMetersApp {
     /** Un medidor propio de ese switch, sin dueño entre lo aplicado, con los valores de la clase; null si no hay. */
     private Meter alternativo(Map<MeterId, Meter> propios, Especificacion esp, String clave, DeviceId device) {
         for (Meter m : propios.values()) {
-            if (coincide(m, esp) && !usadoPorOtro(m.id(), clave, device)) {
+            if (m.state() == MeterState.ADDED && !enCuarentena(device, m.id()) && coincide(m, esp) && !usadoPorOtro(m.id(), clave, device)) {
                 return m;
             }
         }
@@ -376,6 +393,14 @@ public class CampusMetersApp {
     }
 
     private void olvidarDispositivo(DeviceId device) {
+        Set<MeterId> apartados = cuarentena.remove(device);
+        if (apartados != null) {
+            for (Meter m : meterService.getMeters(device)) {
+                if (appId.equals(m.appId()) && apartados.contains(m.id())) {
+                    retirarMedidor(m);
+                }
+            }
+        }
         List<String> claves = new ArrayList<>();
         for (Map.Entry<String, Aplicado> e : aplicados.entrySet()) {
             if (e.getValue().device.equals(device)) {
@@ -389,6 +414,7 @@ public class CampusMetersApp {
 
     /** Quita todo lo que esta app puso, aunque no este en `aplicados` (por ejemplo tras reinstalarla). */
     private void retirarTodo() {
+        cuarentena.clear();
         List<String> claves = new ArrayList<>(aplicados.keySet());
         for (String c : claves) {
             quitar(c);
