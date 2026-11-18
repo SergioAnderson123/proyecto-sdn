@@ -211,12 +211,26 @@ def agente_con_clave(agente):
     return agente
 
 
-def test_desconectar_avisa_al_policy_mapper_despues_del_logoff(agente_con_clave, avisos):
+def test_desconectar_avisa_al_policy_mapper_antes_del_logoff(agente_con_clave, monkeypatch):
+    orden = []
+    monkeypatch.setattr(ag, "http_post_json", lambda url, cuerpo, cabeceras=None, timeout=3:
+                        (orden.append(("aviso", url, cuerpo, cabeceras)), (200, '{"status":"cerrada"}'))[1])
+    monkeypatch.setattr(ag.subprocess, "run", lambda cmd, **k: (orden.append(("wpa_cli", cmd[-1], k.get("timeout"))),
+                                                               types.SimpleNamespace(returncode=0, stdout=""))[1])
     agente_con_clave.conectar("profesor01")
     agente_con_clave.desconectar()
-    assert avisos == [("http://mapper.invalido/sessions/logout", {"mac": MAC}, {"X-Agente-Token": "clave-compartida"})]
-    assert any("logoff" in c for c in LLAMADAS)
+    assert orden[0] == ("aviso", "http://mapper.invalido/sessions/logout", {"mac": MAC}, {"X-Agente-Token": "clave-compartida"})
+    assert orden[1] == ("wpa_cli", "logoff", 0.5)   # despues del aviso y con un plazo corto: no retrasa el cierre de la sesion
     assert any("Policy Mapper avisado (desconexion): sesion cerrada" in l for l in agente_con_clave.log)
+
+
+def test_si_wpa_cli_logoff_no_contesta_igual_se_cierra_el_suplicante(agente_con_clave, avisos, monkeypatch):
+    def colgado(cmd, **k):
+        raise subprocess.TimeoutExpired(cmd, k.get("timeout"))
+    monkeypatch.setattr(ag.subprocess, "run", colgado)
+    agente_con_clave.conectar("profesor01")
+    agente_con_clave.desconectar()
+    assert len(avisos) == 1 and not ProcFalso.instancias[0].vivo
 
 
 def test_cambiar_de_identidad_cierra_la_sesion_anterior(agente_con_clave, avisos):

@@ -12,7 +12,8 @@ instancia a la vez: dos instancias cruzan la conversacion EAP) y lee su estado c
 
 Cierre de sesion: ONOS AAA 2.7.0 procesa el EAPOL-Logoff pero no manda accounting a RADIUS, asi que el Policy Mapper no se
 entera. El agente le avisa por la red de gestion (POST /sessions/logout con la clave R1_TOKEN) al desconectar, al cambiar de
-identidad, al apagarse y cuando detecta que el enlace de la interfaz de datos cae (`ip link set <iface> down`).
+identidad, al apagarse y cuando detecta que el enlace de la interfaz de datos cae (`ip link set <iface> down`). Al desconectar,
+el aviso sale ANTES del `wpa_cli logoff`, para que el rol del puerto se retire sin esperar a wpa_cli.
 
 Variables de entorno: R1_IFACE (ens4), R1_DIR (carpeta con los wpa_*.conf y certs), R1_USUARIO (identidad por defecto,
 la que se conecta sola al arrancar), R1_MAPPER (URL del Policy Mapper), R1_TOKEN (clave compartida con el Policy Mapper),
@@ -193,17 +194,20 @@ class Agente:
 
     def _parar(self, motivo="desconexion"):
         proc, self.proc = self.proc, None
-        avisar = False
         if proc and proc.poll() is None:
-            # Avisa al autenticador de que el cliente se va: sin el EAPOL-Logoff, ONOS AAA conserva el estado AUTHORIZED
-            # y puede ignorar el siguiente EAPOL-Start (el cliente espera 60 s y falla). Un simple terminate() no lo envia.
+            # Primero se avisa al Policy Mapper: es el unico cierre real de la sesion (ONOS AAA no manda accounting) y borra el
+            # flujo 40001. Medido en VNRT: `wpa_cli logoff` a veces no contesta y agotaba su plazo de 2 s antes de este aviso,
+            # con lo que el puerto seguia con el rol hasta 2,7 s despues de desconectar. En secuencia y no en un hilo: un aviso
+            # que llegara tarde podria borrar la sesion nueva de un cambio de identidad.
+            self.avisar_logout(motivo)
+            # Despues, el EAPOL-Logoff al autenticador: sin el, ONOS AAA conserva el estado AUTHORIZED y puede ignorar el
+            # siguiente EAPOL-Start. Un simple terminate() no lo envia.
             try:
-                subprocess.run([WPA_CLI, "-p", CTRL, "-i", self.iface, "logoff"], capture_output=True, timeout=2)
+                subprocess.run([WPA_CLI, "-p", CTRL, "-i", self.iface, "logoff"], capture_output=True, timeout=0.5)
             except (OSError, subprocess.TimeoutExpired):
                 pass
             time.sleep(0.5)   # deja salir la trama antes de cerrar el proceso
             proc.terminate()
-            avisar = True
             try:
                 proc.wait(5)
             except subprocess.TimeoutExpired:
@@ -211,8 +215,6 @@ class Agente:
         if proc:
             self.log.append(time.strftime("%H:%M:%S ") + "== Desconectado")
         self.usuario = None
-        if avisar:
-            self.avisar_logout(motivo)
 
     def conectar(self, uid):
         with self.lock:
