@@ -61,6 +61,8 @@ public class CampusMetersApp {
     private static final String APP = "org.campus.meters";
     private static final String CLAVE_CONFIG = "campusmeters";
     private static final int CICLO_SEG = 3;
+    private static final long ESPERA_TRAS_RETIRO_MS = 6_000;      // tras retirar medidores, ONOS tarda en darlos de baja: pedir otros con los mismos ids enseguida cruzo reglas y medidores (92 en modo real)
+    private static final long MEDIDOR_ATASCADO_MS = 30_000;        // un medidor que no llega a ADDED en este tiempo se rehace
     private static final short ETHERTYPE_EAPOL = (short) 0x888e;      // 802.1X (PAE)
 
     private final Logger log = LoggerFactory.getLogger(getClass());
@@ -83,6 +85,7 @@ public class CampusMetersApp {
     private ApplicationId appId;
     private ScheduledExecutorService hilo;
     private volatile PlanMeters plan;
+    private volatile long pausaHasta;                                 // no se piden medidores antes de este instante (milisegundos)
     /** Lo ya puesto: clave de la especificacion -> medidor y (cuando el medidor esta ADDED) su regla. Solo lo toca el hilo unico. */
     private final Map<String, Aplicado> aplicados = new HashMap<>();
 
@@ -90,6 +93,7 @@ public class CampusMetersApp {
         final DeviceId device;
         MeterId meter;               // puede cambiar: si el medidor no corresponde a la clase se adopta otro (ver reconciliar)
         FlowRule regla;
+        long desdeNoAdded;           // desde cuando se ve el medidor sin llegar a ADDED (0 = esta ADDED o aun no se vio)
 
         Aplicado(DeviceId device, MeterId meter) {
             this.device = device;
@@ -125,6 +129,7 @@ public class CampusMetersApp {
                     if (plan != null && plan.dispositivos().contains(id.toString())) {
                         log.info("Meters: {} cambio de disponibilidad ({}): se rehace todo lo de ese switch", id, deviceService.isAvailable(id) ? "disponible" : "caido");
                         olvidarDispositivo(id);
+                        pausaHasta = System.currentTimeMillis() + ESPERA_TRAS_RETIRO_MS;
                     }
                 });
             }
@@ -161,16 +166,22 @@ public class CampusMetersApp {
     // ------------------------------------------------------------------ configuracion
     private void recargar() {
         try {
-            retirarTodo();
             MetersConfig cfg = configRegistry.getConfig(appId, MetersConfig.class);
             if (cfg == null || !cfg.isValid()) {
+                retirarTodo();
                 plan = null;
                 log.warn("Meters: sin configuracion valida (clave '{}' en apps/{}); no se aplica nada", CLAVE_CONFIG, APP);
                 return;
             }
-            plan = cfg.plan();
-            log.info("Meters: configuracion cargada: {} medidores en {} switches (tabla {})", plan.especificaciones().size(), plan.dispositivos().size(), plan.tabla());
-            ciclo();
+            PlanMeters nuevo = cfg.plan();
+            if (nuevo.equals(plan)) {                                        // la misma configuracion (por ejemplo, republicada por el playbook al reinstalar): no se toca nada
+                log.info("Meters: la configuracion publicada es igual a la aplicada; no se rehace nada");
+                return;
+            }
+            retirarTodo();
+            plan = nuevo;
+            pausaHasta = System.currentTimeMillis() + ESPERA_TRAS_RETIRO_MS;
+            log.info("Meters: configuracion cargada: {} medidores en {} switches (tabla {}); se espera {} s a que terminen los retiros", plan.especificaciones().size(), plan.dispositivos().size(), plan.tabla(), ESPERA_TRAS_RETIRO_MS / 1000);
         } catch (RuntimeException e) {
             log.error("Meters: error al recargar la configuracion", e);
         }
@@ -179,7 +190,7 @@ public class CampusMetersApp {
     // ------------------------------------------------------------------ lazo de reconciliacion
     private void ciclo() {
         PlanMeters p = plan;
-        if (p == null) {
+        if (p == null || System.currentTimeMillis() < pausaHasta) {
             return;
         }
         try {
@@ -202,9 +213,28 @@ public class CampusMetersApp {
                 propios.put(m.id(), m);
             }
         }
+        for (Meter m : propios.values()) {                                  // un retiro en curso: no se piden medidores nuevos hasta que termine (los ids se reutilizan)
+            if (m.state() == MeterState.PENDING_REMOVE) {
+                log.info("Meters: {} tiene el medidor {} dandose de baja; se espera", device, m.id());
+                return;
+            }
+        }
         for (Especificacion esp : p.de(device.toString())) {
             Aplicado a = aplicados.get(esp.clave());
             Meter existente = a == null ? null : propios.get(a.meter);
+            if (a != null && existente != null && existente.state() != MeterState.ADDED) {
+                long ahora = System.currentTimeMillis();
+                if (a.desdeNoAdded == 0) {
+                    a.desdeNoAdded = ahora;
+                } else if (ahora - a.desdeNoAdded > MEDIDOR_ATASCADO_MS) {
+                    log.warn("Meters: el medidor {} de {} lleva mas de {} s sin llegar a ADDED ({}); se rehace", a.meter, esp.clave(), MEDIDOR_ATASCADO_MS / 1000, existente.state());
+                    quitar(esp.clave());
+                    pausaHasta = ahora + ESPERA_TRAS_RETIRO_MS;
+                    return;
+                }
+            } else if (a != null) {
+                a.desdeNoAdded = 0;
+            }
             if (a != null && existente == null) {                          // el medidor desaparecio (p. ej. un switch reiniciado): se rehace
                 log.warn("Meters: el medidor {} de {} ya no esta en {}; se rehace", a.meter, esp.clave(), device);
                 quitar(esp.clave());

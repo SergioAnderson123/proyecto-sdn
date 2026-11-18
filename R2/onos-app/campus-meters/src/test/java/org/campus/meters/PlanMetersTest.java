@@ -97,6 +97,16 @@ public class PlanMetersTest {
     }
 
     @Test
+    public void dosPlanesConLoMismoSonIgualesYUnCambioLosDiferencia() throws Exception {
+        String base = "{\"dispositivos\": [{\"device\": \"" + ACC2 + "\", \"puertos\": [1]}]}";
+        assertEquals(PlanMeters.desde(json(base)), PlanMeters.desde(json(base)));                          // republicar la misma configuracion no debe rehacer nada
+        assertEquals(PlanMeters.desde(json(base)).hashCode(), PlanMeters.desde(json(base)).hashCode());
+        assertTrue(!PlanMeters.desde(json(base)).equals(PlanMeters.desde(json("{\"clases\": {\"dhcp\": {\"rate\": 11}}, \"dispositivos\": [{\"device\": \"" + ACC2 + "\", \"puertos\": [1]}]}"))));
+        assertTrue(!PlanMeters.desde(json(base)).equals(PlanMeters.desde(json("{\"dispositivos\": [{\"device\": \"" + ACC2 + "\", \"puertos\": [1, 2]}]}"))));
+        assertTrue(!PlanMeters.desde(json(base)).equals(null));
+    }
+
+    @Test
     public void rechazaConfiguracionesInvalidas() throws Exception {
         String[] malas = {
                 "{}",

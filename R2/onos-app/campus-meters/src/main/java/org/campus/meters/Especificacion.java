@@ -25,6 +25,23 @@ public final class Especificacion {
     }
 
     @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof Especificacion)) {
+            return false;
+        }
+        Especificacion e = (Especificacion) o;
+        return device.equals(e.device) && puerto == e.puerto && clase == e.clase && rate == e.rate && rafaga == e.rafaga && prioridad == e.prioridad;
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(device, puerto, clase, rate, rafaga, prioridad);
+    }
+
+    @Override
     public String toString() {
         return clave() + " " + rate + " pps rafaga " + rafaga + " prio " + prioridad;
     }

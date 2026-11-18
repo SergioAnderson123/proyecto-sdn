@@ -35,6 +35,17 @@ public final class PlanMeters {
         this.especificaciones = Collections.unmodifiableList(especificaciones);
     }
 
+    /** Dos planes son iguales si piden exactamente lo mismo (la app no rehace nada cuando se publica la misma configuracion). */
+    @Override
+    public boolean equals(Object o) {
+        return o instanceof PlanMeters && tabla == ((PlanMeters) o).tabla && especificaciones.equals(((PlanMeters) o).especificaciones);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(tabla, especificaciones);
+    }
+
     public int tabla() {
         return tabla;
     }
