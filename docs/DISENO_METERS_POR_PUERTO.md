@@ -5,7 +5,8 @@
 - El medidor DHCP descarta de verdad: de 200 tramas inyectadas desde el host pasan **10** (la ráfaga) y se descartan **190**, en sw-acc-1 y en sw-acc-2 (91).
 - El DHCP normal bajo medidor sigue funcionando (83 en sw-acc-1: ACK, IP en ONOS, regla /32, RELEASE); sus 3 paquetes se cuentan en el medidor sin descartes.
 - EAPOL medido (20 pps, ráfaga 20): h1 y h2 reautenticaron con los medidores puestos; el medidor de EAPOL vio 8 tramas del handshake EAP-TLS y descartó 0.
-**Falta en vivo:** la reposición cuando un switch se desconecta y vuelve (`92_prueba_reconexion_meters.yml`, modos suave y real).
+- Reposición al reconectar: **modo suave** (quitar y volver a poner el controlador 12 s) OK; **modo real** (reiniciar Open vSwitch, que borra flujos y medidores): los medidores y las reglas volvieron en ~9 s (92).
+**Hallazgo del modo real (corregido, por probar):** tras el reinicio las dos reglas quedaron atadas al **medidor 1** (el de DHCP, 10 pps) y el medidor 2 (20 pps, el de EAPOL) quedó ADDED sin uso, así que EAPOL se limitaba a 10 pps y compartía cuota con DHCP. El playbook daba OK porque solo comparaba cantidades. Ahora la app comprueba en cada ciclo que el medidor de cada regla tiene el rate y la ráfaga de su clase y que no lo comparte con otra clase; si no, adopta el medidor propio que sí corresponde (o rehace), retira la regla y la repone en el ciclo siguiente, y no retira un medidor que otra clase sigue usando. `files/pares_meters.py` (en el 90 y el 92) empareja cada regla con su medidor y marca `MAL` el estado cruzado. **Falta:** repetir el 92 en modo real con la app corregida.
 
 ## Para qué
 Una inundación de EAPOL o de DHCP en un puerto de acceso llega hoy entera al controlador (los flujos de R1 y R2 mandan esos paquetes al controlador sin límite). Los medidores de R1 (`R1/flujos_R1_R2.md`) limitan eso **en el switch**, por puerto: lo que pasa del límite se descarta sin molestar al controlador ni a los demás puertos.

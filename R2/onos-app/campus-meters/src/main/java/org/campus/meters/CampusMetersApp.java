@@ -88,7 +88,7 @@ public class CampusMetersApp {
 
     private static final class Aplicado {
         final DeviceId device;
-        final MeterId meter;
+        MeterId meter;               // puede cambiar: si el medidor no corresponde a la clase se adopta otro (ver reconciliar)
         FlowRule regla;
 
         Aplicado(DeviceId device, MeterId meter) {
@@ -210,8 +210,35 @@ public class CampusMetersApp {
                 quitar(esp.clave());
                 a = null;
             }
+            if (a != null && (!coincide(existente, esp) || usadoPorOtro(a.meter, esp.clave(), device))) {
+                // El medidor de este puerto y clase no tiene su rate y rafaga, o lo comparte otra clase: ocurrio tras reiniciar Open vSwitch (92 en modo real), con la regla de EAPOL atada al medidor
+                // de DHCP. Se busca entre los medidores propios sin dueño el que SI corresponde; si no hay, se rehace. La regla se retira ahora y se vuelve a poner en el ciclo siguiente.
+                Meter alt = alternativo(propios, esp, esp.clave(), device);
+                if (a.regla != null) {
+                    flowRuleService.removeFlowRules(a.regla);
+                    a.regla = null;
+                }
+                if (alt != null) {
+                    log.warn("Meters: el medidor {} no corresponde a {}; se adopta el {}", a.meter, esp.clave(), alt.id());
+                    a.meter = alt.id();
+                } else {
+                    log.warn("Meters: el medidor {} no corresponde a {} y no hay otro que sirva; se rehace", a.meter, esp.clave());
+                    quitar(esp.clave());
+                }
+                continue;
+            }
             if (a == null) {
+                Meter adoptable = alternativo(propios, esp, esp.clave(), device);       // un medidor propio sin dueño que ya tiene los valores de esta clase: se aprovecha en vez de pedir otro
+                if (adoptable != null) {
+                    aplicados.put(esp.clave(), new Aplicado(device, adoptable.id()));
+                    log.info("Meters: se adopta el medidor {} para {}", adoptable.id(), esp.clave());
+                    continue;
+                }
                 Meter m = meterService.submit(construirMedidor(device, esp).add());
+                if (propios.containsKey(m.id())) {                           // ONOS devolvio un id ya en uso: no se registra, el ciclo siguiente lo resuelve por los valores
+                    log.warn("Meters: ONOS asigno el medidor {} a {}, que ya existe; se espera al ciclo siguiente", m.id(), esp.clave());
+                    continue;
+                }
                 aplicados.put(esp.clave(), new Aplicado(device, m.id()));
                 propios.put(m.id(), m);
                 log.info("Meters: medidor {} pedido para {} ({} pps, rafaga {})", m.id(), esp.clave(), esp.rate, esp.rafaga);
@@ -236,6 +263,35 @@ public class CampusMetersApp {
                 retirarMedidor(m);
             }
         }
+    }
+
+    // ------------------------------------------------------------------ correspondencia entre medidor y clase
+    /** Un medidor corresponde a una especificacion si es de paquetes por segundo, tiene una sola banda DROP y su rate y rafaga son los de la clase. */
+    private static boolean coincide(Meter m, Especificacion esp) {
+        if (m.unit() != Meter.Unit.PKTS_PER_SEC || m.bands().size() != 1) {
+            return false;
+        }
+        Band b = m.bands().iterator().next();
+        return b.type() == Band.Type.DROP && b.rate() == esp.rate && b.burst() != null && b.burst() == esp.rafaga;
+    }
+
+    private boolean usadoPorOtro(MeterId id, String clave, DeviceId device) {
+        for (Map.Entry<String, Aplicado> e : aplicados.entrySet()) {
+            if (!e.getKey().equals(clave) && e.getValue().device.equals(device) && e.getValue().meter.equals(id)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Un medidor propio de ese switch, sin dueño entre lo aplicado, con los valores de la clase; null si no hay. */
+    private Meter alternativo(Map<MeterId, Meter> propios, Especificacion esp, String clave, DeviceId device) {
+        for (Meter m : propios.values()) {
+            if (coincide(m, esp) && !usadoPorOtro(m.id(), clave, device)) {
+                return m;
+            }
+        }
+        return null;
     }
 
     // ------------------------------------------------------------------ construccion
@@ -271,6 +327,11 @@ public class CampusMetersApp {
         }
         if (a.regla != null) {
             flowRuleService.removeFlowRules(a.regla);
+        }
+        for (Aplicado otro : aplicados.values()) {                          // un medidor que otra clase sigue usando (el estado cruzado de tras un reinicio) no se retira
+            if (otro.device.equals(a.device) && otro.meter.equals(a.meter)) {
+                return;
+            }
         }
         for (Meter m : meterService.getMeters(a.device)) {
             if (appId.equals(m.appId()) && m.id().equals(a.meter)) {

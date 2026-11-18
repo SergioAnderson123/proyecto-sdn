@@ -158,6 +158,12 @@
   become: true
   gather_facts: false
   tasks:
+    - name: Copiar el comprobador de emparejamiento regla-medidor (solo lee)
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/pares_meters.py"
+        dest: /tmp/pares_meters.py
+        mode: "0644"
+
     - name: Medidores y reglas con medidor de este switch
       ansible.builtin.shell:
         cmd: |
@@ -165,6 +171,8 @@
           ovs-ofctl -O OpenFlow13 dump-meters {{ bridge }} 2>&1 | grep -E "meter=|rate=" | tr '\n' ' ' | sed 's/meter=/\nmeter=/g' | tail -n +2
           echo "--- reglas con medidor (tabla 0) ---"
           ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=0 | grep "meter:" | sed 's/cookie=[^,]*, duration=[^,]*, table=0, //; s/send_flow_rem //' | cut -c1-200
+          echo "--- emparejamiento regla-medidor ---"
+          python3 /tmp/pares_meters.py {{ bridge }}
           echo "--- fin ---"
       register: mm
       changed_when: false

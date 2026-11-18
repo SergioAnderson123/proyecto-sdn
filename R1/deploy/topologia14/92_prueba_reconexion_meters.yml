@@ -24,9 +24,15 @@
         fail_msg: "Uso: -e modo=suave|real -e confirmar=true"
         quiet: true
 
+    - name: Copiar el comprobador de emparejamiento regla-medidor (solo lee)
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/pares_meters.py"
+        dest: /tmp/pares_meters.py
+        mode: "0644"
+
     - name: ANTES - medidores y reglas con medidor del switch
       ansible.builtin.shell:
-        cmd: "{{ foto }}; ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=0 | grep 'meter:' | sed 's/cookie=[^,]*, duration=[^,]*, table=0, n_packets=[0-9]*, n_bytes=[0-9]*, //; s/send_flow_rem //' | cut -c1-160"
+        cmd: "{{ foto }}; ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=0 | grep 'meter:' | sed 's/cookie=[^,]*, duration=[^,]*, table=0, n_packets=[0-9]*, n_bytes=[0-9]*, //; s/send_flow_rem //' | cut -c1-160; python3 /tmp/pares_meters.py {{ bridge }}"
       register: antes
       changed_when: false
 
@@ -88,7 +94,7 @@
 
     - name: DESPUES - medidores y reglas con medidor del switch
       ansible.builtin.shell:
-        cmd: "{{ foto }}; ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=0 | grep 'meter:' | sed 's/cookie=[^,]*, duration=[^,]*, table=0, n_packets=[0-9]*, n_bytes=[0-9]*, //; s/send_flow_rem //' | cut -c1-160"
+        cmd: "{{ foto }}; ovs-ofctl -O OpenFlow13 dump-flows {{ bridge }} table=0 | grep 'meter:' | sed 's/cookie=[^,]*, duration=[^,]*, table=0, n_packets=[0-9]*, n_bytes=[0-9]*, //; s/send_flow_rem //' | cut -c1-160; python3 /tmp/pares_meters.py {{ bridge }}"
       register: despues
       changed_when: false
 
@@ -107,7 +113,9 @@
           - "ANTES:   {{ antes.stdout_lines[0] }}"
           - "{{ linea.stdout_lines | default([]) }}"
           - "DESPUES: {{ despues.stdout_lines[0] }}"
-          - "{{ 'OK: el switch volvio a tener los mismos medidores y reglas con medidor que antes' if antes.stdout_lines[0] == despues.stdout_lines[0] else 'REVISAR: no coincide con el estado de antes (si tiene MAS medidores, quedo alguno huerfano; si tiene MENOS, la app aun no los repuso: esperar y repetir 90 estado)' }}"
+          - "Emparejamiento regla-medidor ANTES:   {{ antes.stdout_lines | select('search', '^RESULTADO|^prio=') | list }}"
+          - "Emparejamiento regla-medidor DESPUES: {{ despues.stdout_lines | select('search', '^RESULTADO|^prio=') | list }}"
+          - "{{ 'OK: mismos medidores y reglas que antes, y cada regla usa SU medidor (EAPOL 20/20, DHCP 10/10)' if antes.stdout_lines[0] == despues.stdout_lines[0] and 'emparejamiento=OK' in despues.stdout else 'REVISAR: o no coincide con el estado de antes (MAS medidores = huerfano, MENOS = aun no repuestos) o una regla usa un medidor que no es el suyo (ver las lineas MAL)' }}"
           - "Reglas con medidor despues: {{ despues.stdout_lines[1:] }}"
           - "Log de la app: {{ registro.stdout_lines }}"
           - "Controlador de br0 tras la prueba: {{ restaurado.stdout_lines | default(['(modo real: no se toco)']) }}"
