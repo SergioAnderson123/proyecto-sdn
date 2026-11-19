@@ -58,6 +58,10 @@ services:
     environment:
       <<: *r5-env
       P_ESPEJO: ${P_ESPEJO:-41000}
+      ESPEJO_COOKIE: ${ESPEJO_COOKIE:-0x52354d49}
+      ESPEJO_GRUPO_ID: ${ESPEJO_GRUPO_ID:-21000}
+      ESPEJO_GRUPO_ESTRICTO: ${ESPEJO_GRUPO_ESTRICTO:-1}   # 0 = seguir aunque ONOS deje el grupo en PENDING_ADD (visto en los cores el 18/11)
+      ESPEJO_TABLA: ${ESPEJO_TABLA:-}      # 60 = modo grupo + goto_table 60 (slice de 14 VM); vacio = NORMAL (laboratorio)
     volumes:
       - ${TOPOLOGIA_ARCHIVO:?lo define up.sh}:/opt/r5/topologia.yaml:ro
     depends_on:

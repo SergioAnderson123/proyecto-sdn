@@ -1,6 +1,12 @@
-alert tcp any any -> $HOME_NET any (msg:"LOCAL Port scan SYN"; flags:S; detection_filter:track by_src, count 20, seconds 5; classtype:attempted-recon; sid:9000002; rev:1; priority:2;)
-alert tcp any any -> $HOME_NET 80 (msg:"LOCAL SYN flood"; flags:S; detection_filter:track by_src, count 200, seconds 2; classtype:attempted-dos; sid:9000003; rev:1; priority:1;)
+# NOTA 18/11: cada SYN llega a Suricata ~4 veces (2 espejos x 2 copias por la duplicacion de NORMAL en el borde) y el contador by_src se comparte entre NIC:
+# "count 80" equivale a ~20 SYN reales en 5 s. Cuando se elimine la duplicacion del espejo, volver a count 20.
+alert tcp any any -> $HOME_NET any (msg:"LOCAL Port scan SYN"; flags:S; detection_filter:track by_src, count 80, seconds 5; classtype:attempted-recon; sid:9000002; rev:1; priority:2;)
+alert tcp any any -> $HOME_NET [80,8001:8003,8101:8105] (msg:"LOCAL SYN flood"; flags:S; detection_filter:track by_src, count 200, seconds 2; classtype:attempted-dos; sid:9000003; rev:1; priority:1;)
 alert http any any -> $HOME_NET any (msg:"LOCAL Herramienta de escaneo web (User-Agent)"; http.user_agent; content:"sqlmap"; nocase; classtype:web-application-attack; sid:9000010; rev:1; priority:1;)
 alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"LOCAL Prueba C2 interno (cabecera X-R5-TEST-C2)"; http.header; content:"X-R5-TEST-C2"; classtype:trojan-activity; sid:9000011; rev:1; priority:1;)
 alert udp $HOME_NET any -> $HOME_NET any (msg:"LOCAL R4 Inundacion UDP interna"; detection_filter:track by_src, count 300, seconds 2; classtype:attempted-dos; sid:9000020; rev:1; priority:1;)
 alert icmp $HOME_NET any -> $HOME_NET any (msg:"LOCAL R4 Inundacion ICMP interna"; itype:8; detection_filter:track by_src, count 200, seconds 2; classtype:attempted-dos; sid:9000021; rev:1; priority:1;)
+alert tcp any any -> $HOME_NET [80,8001:8003,8101:8105] (msg:"LOCAL DDoS SYN distribuido (por destino)"; flags:S; detection_filter:track by_dst, count 150, seconds 5; classtype:attempted-dos; sid:9000030; rev:1; priority:1;)
+alert tcp any any -> $HOME_NET any (msg:"LOCAL Escaneo sigiloso FIN"; flags:F; detection_filter:track by_src, count 30, seconds 5; classtype:attempted-recon; sid:9000040; rev:1; priority:2;)
+alert tcp any any -> $HOME_NET any (msg:"LOCAL Escaneo sigiloso NULL"; flags:0; detection_filter:track by_src, count 30, seconds 5; classtype:attempted-recon; sid:9000041; rev:1; priority:2;)
+alert tcp any any -> $HOME_NET any (msg:"LOCAL Escaneo sigiloso Xmas"; flags:FPU; detection_filter:track by_src, count 30, seconds 5; classtype:attempted-recon; sid:9000042; rev:1; priority:2;)

@@ -102,18 +102,22 @@ def validar(d):
         espejo = c.get("espejo") or {}
         if not isinstance(espejo, dict) or not espejo:
             raise TopologiaInvalida(f"{nombre}: falta 'espejo' (puerto y MAC hacia cada sensor)")
+        # Cada core declara solo los sensores a los que esta cableado (en el slice, sw-core-1 -> node-sec-1 y sw-core-2 -> node-sec-2;
+        # el borde los tiene a los dos). Debe declarar al menos uno.
+        extra = set(espejo) - set(res["sensores"])
+        if extra:
+            raise TopologiaInvalida(f"{nombre}.espejo: sensores desconocidos {sorted(extra)} (declarados: {res['sensores']})")
         sensores = {}
         for s in res["sensores"]:
-            e = espejo.get(s)
+            if s not in espejo:
+                continue
+            e = espejo[s]
             if not isinstance(e, dict) or not e.get("puerto"):
                 raise TopologiaInvalida(f"{nombre}.espejo.{s}: falta 'puerto' (interfaz del core hacia ese sensor)")
             mac = str(e.get("mac") or "").strip()
             if mac and not MAC_RE.match(mac):
                 raise TopologiaInvalida(f"{nombre}.espejo.{s}.mac: '{mac}' no es una MAC (aa:bb:cc:dd:ee:ff)")
             sensores[s] = {"puerto": str(e["puerto"]).strip(), "mac": mac.lower() or None}
-        extra = set(espejo) - set(res["sensores"])
-        if extra:
-            raise TopologiaInvalida(f"{nombre}.espejo: sensores desconocidos {sorted(extra)} (declarados: {res['sensores']})")
         solapa = {s["puerto"] for s in sensores.values()} & set(entradas)
         if solapa:
             raise TopologiaInvalida(f"{nombre}: {sorted(solapa)} está a la vez en 'entradas' y como puerto de espejo")

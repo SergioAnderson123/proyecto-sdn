@@ -54,7 +54,8 @@ def test_la_mac_es_opcional():
     (lambda d: d["cores"][0].update(device="of:1"), "deviceId"),
     (lambda d: d["cores"][0].update(device=d["cores"][1]["device"]), "repetido"),
     (lambda d: d["cores"][0]["espejo"]["nodo-sec-1"].update(mac="zz:00"), "MAC"),
-    (lambda d: d["cores"][0]["espejo"].pop("nodo-sec-2"), "nodo-sec-2"),
+    (lambda d: d["cores"][0].update(espejo={"nodo-sec-9": {"puerto": "ens4"}}), "desconocidos"),
+    (lambda d: d["cores"][0].update(espejo={}), "falta 'espejo'"),
     (lambda d: d["cores"][0]["espejo"].update({"nodo-sec-9": {"puerto": "ens20"}}), "desconocidos"),
     (lambda d: d["cores"][0].update(entradas=["ens5", "ens11"]), "entradas"),          # ens11 es el puerto de espejo
     (lambda d: d["cores"][0].update(entradas=[]), "no puede estar vacío"),
@@ -128,3 +129,12 @@ def test_cada_acceso_tiene_un_solo_uplink_y_ningun_core_espeja_accesos():
     c1, c2 = topologia.cargar(EJEMPLO)["cores"]
     assert len(c1["entradas"]) == len(c2["entradas"]) == 3
     assert not set(c1["entradas"]) & {e["puerto"] for e in c1["espejo"].values()}
+
+
+def test_un_core_puede_espejar_solo_a_su_sensor():
+    """Slice de 14 VM: sw-core-1 esta cableado solo a node-sec-1 y sw-core-2 solo a node-sec-2."""
+    d = copy.deepcopy(base())
+    d["cores"][0]["espejo"].pop("nodo-sec-2")
+    d["cores"][1]["espejo"].pop("nodo-sec-1")
+    t = topologia.validar(d)
+    assert set(t["cores"][0]["espejo"]) == {"nodo-sec-1"} and set(t["cores"][1]["espejo"]) == {"nodo-sec-2"}

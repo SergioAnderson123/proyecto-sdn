@@ -14,8 +14,15 @@ MODO CLÁSICO (un solo Core, laboratorio Docker y VNRT del 31/10): sin TOPOLOGIA
   Variables: ONOS_URL, ONOS_USER, ONOS_PASS; opcionales CORE_DEVICE, PUERTO_UPLINK, PUERTO_IDS, ESPEJO_HOME_NET, ESPEJO_RED_EXTERNA e
   IDS_MAC (VNRT 31/10: of:0000a223f2c04547, 3, 1, 10.0.0.0/30, 10.0.0.64/26).
 
+MODO GRUPO (slice de 14 VM, ESPEJO_TABLA=60): en vez de `NORMAL` (que inunda las tramas de destino desconocido, duplica el tráfico y se salta el
+  reenvío por la tabla 60 de R2 y de la capa 3) cada regla hace `GRUPO + goto_table 60`. El grupo es de tipo ALL, uno por switch, con un cubo
+  por sensor cableado a ese switch (eth_dst = MAC de la NIC del sensor + OUTPUT). Los cubos trabajan sobre CLONES: el paquete original sigue
+  intacto por la tabla 60, exactamente como lo haría la regla de confianza de R2 (`TABLE 60`) si el espejo no existiera.
+
 Uso:
   python3 espejo.py                instala el espejo (idempotente: ONOS reemplaza reglas idénticas)
+  python3 espejo.py --canario IP   MODO GRUPO: instala el espejo SOLO para el origen IP/32 (prioridad +1), para probar sin tocar el resto
+  python3 espejo.py --quitar-canario  retira las reglas del canario (prioridad +1)
   python3 espejo.py --descubrir    lista los switches de ONOS con sus puertos (nombre -> número) para llenar topologia.yaml
   python3 espejo.py --quitar       borra solo las reglas de espejo (appId org.campus.espejo)
 """
@@ -31,6 +38,9 @@ import requests
 # El espejo NO debe instalarse en un switch con sesiones de usuario de R2: reenvía con NORMAL y saltaría las tablas de rol.
 PRIORIDAD = int(os.getenv("P_ESPEJO", "41000"))
 APP_ESPEJO = "org.campus.espejo"
+TABLA_ESPEJO = os.getenv("ESPEJO_TABLA", "").strip()      # vacío = modo NORMAL (laboratorio); "60" = modo grupo + goto_table 60
+COOKIE_GRUPO = os.getenv("ESPEJO_COOKIE", "0x52354d49")      # "R5MI": identifica el grupo de espejo en cada switch
+GRUPO_ID_BASE = int(os.getenv("ESPEJO_GRUPO_ID", "21000"))  # ONOS exige el id del grupo en el cuerpo del POST: 21001, 21002... uno por switch
 
 
 # ---------------- ONOS (con varios nodos) ----------------
@@ -97,19 +107,21 @@ def prefijos_ipv4(topo):
     return [n for n in topo["home"] + topo["externa"] if ipaddress.ip_network(n).version == 4]
 
 
-def reglas_topologia(topo, puertos_por_device, prioridad=None):
+def reglas_topologia(topo, puertos_por_device, prioridad=None, grupos=None, prefijos=None):
     """Lista de reglas de ONOS (diccionarios para POST /flows) del espejo en todos los cores."""
     prioridad = prioridad or PRIORIDAD
-    prefijos = prefijos_ipv4(topo)
+    prefijos = prefijos or prefijos_ipv4(topo)
     reglas = []
     for c in topo["cores"]:
         disp = puertos_por_device[c["device"]]
-        copias = [{"type": "OUTPUT", "port": "NORMAL"}]            # el reenvío normal va primero y con la MAC original
-        for s in topo["sensores"]:                                # y luego una copia por sensor, con la MAC de su NIC
-            e = c["espejo"][s]
-            if e["mac"]:
-                copias.append({"type": "L2MODIFICATION", "subtype": "ETH_DST", "mac": e["mac"]})
-            copias.append({"type": "OUTPUT", "port": str(numero_de_puerto(disp, e["puerto"]))})
+        if grupos:                                                # modo grupo: copias en un grupo ALL y el original sigue por la tabla de reenvío
+            copias = [{"type": "GROUP", "groupId": int(grupos[c["device"]])}, {"type": "TABLE", "tableId": int(TABLA_ESPEJO)}]
+        else:
+            copias = [{"type": "OUTPUT", "port": "NORMAL"}]        # el reenvío normal va primero y con la MAC original
+            for s, e in c["espejo"].items():                      # y luego una copia por sensor cableado a este core, con la MAC de su NIC
+                if e["mac"]:
+                    copias.append({"type": "L2MODIFICATION", "subtype": "ETH_DST", "mac": e["mac"]})
+                copias.append({"type": "OUTPUT", "port": str(numero_de_puerto(disp, e["puerto"]))})
         for entrada in c["entradas"]:
             for prefijo in prefijos:
                 reglas.append({
@@ -122,6 +134,89 @@ def reglas_topologia(topo, puertos_por_device, prioridad=None):
                     ]},
                 })
     return reglas
+
+
+# ---------------- Grupos (modo grupo) ----------------
+def cuerpo_grupo(core, puertos, gid):
+    """Grupo ALL del switch `core`: un cubo por sensor cableado a él (eth_dst = MAC de su NIC + OUTPUT al puerto de espejo)."""
+    cubos = []
+    for s, e in core["espejo"].items():
+        ins = []
+        if e["mac"]:
+            ins.append({"type": "L2MODIFICATION", "subtype": "ETH_DST", "mac": e["mac"]})
+        ins.append({"type": "OUTPUT", "port": str(numero_de_puerto(puertos, e["puerto"]))})
+        cubos.append({"treatment": {"instructions": ins}})
+    return {"id": gid, "groupId": gid, "type": "ALL", "appCookie": COOKIE_GRUPO, "deviceId": core["device"], "buckets": cubos}
+
+
+def grupo_actual(device):
+    """El grupo de espejo del switch según ONOS (diccionario) o None."""
+    r = onos("GET", f"/groups/{device}")
+    if r.status_code != 200:
+        return None
+    for g in r.json().get("groups", []):
+        if str(g.get("appCookie", "")).lower() == COOKIE_GRUPO.lower():
+            return g
+    return None
+
+
+def salidas_del_grupo(g):
+    """Conjunto de (mac, puerto) de los cubos de un grupo (el devuelto por ONOS o el que se va a crear), para compararlos."""
+    res = set()
+    for b in g.get("buckets", []):
+        mac, puerto = None, None
+        for i in (b.get("treatment") or {}).get("instructions", []):
+            if i.get("type") == "OUTPUT":
+                puerto = str(i.get("port"))
+            elif i.get("subtype") == "ETH_DST":
+                mac = str(i.get("mac", "")).lower()
+        res.add((mac, puerto))
+    return res
+
+
+def asegurar_grupo(core, puertos, gid, espera=60, pausa=2.0):
+    """Crea (o recrea si cambió) el grupo ALL de espejo del switch y devuelve su groupId cuando ONOS lo da por ADDED."""
+    import time
+    device = core["device"]
+    cuerpo = cuerpo_grupo(core, puertos, gid)
+    g = grupo_actual(device)
+    if g is not None and salidas_del_grupo(g) != salidas_del_grupo(cuerpo):
+        onos("DELETE", f"/groups/{device}/{COOKIE_GRUPO}")
+        time.sleep(2)
+        g = None
+    if g is None:
+        r = onos("POST", f"/groups/{device}", json=cuerpo)
+        if r.status_code not in (200, 201):
+            raise SystemExit(f"ONOS no aceptó el grupo de espejo en {device}: HTTP {r.status_code} {r.text[:300]}")
+    fin = time.time() + espera
+    while time.time() < fin:
+        g = grupo_actual(device)
+        if g is not None and str(g.get("state", "")).upper() == "ADDED" and g.get("id") is not None:
+            return int(str(g["id"]), 0)
+        time.sleep(pausa)
+    if g is not None and g.get("id") is not None and os.getenv("ESPEJO_GRUPO_ESTRICTO", "1") == "0":
+        # ONOS puede dejar el grupo en PENDING_ADD aunque el switch ya lo tenga (visto en sw-core-1 el 18/11: el estado no avanza ni al crear ni al borrar).
+        # Con ESPEJO_GRUPO_ESTRICTO=0 se sigue; hay que comprobarlo en el switch (ovs-ofctl dump-groups) y con tráfico.
+        print(f"AVISO: el grupo de {device} sigue en {g.get('state')} en ONOS tras {espera} s; se continúa (ESPEJO_GRUPO_ESTRICTO=0). Comprobar con dump-groups")
+        return int(str(g["id"]), 0)
+    raise SystemExit(f"el grupo de espejo de {device} no llegó a ADDED en {espera} s (estado: {g and g.get('state')})")
+
+
+def quitar_grupos(topo):
+    for c in topo["cores"]:
+        r = onos("DELETE", f"/groups/{c['device']}/{COOKIE_GRUPO}")
+        print(f"grupo de espejo de {c['nombre']}: HTTP {r.status_code}")
+
+
+def quitar_canario():
+    """Borra solo las reglas del canario (prioridad +1) y deja el espejo normal."""
+    r = onos("GET", f"/flows/application/{APP_ESPEJO}")
+    n = 0
+    for f in r.json().get("flows", []) if r.status_code == 200 else []:
+        if f.get("priority") == PRIORIDAD + 1:
+            onos("DELETE", f"/flows/{f['deviceId']}/{f['id']}")
+            n += 1
+    print(f"canario retirado: {n} regla(s)")
 
 
 # ---------------- Modo clásico ----------------
@@ -179,9 +274,15 @@ def main(argv):
             raise SystemExit(f"topología inválida: {e}")
     if "--descubrir" in argv:
         return descubrir()
+    if "--quitar-canario" in argv:
+        return quitar_canario()
     if "--quitar" in argv:
         r = onos("DELETE", f"/flows/application/{APP_ESPEJO}")
         print(r.status_code, "reglas de espejo retiradas" if r.status_code in (200, 204) else r.text[:200])
+        if TABLA_ESPEJO and os.getenv("TOPOLOGIA"):                 # primero las reglas (que referencian el grupo) y luego los grupos
+            sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "codigo"))
+            import topologia
+            quitar_grupos(topologia.cargar(os.environ["TOPOLOGIA"]))
         return
     if os.getenv("TOPOLOGIA"):
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "codigo"))
@@ -192,8 +293,19 @@ def main(argv):
             raise SystemExit(f"topología inválida: {e}")
         puertos = {c["device"]: puertos_de(c["device"]) for c in topo["cores"]}
         resolver_puertos(topo, puertos)
-        flujos = reglas_topologia(topo, puertos)
-        print(f"Espejo en {len(topo['cores'])} core(s): {len(flujos)} reglas, copia a {', '.join(topo['sensores'])}")
+        grupos, prefijos, prio = None, None, None
+        if TABLA_ESPEJO:
+            grupos = {c["device"]: asegurar_grupo(c, puertos[c["device"]], GRUPO_ID_BASE + i) for i, c in enumerate(topo["cores"], 1)}
+            print("grupos de espejo (groupId por switch):", grupos)
+            if "--canario" in argv:                                  # solo un origen /32 y prioridad +1: prueba aislada
+                ip = argv[argv.index("--canario") + 1]
+                prefijos, prio = [f"{ipaddress.ip_address(ip)}/32"], PRIORIDAD + 1
+            else:                                                    # reglas nuevas con otra accion: se retiran las de NORMAL para que no queden mezcladas
+                r = onos("DELETE", f"/flows/application/{APP_ESPEJO}")
+                print(f"reglas anteriores del espejo retiradas (HTTP {r.status_code})")
+        flujos = reglas_topologia(topo, puertos, prioridad=prio, grupos=grupos, prefijos=prefijos)
+        print(f"Espejo en {len(topo['cores'])} core(s): {len(flujos)} reglas, copia a {', '.join(topo['sensores'])}"
+              + (f" (grupo + goto_table {TABLA_ESPEJO})" if grupos else " (NORMAL)"))
     else:
         flujos = reglas_clasicas()
     instalar(flujos)

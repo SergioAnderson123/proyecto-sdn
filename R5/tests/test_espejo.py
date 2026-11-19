@@ -1,4 +1,5 @@
 """Pruebas de R5/lab/espejo.py: reglas del espejo en dos cores y dos sensores, y modo clásico de un solo Core."""
+import copy
 import ipaddress
 import os
 import sys
@@ -162,3 +163,107 @@ def test_se_puede_nombrar_un_puerto_por_su_numero_si_onos_no_da_nombres():
     regla = next(r for r in espejo.reglas_topologia(topo, PUERTOS) if r["deviceId"] == topo["cores"][0]["device"])
     assert {c["port"] for c in regla["selector"]["criteria"] if c["type"] == "IN_PORT"} <= {"5", "8"}
     assert {"type": "OUTPUT", "port": "11"} in regla["treatment"]["instructions"]
+
+
+def test_con_un_sensor_por_core_cada_regla_copia_solo_a_su_sensor():
+    topo = copy.deepcopy(TOPO)
+    topo["cores"][0]["espejo"].pop(topo["sensores"][1])
+    topo["cores"][1]["espejo"].pop(topo["sensores"][0])
+    for r in espejo.reglas_topologia(topo, PUERTOS):
+        salidas = [i for i in r["treatment"]["instructions"] if i.get("port") != "NORMAL" and i["type"] == "OUTPUT"]
+        assert len(salidas) == 1
+
+
+# ---------- modo grupo (ESPEJO_TABLA=60): grupo ALL con las copias + goto_table 60, sin NORMAL ----------
+def _topo_un_sensor_por_core():
+    topo = copy.deepcopy(TOPO)
+    topo["cores"][0]["espejo"].pop(topo["sensores"][1])
+    topo["cores"][1]["espejo"].pop(topo["sensores"][0])
+    return topo
+
+
+def test_modo_grupo_la_regla_es_grupo_mas_tabla_y_no_lleva_normal(monkeypatch):
+    monkeypatch.setattr(espejo, "TABLA_ESPEJO", "60")
+    topo = _topo_un_sensor_por_core()
+    grupos = {c["device"]: 7 for c in topo["cores"]}
+    reglas = espejo.reglas_topologia(topo, PUERTOS, grupos=grupos)
+    assert reglas
+    for r in reglas:
+        assert r["treatment"]["instructions"] == [{"type": "GROUP", "groupId": 7}, {"type": "TABLE", "tableId": 60}]
+        assert r["priority"] == espejo.PRIORIDAD
+
+
+def test_modo_grupo_canario_usa_un_solo_origen_y_prioridad_mayor(monkeypatch):
+    monkeypatch.setattr(espejo, "TABLA_ESPEJO", "60")
+    topo = _topo_un_sensor_por_core()
+    grupos = {c["device"]: 7 for c in topo["cores"]}
+    reglas = espejo.reglas_topologia(topo, PUERTOS, prioridad=espejo.PRIORIDAD + 1, grupos=grupos, prefijos=["203.0.113.103/32"])
+    assert {r["priority"] for r in reglas} == {espejo.PRIORIDAD + 1}
+    assert all(c["ip"] == "203.0.113.103/32" for r in reglas for c in r["selector"]["criteria"] if c["type"] == "IPV4_SRC")
+
+
+def test_cuerpo_del_grupo_tiene_un_cubo_por_sensor_con_su_mac_y_su_puerto():
+    topo = _topo_un_sensor_por_core()
+    core = topo["cores"][0]
+    cuerpo = espejo.cuerpo_grupo(core, PUERTOS[core["device"]], 21001)
+    assert cuerpo["type"] == "ALL" and cuerpo["appCookie"] == espejo.COOKIE_GRUPO and len(cuerpo["buckets"]) == len(core["espejo"])
+    (s, e), = core["espejo"].items()
+    ins = cuerpo["buckets"][0]["treatment"]["instructions"]
+    assert ins[-1] == {"type": "OUTPUT", "port": str(PUERTOS[core["device"]][e["puerto"]])}
+    if e["mac"]:
+        assert ins[0] == {"type": "L2MODIFICATION", "subtype": "ETH_DST", "mac": e["mac"]}
+
+
+class _ONOSFalso:
+    """ONOS de mentira para los grupos: POST crea (PENDING_ADD -> ADDED), GET lista, DELETE borra."""
+    def __init__(self):
+        self.grupos = {}
+        self.llamadas = []
+
+    def __call__(self, metodo, ruta, **kw):
+        self.llamadas.append((metodo, ruta))
+        dev = ruta.split("/")[2] if ruta.startswith("/groups/") else None
+
+        class R:
+            def __init__(s, c, cuerpo=None):
+                s.status_code, s._c, s.text = c, cuerpo or {}, str(cuerpo)
+
+            def json(s):
+                return s._c
+        if metodo == "POST":
+            assert "id" in kw["json"], "ONOS exige 'id' en el cuerpo del grupo"
+            g = dict(kw["json"], state="ADDED")
+            self.grupos[dev] = g
+            return R(201)
+        if metodo == "GET":
+            return R(200, {"groups": [self.grupos[dev]] if dev in self.grupos else []})
+        if metodo == "DELETE":
+            self.grupos.pop(dev, None)
+            return R(204)
+        raise AssertionError(metodo)
+
+
+def test_asegurar_grupo_lo_crea_y_devuelve_su_id(monkeypatch):
+    falso = _ONOSFalso()
+    monkeypatch.setattr(espejo, "onos", falso)
+    topo = _topo_un_sensor_por_core()
+    core = topo["cores"][0]
+    assert espejo.asegurar_grupo(core, PUERTOS[core["device"]], 21001, espera=2, pausa=0.01) == 21001
+    assert ("POST", f"/groups/{core['device']}") in falso.llamadas
+
+
+def test_asegurar_grupo_no_lo_recrea_si_ya_es_igual_y_lo_recrea_si_cambio(monkeypatch):
+    falso = _ONOSFalso()
+    monkeypatch.setattr(espejo, "onos", falso)
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    topo = _topo_un_sensor_por_core()
+    core = topo["cores"][0]
+    espejo.asegurar_grupo(core, PUERTOS[core["device"]], 21001, espera=2, pausa=0.01)
+    falso.llamadas.clear()
+    espejo.asegurar_grupo(core, PUERTOS[core["device"]], 21001, espera=2, pausa=0.01)
+    assert not [m for m, _ in falso.llamadas if m in ("POST", "DELETE")]
+    core2 = copy.deepcopy(core)
+    for e in core2["espejo"].values():
+        e["mac"] = "aa:bb:cc:dd:ee:ff"
+    espejo.asegurar_grupo(core2, PUERTOS[core["device"]], 21001, espera=2, pausa=0.01)
+    assert [m for m, _ in falso.llamadas if m in ("DELETE", "POST")] == ["DELETE", "POST"]

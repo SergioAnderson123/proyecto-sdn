@@ -1,0 +1,36 @@
+# topologia.yaml del slice de 14 VM (18/11/2026): espejo en el borde (a los dos sensores) y en cada core (a su sensor).
+# Cableado comprobado el 18/11 con ARP de prueba: node-sec-1 ens4 <- sw-core-1, node-sec-2 ens4 <- sw-core-2. ens5 de cada sensor <- borde.
+onos:
+  urls:
+    - http://192.168.201.1:8181/onos/v1
+    - http://192.168.201.2:8181/onos/v1
+    - http://192.168.201.3:8181/onos/v1
+policy_mapper:
+  urls:
+    - http://192.168.201.1:5000
+redes:
+  home: [10.0.0.0/16]          # agregado: cubre 10.0.0.0/24 (servicios), 10.0.1.0/24 y 10.0.2.0/24 (accesos, capa 3 de Daniel)
+  externa: [203.0.113.0/24]
+  control: [192.168.201.0/24]
+  lista_blanca: [10.0.0.10/32, 10.0.0.50/32, 10.0.0.60/32, 10.0.0.250/32]
+sensores: [node-sec-1, node-sec-2]
+cores:
+  - nombre: switch-borde
+    device: of:000052ca28945241
+    entradas: [ens4, ens6, ens7]
+    espejo:
+      node-sec-1: {puerto: ens8, mac: "fa:16:3e:91:45:c0"}
+      node-sec-2: {puerto: ens9, mac: "fa:16:3e:00:5d:c2"}
+  - nombre: sw-core-1
+    device: of:00007e3401ecd842
+    entradas: [ens5, ens6, ens8]          # accesos (ens5 acc-1, ens6 acc-2) y server; no ens7 (LAG entre cores) ni ens9 (borde)
+    espejo:
+      node-sec-1: {puerto: ens4, mac: "fa:16:3e:fc:4b:dd"}
+  - nombre: sw-core-2
+    device: of:000076f83813d34e
+    entradas: [ens5, ens6, ens8]          # accesos (ens5 acc-2, ens6 acc-1) y server
+    espejo:
+      node-sec-2: {puerto: ens4, mac: "fa:16:3e:17:bd:b7"}
+accesos:
+  - {nombre: sw-acc-1, device: of:0000e6925d87354b}
+  - {nombre: sw-acc-2, device: of:0000766a0c84c741}
