@@ -1,0 +1,89 @@
+# Pasa ens4 de UN host de IP fija (plan A, puesta a mano por 67/69, no persistente) a DHCP con systemd-networkd (via netplan). La IP la da la app campus-dhcp de ONOS segun (switch, puerto).
+#   PLAYBOOK=94_hosts_dhcp.yml ./lanzar.sh --limit h2-alumno                      # pasa h2 a DHCP
+#   PLAYBOOK=94_hosts_dhcp.yml ./lanzar.sh --limit h2-alumno -e accion=quitar     # vuelve a la IP fija 10.0.2.102
+# Edita /etc/netplan/50-cloud-init.yaml SOLO en el bloque de ens4 y CONSERVA dhcp6: false, accept-ra: false y link-local: [] (evitan tormentas de IPv6); ens3 (gestion) no se toca. Antes guarda copia en 50-cloud-init.yaml.bak-dhcp.
+# Del DHCP se usa SOLO la IP: sin rutas ni DNS del servidor (use-routes/use-dns false). La ruta a 10.0.0.0/16 por el gateway virtual (.254) va fija en el netplan y sobrevive al reinicio.
+# cloud-init puede reescribir ese archivo al arrancar: se crea /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg para que no lo haga (si no, el reinicio volveria a dejar ens4 sin DHCP). Se borra con accion=quitar.
+# Efecto: ens4 pierde 10.0.2.102 y las rutas del plan A unos segundos, hasta recibir la concesion del ambito de acc-2 (10.0.2.100-199). La gestion por ens3 no se corta.
+# Retroceso: accion=quitar (restaura la copia, netplan apply y vuelve a poner la IP y rutas del plan A a mano), o `PLAYBOOK=99_freno_emergencia.yml`.
+- name: ens4 de un host por DHCP (netplan + systemd-networkd)
+  hosts: h1-profesor:h2-alumno
+  become: true
+  gather_facts: false
+  vars:
+    accion: poner
+    archivo: /etc/netplan/50-cloud-init.yaml
+    copia: /etc/netplan/50-cloud-init.yaml.bak-dhcp
+    datos:
+      h1-profesor: {ip: "10.0.1.101", gw: "10.0.1.254", subred: "10.0.1."}
+      h2-alumno: {ip: "10.0.2.102", gw: "10.0.2.254", subred: "10.0.2."}
+    yo: "{{ datos[inventory_hostname] }}"
+  tasks:
+    - name: Copia del netplan original (solo la primera vez)
+      ansible.builtin.copy:
+        src: "{{ archivo }}"
+        dest: "{{ copia }}"
+        remote_src: true
+        force: false
+        mode: "0600"
+      when: accion == 'poner'
+
+    - name: Poner dhcp4 y la ruta fija en el bloque de ens4 (el resto del archivo y las claves de IPv6 se quedan)
+      ansible.builtin.shell:
+        cmd: |
+          python3 - <<'EOF'
+          import yaml
+          p = "{{ archivo }}"
+          d = yaml.safe_load(open(p))
+          e = d["network"]["ethernets"]["ens4"]
+          e["dhcp4"] = True
+          e["dhcp4-overrides"] = {"use-routes": False, "use-dns": False}
+          e["routes"] = [{"to": "10.0.0.0/16", "via": "{{ yo.gw }}", "on-link": True}]
+          e["dhcp6"] = False
+          e["accept-ra"] = False
+          e["link-local"] = []
+          open(p, "w").write(yaml.safe_dump(d, default_flow_style=False, sort_keys=False))
+          EOF
+          chmod 600 {{ archivo }}
+          printf 'network: {config: disabled}\n' > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+        executable: /bin/bash
+      when: accion == 'poner'
+      changed_when: true
+
+    - name: Poner (soltar la IP fija del plan A y aplicar netplan)
+      ansible.builtin.shell:
+        cmd: |
+          ip addr flush dev ens4
+          ip route flush dev ens4 2>/dev/null || true
+          netplan apply
+          for i in $(seq 1 30); do ip -4 -br a show dev ens4 | grep -q ' {{ yo.subred }}' && break; sleep 1; done
+        executable: /bin/bash
+      when: accion == 'poner'
+      changed_when: true
+
+    - name: Quitar (restaurar el netplan original y volver a la IP fija del plan A)
+      ansible.builtin.shell:
+        cmd: |
+          [ -f {{ copia }} ] && cp {{ copia }} {{ archivo }}
+          rm -f /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+          ip addr flush dev ens4
+          netplan apply
+          sleep 2
+          ip addr add {{ yo.ip }}/24 dev ens4
+          ip route replace 10.0.0.0/16 via {{ yo.gw }} dev ens4 src {{ yo.ip }}
+        executable: /bin/bash
+      when: accion == 'quitar'
+      changed_when: true
+
+    - name: Estado de ens4 (IP, rutas, concesion de networkd, IPv6)
+      ansible.builtin.shell:
+        cmd: |
+          ip -br a show dev ens4; echo ---; ip route; echo ---; networkctl status ens4 --no-pager 2>&1 | grep -iE 'address|gateway|lease|dhcp|state' | head -12
+          echo --- IPv6 en ens4 (debe estar vacio: sin link-local ni RA); ip -6 addr show dev ens4; sysctl net.ipv6.conf.ens4.accept_ra
+          echo --- netplan; sed -n '/ens4/,$p' {{ archivo }}
+        executable: /bin/bash
+      register: estado
+      changed_when: false
+
+    - ansible.builtin.debug:
+        msg: "{{ estado.stdout_lines }}"
