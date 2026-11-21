@@ -6,7 +6,7 @@
 Entrada estandar: la salida de ldapsearch (LDIF, solo atributos de usuario; los operacionales de modificacion y replicacion no salen sin `+`).
 Imprime un JSON con: numero de entradas, hash canonico (entradas ordenadas por DN y atributos ordenados), hash sin los atributos que ata cada despliegue a su equipo
 (description = MAC, physicalDeliveryOfficeName = switch, roomNumber = puerto: en VNRT los fija ldap-ubicacion.sh y NO coinciden con los valores de Mininet de la semilla),
-los DN que faltan o sobran respecto a la semilla, y las diferencias de atributos (excepto esos tres) entre lo vivo y la semilla.
+los DN que faltan o sobran respecto a la semilla (la cuenta de replicacion `cn=sdn-repl` se cuenta aparte, como entrada de servicio esperada), y las diferencias de atributos (excepto esos tres) entre lo vivo y la semilla.
 """
 import argparse
 import base64
@@ -14,6 +14,7 @@ import hashlib
 import json
 import sys
 
+ENTRADAS_DE_SERVICIO = {"cn=sdn-repl,dc=example,dc=org"}      # cuenta de la replicacion multimaestro entre ctrl-1 y ctrl-2: existe en los nodos y NO en la semilla (su clave no va al repositorio)
 ATADO_AL_EQUIPO = {"description", "physicaldeliveryofficename", "roomnumber"}      # en minusculas: leer() baja a minusculas los nombres de atributo
 
 
@@ -72,7 +73,8 @@ def main():
         semilla = leer(f.read())
     base = {dn for dn in vivo if dn in ("dc=example,dc=org", "cn=admin,dc=example,dc=org")}      # los crea la imagen, no la semilla
     faltan = sorted(set(semilla) - set(vivo))
-    sobran = sorted(set(vivo) - set(semilla) - base)
+    de_servicio = sorted((set(vivo) - set(semilla)) & ENTRADAS_DE_SERVICIO)
+    sobran = sorted(set(vivo) - set(semilla) - base - ENTRADAS_DE_SERVICIO)
     difs = []
     for dn in sorted(set(semilla) & set(vivo)):
         for k in sorted(set(semilla[dn]) | set(vivo[dn])):
@@ -88,7 +90,7 @@ def main():
         "entradas": len(vivo), "entradas_semilla": len(semilla), "base_de_la_imagen": sorted(base),
         "hash": digest(vivo, quitar={"structuralobjectclass", "entryuuid", "creatorsname", "createtimestamp", "entrycsn", "modifiersname", "modifytimestamp"}),
         "hash_sin_atado_al_equipo": digest(vivo, quitar=ATADO_AL_EQUIPO | {"structuralobjectclass", "entryuuid", "creatorsname", "createtimestamp", "entrycsn", "modifiersname", "modifytimestamp"}),
-        "faltan_respecto_a_la_semilla": faltan, "sobran_respecto_a_la_semilla": sobran,
+        "faltan_respecto_a_la_semilla": faltan, "sobran_respecto_a_la_semilla": sobran, "entradas_de_servicio": de_servicio,
         "diferencias_de_atributos": difs, "atado_al_equipo": atado}, indent=1, sort_keys=True))
 
 

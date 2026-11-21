@@ -1,7 +1,7 @@
 # VERIFICACION (solo lectura) del LDAP de ctrl-1 y ctrl-2 (multimaestro): cuantas entradas tiene cada uno, si tienen el MISMO contenido y si coincide con la semilla del repositorio
 # (R1/shared/ldap/ldif/custom/estructura.ldif). No modifica nada: solo `ldapsearch` dentro del contenedor LDAP de cada nodo y un resumen en Python (files/ldap_resumen.py).
 #   PLAYBOOK=93_verificar_ldap.yml ./lanzar.sh
-# Esperado: 16 entradas en cada nodo (dc=example,dc=org y cn=admin de la imagen + 14 de la semilla), el MISMO hash en los dos, ningun DN que falte o sobre respecto a la semilla y ninguna diferencia
+# Esperado: 16 entradas en cada nodo (dc=example,dc=org de la imagen + las 14 de la semilla + cn=sdn-repl, la cuenta de la replicacion, que NO esta en la semilla), el MISMO hash en los dos, ningun DN que falte o sobre respecto a la semilla y ninguna diferencia
 # de atributos salvo los que ata cada despliegue a su equipo (description = MAC, physicalDeliveryOfficeName = switch, roomNumber = puerto; en VNRT los fija ldap-ubicacion.sh y no coinciden con los de Mininet).
 # La clave del administrador (la de R1/compose.yml: LDAP_ADMIN_PASSWORD) se pasa por el entorno del contenedor, no por la linea de comandos del host. Si el LDAP exige TLS para el bind, se reintenta con STARTTLS.
 - name: Resumen del LDAP de cada nodo
@@ -55,6 +55,7 @@
           - "hash completo: {{ r.hash | default('') }}"
           - "hash sin lo atado al equipo: {{ r.hash_sin_atado_al_equipo | default('') }}"
           - "faltan respecto a la semilla: {{ r.faltan_respecto_a_la_semilla | default([]) }} | sobran: {{ r.sobran_respecto_a_la_semilla | default([]) }}"
+          - "entradas de servicio esperadas (replicacion): {{ r.entradas_de_servicio | default([]) }}"
           - "diferencias de atributos (fuera de MAC/switch/puerto): {{ r.diferencias_de_atributos | default([]) }}"
           - "atado al equipo: {{ r.atado_al_equipo | default({}) }}"
 
