@@ -96,6 +96,17 @@ acceso; se necesitan más muestras para caracterizar latencia.
 
 Siguen como límites explícitos: el gateway de gestión es único por decisión del
 grupo y R2 MAB continúa como una instancia en ctrl-1, aunque es alcanzable desde
-las tres réplicas del mapper. No se ensayó pérdida de quórum etcd en producción;
-se requiere un clúster aislado. Las pruebas simuladas no sustituyen esa prueba
-operativa.
+las tres réplicas del mapper. La pérdida de quórum se comprobó en etcd 3.6.6,
+en tres contenedores temporales conectados solo a una red Docker `internal` y
+sin puertos publicados: con un miembro caído las otras dos réplicas confirmaron
+escrituras; con dos caídos la escritura no se confirmó; al recuperar el segundo,
+se restablecieron el quórum y la salud de los tres miembros. Los commits del
+ensayo tardaron aproximadamente 7–11 ms; no son una medida de latencia del
+mapper. Se retiraron los contenedores, la red y sus datos temporales. No se
+detuvo ni cambió ningún miembro ni dato de etcd de producción.
+
+No se ha probado en vivo la respuesta HTTP 503 del mapper mientras pierde
+quórum; esa conducta tiene cobertura simulada en `test_review.py`. La muestra de
+2384 ms es una sola reautenticación EAP-TLS; hacen falta más muestras para
+percentiles. El gateway único y R2 MAB en ctrl-1 siguen siendo limitaciones de
+arquitectura pendientes.
