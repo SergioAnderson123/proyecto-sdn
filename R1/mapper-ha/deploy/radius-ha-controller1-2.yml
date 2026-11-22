@@ -1,0 +1,4 @@
+services:
+  radius:
+    extra_hosts: !override
+      - "policy_mapper:192.168.201.254"
