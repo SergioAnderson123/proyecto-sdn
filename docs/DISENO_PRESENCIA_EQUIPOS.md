@@ -32,7 +32,7 @@ Una sesión 802.1X es **permanente** (flujo 40001 sin plazo): solo la cierran el
 
 ## Límites (a propósito)
 - El sondeo ARP solo cubre equipos **con concesión DHCP**. Un equipo con IP fija (h1 y h2 hoy) solo se cubre por el caso 2 (puerto sin enlace) y por el logoff del agente; si se apaga de golpe con el puerto arriba, su sesión queda hasta que otro evento la cierre. Pasar h1/h2 a DHCP lo resuelve.
-- Las concesiones viven en la memoria del nodo de ONOS que atiende el switch; si cambia el maestro, el sondeo de esas concesiones también se reinicia (los clientes renuevan solos).
+- Las concesiones se comparten entre nodos (mapa del cluster, ver DISENO_DHCP_POR_SUBRED.md 2 quater) y solo el maestro de cada switch las sondea; si cambia el maestro, el sondeo de esas concesiones se reinicia en el nodo nuevo (los clientes renuevan solos).
 - El sondeo no distingue un equipo apagado de uno con el cable suelto: en ambos la IP y el rol se liberan y, al volver, hay que autenticar de nuevo (el agente ya hace logoff y logon al recuperar el enlace).
 
 ## Parámetros (`campusdhcp.presencia` en la configuración, `generar_config_dhcp.py`)

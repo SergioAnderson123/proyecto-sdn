@@ -22,4 +22,4 @@ docker run --rm -v "$(pwd):/app" -v onos-m2:/root/.m2 -w /app maven:3.8.6-eclips
 Prueba con interfaces macvlan en h1, sin tocar su IP real (cliente propio `files/cliente_dhcp_prueba.py`, comprobado contra el servidor Java en `ClientePruebaTest`): `PLAYBOOK=83_prueba_dhcp.yml ./lanzar.sh` y `-e prueba=agotamiento`.
 
 ## Límites de esta versión
-Las concesiones viven en la memoria del nodo de ONOS que atiende el switch (un cambio de nodo maestro las pierde hasta que los clientes renueven). Sin reservas por MAC.
+Las concesiones confirmadas se guardan ademas en un mapa del cluster de ONOS (`campus-dhcp-concesiones`, clave = MAC, valor = `ip|subred|puerto|vencimiento`): sobreviven a reinstalar la app, reiniciar un nodo o cambiar el maestro de un switch (ver docs/DISENO_DHCP_POR_SUBRED.md, 2 quater). Sin reservas por MAC.

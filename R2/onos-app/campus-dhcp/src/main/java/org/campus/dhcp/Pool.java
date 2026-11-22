@@ -125,6 +125,38 @@ public final class Pool {
         return new Concesion(mac, ip, a.puerto, a.expira);
     }
 
+    /**
+     * Restaura una concesion CONFIRMADA que conocia otra instancia de la app (el mapa del cluster): tras reinstalar la app, reiniciar un nodo o cambiar de maestro el ambito
+     * vuelve a saber quien tiene que IP y no se la ofrece a otro equipo. No aplica la cuota del puerto (la concesion ya existia). Es idempotente.
+     * @return true si queda registrada (o ya lo estaba); false si ya vencio, esta fuera del ambito dinamico o choca con la concesion MAS NUEVA de otro equipo.
+     */
+    public synchronized boolean restaurar(MacAddress mac, String puerto, int ip, long expira, long ahora) {
+        if (expira <= ahora || Integer.compareUnsigned(ip, subred.inicio) < 0 || Integer.compareUnsigned(ip, subred.fin) > 0) {
+            return false;
+        }
+        Asig ocupante = porIp.get(ip);
+        if (ocupante != null && ocupante.mac.equals(mac) && ocupante.confirmada && ocupante.expira >= expira) {
+            return true;                                                     // ya la tenemos y es igual o mas nueva (un aviso atrasado no la retrocede)
+        }
+        if (ocupante != null && !ocupante.mac.equals(mac)) {
+            if (ocupante.confirmada && ocupante.expira >= expira) {
+                return false;                                                // la concesion que ya tenemos es igual o mas nueva
+            }
+            porMac.remove(ocupante.mac);                                     // gana la restaurada: una oferta pendiente o una concesion mas vieja de otro equipo
+            porIp.remove(ip);
+        }
+        Integer propia = porMac.get(mac);
+        if (propia != null && propia != ip) {
+            porIp.remove(propia);                                            // el equipo ya tenia otra IP con nosotros: la del mapa es la vigente
+        }
+        Asig a = new Asig(mac, puerto, expira);
+        a.confirmada = true;
+        porIp.put(ip, a);
+        porMac.put(mac, ip);
+        ultima.put(mac, ip);
+        return true;
+    }
+
     /** RELEASE: el cliente devuelve su IP. @return la concesion que tenia, o null. */
     public synchronized Concesion liberar(MacAddress mac) {
         Integer ip = porMac.remove(mac);

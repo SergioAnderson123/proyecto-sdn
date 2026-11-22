@@ -40,6 +40,22 @@ Reemplaza a la app DHCP estándar (hay que desactivar `org.onosproject.dhcp`: do
 
 Límite honesto: en la red virtual de VNRT apagar o bajar la interfaz de un host **no** baja el puerto del switch, así que el camino 2 no se puede probar ahí con equipos reales; se prueba con la prueba Java (liberación por puerto) y, en VNRT, bajando la interfaz del propio switch (`80_caida_cable.yml` con el puerto de acceso).
 
+## 2 quater. Concesiones compartidas entre nodos (mapa del cluster)
+**El problema.** `Pool` guardaba las concesiones en memoria de la instancia. Al reinstalar la app, reiniciar un nodo o cambiar el maestro de un switch el ámbito empezaba vacío y podía ofrecerle a otro cliente **la IP de un host vivo** (se vio en vivo con h1: el cliente de prueba de `83` recibió `10.0.1.100`, la IP real de h1) hasta que ese host renovaba, a los 450 s.
+
+**La solución.** Cada concesión confirmada se guarda en un `ConsistentMap` de ONOS llamado `campus-dhcp-concesiones` (sin vincularlo a la app, para que sobreviva a reinstalarla). Clave = MAC del cliente; valor = texto simple `ip|subred|puerto|vencimiento` (ejemplo `10.0.1.100|acc-1|of:0000e6925d87354b/1|1763830000000`), sin clases propias que serializar. `RegistroConcesion` lo codifica y lo lee; un texto corrupto o de otra versión se ignora.
+- **Escribir:** cada ACK (alta y renovación) lo guarda; liberar, vencer, dar por ausente o caer el enlace lo borran.
+- **Restaurar:** al activar la app y al recargar su configuración se leen del mapa y se meten en el ámbito (`Pool.restaurar`, idempotente, sin aplicar la cuota del puerto). Se ignora lo vencido, lo de otra subred o puerto y lo que cae fuera del ámbito dinámico. Si dos equipos reclaman la misma IP gana la concesión más nueva.
+- **Mantener la copia de cada nodo:** un *listener* del mapa refleja las altas y bajas de los demás nodos, así un maestro nuevo ya sabe quién tiene qué.
+- **Solo el maestro del switch actúa.** Con el estado compartido todos los nodos tienen todas las concesiones, pero solo el maestro de un switch recibe sus paquetes y por tanto las respuestas ARP del sondeo. Un nodo que no lo es y sondeara daría por ausente a un equipo vivo y le pediría al Policy Mapper que cierre su sesión. Por eso el sondeo de presencia (`Servidor.objetivos(predicado)`), los avisos a ONOS y los borrados del mapa se hacen solo en el maestro (`esMio`); los demás solo reflejan.
+- **Anunciar a ONOS tras restaurar.** ONOS pierde los hosts de una app que se reinstala, así que cada 10 s el maestro anuncia (`hostDetected`) los equipos con concesión que aún no anunció; así `/hosts` vuelve a traer la IP y el vigilante a crear la `/32`.
+- **Limpieza.** Cada 10 s se quitan del mapa los registros vencidos hace más de un minuto (borrado condicional: si alguien lo renovó entretanto no se toca).
+- **Si el almacén falla** (no se puede abrir el mapa, o una escritura da error) el DHCP no se detiene: se avisa en el log y se sigue con la memoria local, como antes.
+
+**Cómo se prueba.** Offline, `PersistenciaTest` (15 pruebas): el caso del fallo (sin restaurar se ofrece la IP del equipo vivo; restaurando, no), renovar tras restaurar, vencidas, registros que no encajan, idempotencia, choque de dos equipos, avisos atrasados, filtro de objetivos por maestro, codificación y textos corruptos. Lo que depende de ONOS (el `ConsistentMap`, el listener, el maestro) solo se puede comprobar en vivo: reinstalar la app con `82 -e reinstalar=true` y ver que el log dice `N concesiones restauradas del mapa del cluster`, que `83` ya no recibe la IP de h1 y que h1 y h2 conservan sus IP y sus `/32`.
+
+**Lo que NO resuelve.** Un host con IP fija dentro del ámbito dinámico (`.100`-`.199`) que nunca pidió DHCP no figura en el mapa; para eso haría falta comprobar por ARP antes de ofrecer (la opción B que se descartó por ahora). La primera instalación que trae este cambio parte del mapa vacío, porque la versión anterior no guardaba nada: ese arranque sí necesita que los hosts renueven (`networkctl reconfigure ens4`).
+
 ## 3. Flujo (cliente en `acc-1`, puerto 1, subred `10.0.1.0/24`)
 1. DISCOVER (0.0.0.0 a broadcast) entra por acc-1/1; R2 lo sube al controlador (40500), con o sin sesión 802.1X.
 2. La app mira (acc-1, 1), encuentra la subred `10.0.1.0/24`, elige una IP libre del ámbito (por ejemplo `.100-.199`), la reserva unos segundos y envía el OFFER por un packet-out al mismo puerto (a broadcast; todo cliente en INIT lo acepta).

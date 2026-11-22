@@ -102,6 +102,12 @@ public class CampusDhcpApp {
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected FlowRuleService flowRuleService;
 
+    @Reference(cardinality = ReferenceCardinality.MANDATORY)
+    protected org.onosproject.mastership.MastershipService mastershipService;
+
+    @Reference(cardinality = ReferenceCardinality.MANDATORY)
+    protected org.onosproject.store.service.StorageService storageService;
+
     private ApplicationId appId;
     private volatile Servidor servidor;
     private HostProviderService hostProviderService;
@@ -112,6 +118,13 @@ public class CampusDhcpApp {
     private volatile String pmUrl = "";
     private volatile String pmToken = "";
     private final Map<String, Long> ultimoAviso = new HashMap<>();
+
+    /** Nombre del mapa del cluster con las concesiones (clave = MAC, valor = RegistroConcesion codificado). Sin vincular a la app: sobrevive a reinstalarla. */
+    private static final String MAPA = "campus-dhcp-concesiones";
+    private volatile org.onosproject.store.service.ConsistentMap<String, String> mapa;
+    /** Equipos cuya IP ya le dijo ESTE nodo a ONOS (como maestro de su switch); al restaurar del mapa o cambiar el mando se anuncian los que falten. */
+    private final java.util.Set<MacAddress> anunciadas = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final org.onosproject.store.service.MapEventListener<String, String> oyenteMapa = evento -> reflejar(evento);
 
     /** El proveedor con el que esta app le dice a ONOS que host tiene que IP. */
     private static final class ProveedorDhcp extends AbstractProvider implements HostProvider {
@@ -139,7 +152,7 @@ public class CampusDhcpApp {
         @Override
         public void event(NetworkConfigEvent evento) {
             if (evento.configClass() != null && evento.configClass().equals(DhcpConfig.class)) {
-                log.info("DHCP por subred: cambio la configuracion, se recargan los ambitos (las concesiones en memoria se pierden)");
+                log.info("DHCP por subred: cambio la configuracion, se recargan los ambitos (las concesiones se restauran del mapa del cluster)");
                 cargarConfig();
             }
         }
@@ -168,7 +181,12 @@ public class CampusDhcpApp {
                 liberadas = s.liberarPuerto(device, -1);
             }
             for (Servidor.Evento e : liberadas) {
+                if (!esMio(e.puerto)) {
+                    continue;                                                // la copia local ya se limpio; avisar a ONOS y al mapa le toca al maestro del switch
+                }
                 hostProviderService.removeIpFromHost(HostId.hostId(e.mac, VlanId.NONE), e.ip);
+                anunciadas.remove(e.mac);
+                persistir(e);
                 log.info("DHCP por subred: {} sin enlace en {}, se libera {} ({})", e.mac, e.puerto, e.ip, e.subred);
             }
         }
@@ -218,6 +236,7 @@ public class CampusDhcpApp {
         hostProviderService = hostProviderRegistry.register(proveedor);
         deviceService.addListener(oyenteDispositivos);
         flowRuleService.addListener(oyenteFlujos);
+        abrirMapa();
         cargarConfig();
         // director(0), NO (1): org.onosproject.proxyarp registra el suyo en director(1) y, con la misma prioridad, el orden dependia de quien se registrara antes; si va primero marca
         // las respuestas ARP del sondeo como manejadas (y las inunda), nunca las vemos y la presencia cierra la sesion de un equipo vivo.
@@ -237,6 +256,9 @@ public class CampusDhcpApp {
         flowRuleService.removeListener(oyenteFlujos);
         flowRuleService.removeFlowRulesById(appId);
         deviceService.removeListener(oyenteDispositivos);
+        if (mapa != null) {
+            mapa.removeListener(oyenteMapa);                                 // el mapa y su contenido se quedan: es justo lo que debe sobrevivir a reinstalar la app
+        }
         packetService.cancelPackets(selectorDhcp, PacketPriority.CONTROL, appId);
         packetService.removeProcessor(procesador);
         hostProviderRegistry.unregister(proveedor);
@@ -260,6 +282,8 @@ public class CampusDhcpApp {
         log.info("DHCP por subred: {} ambitos cargados; sondeo de presencia {}; aviso al Policy Mapper {}", cfg.subredes().size(),
                 presencia == null ? "desactivado (falta gwMac)" : "activo", pmUrl.isEmpty() ? "desactivado" : pmUrl);
         instalarFlujosRespuesta();
+        anunciadas.clear();                                                  // ONOS puede haber perdido los hosts de esta app: se vuelven a anunciar los que sean de este nodo
+        restaurarDesdeMapa();
     }
 
     /** Un paquete del controlador: si es DHCP de un puerto con ambito, contesta y avisa a ONOS; los demas se dejan pasar a otras apps. */
@@ -308,13 +332,20 @@ public class CampusDhcpApp {
 
     /** Le dice a ONOS que host tiene que IP (o que la dejo): asi `/hosts` trae la IP y el vigilante de capa 3 monta la entrega /32. */
     private void avisarOnos(Servidor.Evento e, ConnectPoint punto) {
+        anunciar(e, punto);
+        persistir(e);
+    }
+
+    private void anunciar(Servidor.Evento e, ConnectPoint punto) {
         HostId id = HostId.hostId(e.mac, VlanId.NONE);
         if (e.tipo == Servidor.Evento.Tipo.CONCEDIDA) {
             hostProviderService.hostDetected(id,
                     new DefaultHostDescription(e.mac, VlanId.NONE, new HostLocation(punto, System.currentTimeMillis()), ImmutableSet.of(e.ip), false), false);
+            anunciadas.add(e.mac);
             log.info("DHCP por subred: {} -> {} ({} en {})", e.mac, e.ip, e.subred, e.puerto);
         } else {
             hostProviderService.removeIpFromHost(id, e.ip);
+            anunciadas.remove(e.mac);
             log.info("DHCP por subred: {} libera {} ({})", e.mac, e.ip, e.subred);
         }
     }
@@ -369,7 +400,7 @@ public class CampusDhcpApp {
             if (s == null || p == null) {
                 return;
             }
-            for (Presencia.Orden orden : p.tick(System.currentTimeMillis(), s.objetivos())) {
+            for (Presencia.Orden orden : p.tick(System.currentTimeMillis(), s.objetivos(this::esMio))) {
                 if (orden.tipo == Presencia.Tipo.SONDEAR) {
                     sondear(orden.objetivo);
                 } else {
@@ -413,6 +444,8 @@ public class CampusDhcpApp {
         Servidor.Evento e = s.liberarMac(o.mac);
         if (e != null) {
             hostProviderService.removeIpFromHost(HostId.hostId(e.mac, VlanId.NONE), e.ip);
+            anunciadas.remove(e.mac);
+            persistir(e);
         }
         log.info("DHCP por subred: {} ({}) no contesta al sondeo ARP; se libera su concesion y se avisa al Policy Mapper", o.mac, Ip4Address.valueOf(o.ip));
         avisarPolicyMapper(o.mac);
@@ -451,12 +484,130 @@ public class CampusDhcpApp {
             if (s == null) {
                 return;
             }
-            for (Servidor.Evento e : s.vencer(System.currentTimeMillis())) {
+            long ahora = System.currentTimeMillis();
+            for (Servidor.Evento e : s.vencer(ahora)) {
+                if (!esMio(e.puerto)) {
+                    continue;                                                // la copia local ya se limpio; el maestro del switch avisa a ONOS y limpia el mapa
+                }
                 hostProviderService.removeIpFromHost(HostId.hostId(e.mac, VlanId.NONE), e.ip);
+                anunciadas.remove(e.mac);
+                persistir(e);
                 log.info("DHCP por subred: vencio la concesion de {} ({}, {})", e.mac, e.ip, e.subred);
             }
+            mantenerMapa(s, ahora);
         } catch (RuntimeException ex) {
             log.error("DHCP por subred: error al vencer concesiones", ex);
+        }
+    }
+
+    // ------------------------------------------------------------------ concesiones compartidas (mapa del cluster)
+
+    /** Este nodo es el maestro del switch de ese puerto ("of:.../N"): solo el maestro recibe las respuestas del sondeo ARP y le toca avisar a ONOS, al Policy Mapper y al mapa. */
+    private boolean esMio(String puerto) {
+        int corte = puerto.lastIndexOf('/');
+        return corte > 0 && mastershipService.isLocalMaster(DeviceId.deviceId(puerto.substring(0, corte)));
+    }
+
+    private void abrirMapa() {
+        try {
+            mapa = storageService.<String, String>consistentMapBuilder()
+                    .withName(MAPA)
+                    .withSerializer(org.onosproject.store.service.Serializer.using(org.onlab.util.KryoNamespace.newBuilder().build()))   // solo texto: Kryo ya trae String registrado
+                    .build();
+            mapa.addListener(oyenteMapa);
+        } catch (RuntimeException ex) {
+            mapa = null;
+            log.error("DHCP por subred: no se pudo abrir el mapa {} del cluster; las concesiones solo viviran en la memoria de este nodo", MAPA, ex);
+        }
+    }
+
+    /** Guarda o borra la concesion en el mapa del cluster. Un fallo del almacen no debe frenar al DHCP: se avisa y se sigue con la memoria local. */
+    private void persistir(Servidor.Evento e) {
+        org.onosproject.store.service.ConsistentMap<String, String> m = mapa;
+        if (m == null) {
+            return;
+        }
+        try {
+            if (e.tipo == Servidor.Evento.Tipo.CONCEDIDA) {
+                m.put(e.mac.toString(), RegistroConcesion.de(e).codificar());
+            } else {
+                m.remove(e.mac.toString());
+            }
+        } catch (RuntimeException ex) {
+            log.warn("DHCP por subred: no se pudo actualizar el mapa del cluster para {}: {}", e.mac, ex.toString());
+        }
+    }
+
+    /** Un cambio del mapa (de este nodo o de otro): la copia local del ambito lo refleja, sin avisar a nadie (quien lo hizo ya aviso). */
+    private void reflejar(org.onosproject.store.service.MapEvent<String, String> evento) {
+        Servidor s = servidor;
+        if (s == null) {
+            return;
+        }
+        try {
+            MacAddress mac = MacAddress.valueOf(evento.key());
+            if (evento.type() == org.onosproject.store.service.MapEvent.Type.REMOVE) {
+                s.olvidar(mac);
+            } else if (evento.newValue() != null) {
+                RegistroConcesion r = RegistroConcesion.decodificar(evento.newValue().value());
+                if (r != null) {
+                    s.restaurar(mac, r, System.currentTimeMillis());
+                }
+            }
+        } catch (RuntimeException ex) {
+            log.warn("DHCP por subred: no se pudo reflejar un cambio del mapa del cluster: {}", ex.toString());
+        }
+    }
+
+    /** Al arrancar la app o recargar su configuracion: las concesiones guardadas vuelven al ambito, y asi no se ofrece a otro equipo la IP de uno vivo. */
+    private void restaurarDesdeMapa() {
+        Servidor s = servidor;
+        org.onosproject.store.service.ConsistentMap<String, String> m = mapa;
+        if (s == null || m == null) {
+            return;
+        }
+        int restauradas = 0;
+        try {
+            long ahora = System.currentTimeMillis();
+            for (Map.Entry<String, String> entrada : m.asJavaMap().entrySet()) {
+                RegistroConcesion r = RegistroConcesion.decodificar(entrada.getValue());
+                if (r != null && s.restaurar(MacAddress.valueOf(entrada.getKey()), r, ahora)) {
+                    restauradas++;
+                }
+            }
+        } catch (RuntimeException ex) {
+            log.warn("DHCP por subred: no se pudieron restaurar las concesiones del mapa del cluster: {}", ex.toString());
+        }
+        log.info("DHCP por subred: {} concesiones restauradas del mapa del cluster", restauradas);
+    }
+
+    /**
+     * Cada 10 s. (1) Anuncia a ONOS los equipos con concesion cuyo switch lleva este nodo y que aun no anuncio (tras restaurar o tras ganar el mando: ONOS pierde los hosts de una app
+     * que se reinstala). (2) Limpia del mapa lo que vencio hace mas de un minuto y nadie quito (por ejemplo, si su switch no tenia maestro cuando vencio).
+     */
+    private void mantenerMapa(Servidor s, long ahora) {
+        for (Servidor.Evento e : s.concedidas()) {
+            if (esMio(e.puerto) && !anunciadas.contains(e.mac)) {
+                try {
+                    anunciar(e, ConnectPoint.deviceConnectPoint(e.puerto));
+                } catch (RuntimeException ex) {
+                    log.warn("DHCP por subred: no se pudo anunciar a ONOS la concesion restaurada de {}: {}", e.mac, ex.toString());
+                }
+            }
+        }
+        org.onosproject.store.service.ConsistentMap<String, String> m = mapa;
+        if (m == null) {
+            return;
+        }
+        try {
+            for (Map.Entry<String, String> entrada : m.asJavaMap().entrySet()) {
+                RegistroConcesion r = RegistroConcesion.decodificar(entrada.getValue());
+                if (r == null || r.expira + 60_000L < ahora) {
+                    m.remove(entrada.getKey(), entrada.getValue());          // condicional: si alguien la renovo entretanto, no se toca
+                }
+            }
+        } catch (RuntimeException ex) {
+            log.warn("DHCP por subred: no se pudo limpiar el mapa del cluster: {}", ex.toString());
         }
     }
 

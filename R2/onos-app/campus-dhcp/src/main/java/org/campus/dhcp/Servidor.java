@@ -34,13 +34,20 @@ public final class Servidor {
         public final Ip4Address ip;
         public final String subred;
         public final String puerto;
+        /** Instante (ms) en que vence la concesion; solo en las CONCEDIDA (0 en las LIBERADA). */
+        public final long expira;
 
         Evento(Tipo tipo, MacAddress mac, int ip, String subred, String puerto) {
+            this(tipo, mac, ip, subred, puerto, 0L);
+        }
+
+        Evento(Tipo tipo, MacAddress mac, int ip, String subred, String puerto, long expira) {
             this.tipo = tipo;
             this.mac = mac;
             this.ip = Ip4Address.valueOf(ip);
             this.subred = subred;
             this.puerto = puerto;
+            this.expira = expira;
         }
     }
 
@@ -176,13 +183,68 @@ public final class Servidor {
 
     /** Las concesiones confirmadas de todos los ambitos, listas para el sondeo de presencia. */
     public List<Presencia.Objetivo> objetivos() {
+        return objetivos(puerto -> true);
+    }
+
+    /**
+     * Las concesiones confirmadas cuyo puerto cumple `propio`. Con el estado compartido entre nodos todos tienen todas las concesiones, pero SOLO el maestro del switch
+     * recibe las respuestas ARP del sondeo: un nodo que no lo es y sondeara daria por ausente a un equipo vivo. Por eso la app filtra aqui por "soy el maestro".
+     */
+    public List<Presencia.Objetivo> objetivos(java.util.function.Predicate<String> propio) {
         List<Presencia.Objetivo> lista = new ArrayList<>();
         for (Subred s : subredes) {
             for (Pool.Concesion c : pools.get(s.nombre).concesiones()) {
-                lista.add(new Presencia.Objetivo(c.mac, c.ip, c.puerto, s.gateway));
+                if (propio.test(c.puerto)) {
+                    lista.add(new Presencia.Objetivo(c.mac, c.ip, c.puerto, s.gateway));
+                }
             }
         }
         return lista;
+    }
+
+    /** Todas las concesiones confirmadas como eventos CONCEDIDA (con su vencimiento): para guardarlas, restaurarlas y anunciarlas a ONOS. */
+    public List<Evento> concedidas() {
+        List<Evento> lista = new ArrayList<>();
+        for (Subred s : subredes) {
+            for (Pool.Concesion c : pools.get(s.nombre).concesiones()) {
+                lista.add(new Evento(Evento.Tipo.CONCEDIDA, c.mac, c.ip, s.nombre, c.puerto, c.expira));
+            }
+        }
+        return lista;
+    }
+
+    /**
+     * Restaura una concesion que guardo otra instancia de la app (mapa del cluster). Solo si la subred existe, la IP es de esa subred y el puerto es uno de sus puertos de acceso
+     * (un registro viejo de una configuracion distinta se ignora). @return true si queda registrada.
+     */
+    public boolean restaurar(MacAddress mac, RegistroConcesion r, long ahora) {
+        for (Subred s : subredes) {
+            if (!s.nombre.equals(r.subred) || !s.contiene(r.ip)) {
+                continue;
+            }
+            int corte = r.puerto.lastIndexOf('/');
+            if (corte <= 0) {
+                return false;
+            }
+            long puerto;
+            try {
+                puerto = Long.parseLong(r.puerto.substring(corte + 1));
+            } catch (NumberFormatException e) {
+                return false;
+            }
+            if (!s.atiende(r.puerto.substring(0, corte), puerto)) {
+                return false;
+            }
+            return pools.get(s.nombre).restaurar(mac, r.puerto, r.ip, r.expira, ahora);
+        }
+        return false;
+    }
+
+    /** Otra instancia libero o dejo vencer la concesion de este equipo: se quita de la copia local, sin avisar a nadie (ya avisaron ellos). */
+    public void olvidar(MacAddress mac) {
+        for (Subred s : subredes) {
+            pools.get(s.nombre).liberar(mac);
+        }
     }
 
     /** Libera la concesion de un equipo que se dio por ausente. Devuelve el evento LIBERADA, o null si no tenia concesion confirmada. */
@@ -227,7 +289,7 @@ public final class Servidor {
             return new Salida(respuesta(subred, dhcp, mac, MsgType.DHCPNAK, 0), null, "nak");
         }
         return new Salida(respuesta(subred, dhcp, mac, MsgType.DHCPACK, c.ip),
-                new Evento(Evento.Tipo.CONCEDIDA, mac, c.ip, subred.nombre, c.puerto), "ack");
+                new Evento(Evento.Tipo.CONCEDIDA, mac, c.ip, subred.nombre, c.puerto, c.expira), "ack");
     }
 
     // ---- construccion de la respuesta ----

@@ -192,7 +192,7 @@
       when: aplicar | bool
       tags: [app]
 
-    - name: Publicar la configuracion (la app la recarga sola; las concesiones en memoria se pierden)
+    - name: Publicar la configuracion (la app la recarga sola y restaura las concesiones del mapa del cluster)
       ansible.builtin.command:
         argv: [curl, -sS, -f, -u, "{{ onos_user }}:{{ onos_pass }}", -X, POST, -H, "Content-Type: application/json", --data-binary, "@{{ config_dhcp }}", "{{ api }}/network/configuration/apps/{{ app }}"]
       no_log: true
