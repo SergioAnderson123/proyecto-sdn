@@ -9,6 +9,7 @@ Esta carpeta guarda el código y la configuración sin secretos del despliegue H
 - etcd 3.6.6 en los tres controladores, red host, TLS mutuo, puerto cliente 12379 y peer 12380. Cada nodo conserva datos en el volumen `mapper-etcd-prod-data`; el prefijo compartido es `/sdn/mapper/prod`.
 - Las tres réplicas `mapper-ha-prod` usan `HA_MAINTENANCE=1`, alias Docker local `policy_mapper`, puerto de gestión 15002 y reinicio `unless-stopped`.
 - RADIUS, DHCP, SADIS y fallback MAB consultan el endpoint estable del gateway. Los overrides de RADIUS están en `deploy/`.
+- En el slice VNRT, las tres réplicas consultan el LDAP central de ctrl-1 por `192.168.201.1:1389` (`LDAP_HOST`/`LDAP_PORT`). En un despliegue Docker local se conservan los valores por defecto `ldap:389`.
 
 ## Secretos y estado
 
@@ -19,6 +20,8 @@ No se versionan `prod-runtime.env`, `prod-secrets.env`, certificados privados, c
 Desde el gateway, `curl http://192.168.201.254:5000/health/ha` debe alternar nodos saludables. En cada controlador, consultar `http://192.168.201.<n>:15002/health/ha`; `sessions` debe coincidir y el estado debe ser `ready`. Para validar RADIUS, revisar el estado del contenedor y sus logs después de una autenticación controlada.
 
 La prueba realizada detuvo temporalmente el mapper de ctrl-1: el gateway siguió respondiendo desde ctrl-2/ctrl-3 con las mismas dos sesiones; luego ctrl-1 volvió a estar listo. Las pruebas de `tests/test_ha_integration.py` requieren un clúster etcd aislado y un prefijo de prueba; no ejecutarlas contra `/sdn/mapper/prod`.
+
+En la actualización VNRT del 22-nov-2026, los mappers se sustituyeron uno por uno. Antes de cada cambio se guardó el contenedor anterior como `mapper-ha-prod-v2-rollback-20261122`; también se conservaron los contenedores de rollback anteriores. Las tres réplicas quedaron `ready` con las mismas 2 sesiones y 4 eventos. Una solicitud MAB sintética con puerto no autorizado devolvió `403 PORT_NOT_ALLOWED` en cada réplica y no instaló flujos. El servicio R2 MAB sigue siendo una sola instancia en ctrl-1, aunque las tres réplicas pueden alcanzarla.
 
 ## Pendientes conocidos
 
@@ -92,3 +95,10 @@ del grupo recogida en `docs/NOTA_VALIDACION_MAPPER_HA.md`; no es el gateway virt
 la réplica de sesiones del mapper no replica automáticamente ese servicio.
 Las pruebas de caída real de ONOS y pérdida de dos miembros etcd requieren una
 ventana controlada y recuperación comprobada; las pruebas simuladas no las sustituyen.
+La medición de 15 solicitudes MAB sintéticas a través del gateway dio HTTP 403 en
+las 15, mediana 189.91 ms y p95 de rango más cercano 310.90 ms. Esto mide el
+camino MAB/LDAP y el cerrojo con un puerto deliberadamente inválido; no mide un
+login EAP real. La prueba de apagar un mapper sí se repitió: con ctrl-1 detenido,
+el gateway respondió desde ctrl-3 y mantuvo las 2 sesiones y 4 eventos. No se
+detuvo ningún ONOS ni se quitó quórum etcd en producción para no interrumpir el
+slice; esas pruebas siguen requiriendo una ventana controlada.

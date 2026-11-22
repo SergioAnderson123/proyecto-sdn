@@ -58,3 +58,32 @@ réplicas gradualmente con rollback disponible, comprobar `/sessions` y `/events
 en las tres, y repetir presencia y login. Registrar por separado la prueba de
 caída ONOS, pérdida de quórum y latencia del login. No extrapolar resultados de
 pruebas unitarias a la red real.
+
+## Despliegue VNRT posterior (22-nov-2026)
+
+Se desplegó el commit `76d0f7f` gradualmente en ctrl-1, ctrl-2 y ctrl-3. El
+mapper acepta `LDAP_HOST` y `LDAP_PORT`; `portal_auth` usa esas variables para
+construir su URL LDAP. En VNRT se configuró `192.168.201.1:1389`, porque ctrl-3
+no tiene un contenedor LDAP local. Los LDAP consultados en ctrl-1 y ctrl-2
+coincidieron; ctrl-3 pudo consultar la instancia central.
+
+Tras cada reinicio se compararon las MAC de sesión y el historial de eventos
+antes y después. Las tres réplicas quedaron `ready`, con las mismas 2 sesiones y
+4 eventos (huellas de respuesta idénticas). Se probó `/api/mab-request` con una
+MAC sintética y puerto 9999: las tres réplicas llegaron al servicio R2 y
+respondieron `403 PORT_NOT_ALLOWED`; no se instaló ningún flujo ni cambió la
+tabla de sesiones. Los contenedores previos quedaron detenidos como rollback.
+
+La prueba final detuvo solo el mapper de ctrl-1: el gateway atendió desde
+ctrl-3 y mantuvo las 2 sesiones y 4 eventos; ctrl-1 volvió a `ready`. Quince
+solicitudes MAB sintéticas a través del gateway devolvieron HTTP 403, con
+mediana de 189.91 ms y p95 de rango más cercano de 310.90 ms. No equivalen a una
+autenticación EAP/RADIUS real.
+
+Quedan como límites explícitos, no como pruebas aprobadas: el gateway de gestión
+sigue siendo único por decisión del grupo; el servicio R2 MAB sigue en ctrl-1
+(ahora accesible desde las tres réplicas); no se apagó un ONOS ni se quitó
+quórum etcd en producción. La caída de mapper sí quedó probada en vivo; la caída
+de ONOS, la pérdida de quórum y la latencia EAP real requieren una ventana de
+laboratorio controlada. Las pruebas unitarias/simuladas no sustituyen esas
+pruebas operativas.
