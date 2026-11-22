@@ -3,6 +3,10 @@
 services:
   r2_mab_vm:
     environment:
+      # En cada controlador el mapper local está en la misma red Docker `sdn`.
+      # No apuntar a ctrl-1: eso convertiría el servicio HA en una ruta única.
+      R1_URL: ${R2_R1_URL:-http://policy_mapper:5000}
+      ONOS_URL: ${R2_ONOS_URL:-http://onos:8181}
       R2_ETCD_ENDPOINTS: ${R2_ETCD_ENDPOINTS:?definir endpoints TLS de etcd}
       R2_ETCD_PREFIX: ${R2_ETCD_PREFIX:-/sdn/r2-mab/prod}
       ONOS_URLS: ${R2_ONOS_URLS:?definir los tres endpoints REST de ONOS}

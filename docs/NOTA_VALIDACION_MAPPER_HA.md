@@ -110,3 +110,21 @@ quórum; esa conducta tiene cobertura simulada en `test_review.py`. La muestra d
 2384 ms es una sola reautenticación EAP-TLS; hacen falta más muestras para
 percentiles. El gateway único y R2 MAB en ctrl-1 siguen siendo limitaciones de
 arquitectura pendientes.
+
+## Estado de los seis puntos de revisión
+
+| Punto | Estado al 22-nov-2026 | Qué queda |
+|---|---|---|
+| 1. Copia duplicada del mapper | Resuelto en el repo: `R1/shared/policy_mapper/` es la fuente oficial; `app/` enlaza a ella. | Ninguna acción de producción. |
+| 2. Eventos locales por réplica | Resuelto y desplegado: últimos 200 en etcd; `/events` no cae a memoria local y devuelve 503 si no hay quórum. | Los eventos anteriores a la actualización no se recuperan solos. |
+| 3. Quórum, latencia y 503 | Quórum probado en un clúster etcd aislado; métricas de espera/retención y 503 tienen pruebas automatizadas. | No se ha inducido pérdida de quórum contra el mapper desplegado. La medición EAP de 2384 ms es una muestra; faltan muestras para p50/p95. |
+| 4. Gateway y R2 MAB | Gateway único aceptado por decisión del grupo. R2 MAB HA está preparado como overlay opcional, con importador no destructivo de sesiones. | R2 sigue desplegado solo en ctrl-1; migrar su snapshot y desplegar ctrl-2/3 requiere acceso al VNRT y ventana coordinada. La unicidad del gateway requiere decisión/topología, no un cambio local al mapper. |
+| 5. Presencia y cierre de sesiones | Resuelto y probado con ctrl-1 mapper detenido: presencia llegó a otra réplica y cerró h2. | Ninguna conocida para ese escenario probado. |
+| 6. DHCP, portal y vigilante | La regresión automatizada cubre contratos de presencia, logout, revocación, ascenso y políticas; el despliegue preservó sesiones/eventos. | Falta una prueba conjunta en vivo de esos consumidores tras failover, sin generar tráfico de descubrimiento adicional. |
+
+La Mac desde la que se actualizó esta nota no tiene ruta de red al rango privado
+`192.168.201.0/24` del VNRT; las consultas de solo lectura a las tres réplicas y
+al gateway expiraron. Por ello no se afirma que R2 HA se haya desplegado ni que
+se hayan completado las pruebas operativas pendientes. El importador nuevo en
+`R2/mab_vm/migrate_state.py` valida primero y se niega a sobrescribir cualquier
+estado etcd ya existente; conserva el archivo local como respaldo.
