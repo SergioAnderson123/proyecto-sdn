@@ -25,9 +25,11 @@ En la actualización VNRT del 22-nov-2026, los mappers se sustituyeron uno por u
 
 ## Pendientes conocidos
 
-El gateway aún es un único punto de entrada y el servicio R2 MAB para VM sigue en ctrl-1. La pérdida de quórum etcd y la latencia de un login EAP real siguen sin probarse.
+El gateway aún es un único punto de entrada y el servicio R2 MAB para VM sigue en ctrl-1. La pérdida de quórum etcd sigue pendiente de una prueba aislada. Se midió una sola reautenticación EAP-TLS real; hacen falta más muestras para estimar percentiles.
 
 El 22-nov-2026 se detuvo solo ONOS en ctrl-1 durante la prueba de failover. Ctrl-2 y ctrl-3 permanecieron `READY`, conservaron los 5/5 switches y el gateway siguió sirviendo 2 sesiones y 4 eventos. Tras iniciar ctrl-1, los tres ONOS volvieron a `READY`, cada uno vio 5/5 switches y se restauró ctrl-1 como maestro de los cinco.
+
+En la misma fecha, h1-profesor completó una reautenticación EAP-TLS (TLS 1.2) en 2384 ms, medidos desde `logon` hasta `EAP-SUCCESS` y el puerto autorizado. RADIUS registró solicitudes con atributos EAP y ningún `Access-Reject` en los 10 minutos consultados. Las tres réplicas HA conservaron las mismas 2 sesiones y 4 eventos. Es una única muestra de reautenticación, no un percentil ni una medición de primer acceso.
 
 
 Las credenciales de ONOS y LDAP se leen de `ONOS_USER`, `ONOS_PASSWORD`, `LDAP_ADMIN_DN` y `LDAP_ADMIN_PASSWORD`. El ejemplo deja los secretos vacíos intencionalmente: definirlos únicamente en el env-file local con permisos `0600` antes de desplegar.

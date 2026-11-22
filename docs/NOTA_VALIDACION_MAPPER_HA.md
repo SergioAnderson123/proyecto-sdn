@@ -87,9 +87,15 @@ reiniciar ctrl-1, los tres miembros volvieron a `READY`, cada uno vio 5/5
 switches, y se restituyó ctrl-1 como maestro de los cinco dispositivos. No se
 detuvieron Atomix ni miembros etcd.
 
+Se midió una reautenticación real EAP-TLS de h1-profesor: 2384 ms desde `logon`
+hasta `EAP-SUCCESS` y el puerto autorizado. En los diez minutos consultados,
+RADIUS registró 7 Access-Request con atributos EAP y cero Access-Reject. Las
+tres réplicas del mapper conservaron las mismas 2 sesiones y 4 eventos. Es una
+sola muestra de reautenticación, no un percentil ni una medición de primer
+acceso; se necesitan más muestras para caracterizar latencia.
+
 Siguen como límites explícitos: el gateway de gestión es único por decisión del
 grupo y R2 MAB continúa como una instancia en ctrl-1, aunque es alcanzable desde
-las tres réplicas del mapper. No se ensayó pérdida de quórum etcd en producción
-ni se midió una autenticación EAP real; se requieren un clúster aislado y una
-prueba controlada de cliente, respectivamente. Las pruebas simuladas no
-sustituyen esas mediciones operativas.
+las tres réplicas del mapper. No se ensayó pérdida de quórum etcd en producción;
+se requiere un clúster aislado. Las pruebas simuladas no sustituyen esa prueba
+operativa.
