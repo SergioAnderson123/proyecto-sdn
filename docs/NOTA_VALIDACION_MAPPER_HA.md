@@ -30,3 +30,31 @@ Para quien mantiene `R1/mapper-ha/` (commit `c0058c2`). Probado en la slice `top
 ## Cómo repetirlo
 
 Desde `switch-borde`: `curl http://192.168.201.<n>:15002/health/ha` en cada nodo y `curl http://192.168.201.254:5000/sessions`; los contenedores son `mapper-ha-prod` y `mapper-etcd-prod`. Para el login, bajar y subir `ens4` en h2 (más de 60 s abajo para que la presencia cierre la sesión) y mirar `sudo docker logs -t mapper-ha-prod` en las réplicas.
+
+## Respuesta de implementación a esta revisión
+
+Se mantiene intacta la evidencia en vivo de arriba, que corresponde a la versión
+anterior. La corrección posterior establece:
+
+1. Fuente única en `R1/shared/policy_mapper/`, con HA opcional; `R1/mapper-ha/app/`
+   enlaza a ella. Las políticas y el portal tienen su fuente única en `R2/policy/`.
+   El generador `R1/mapper-ha/build_bundle.py` empaqueta las fuentes reales y evita
+   depender del soporte de enlaces de Windows.
+2. Los últimos 200 eventos se guardan en etcd y se consultan sin cerrojo de escritura.
+   Sin quórum `/events` responde 503. Las sesiones no se borran ni se reinicializan.
+   El historial previo en memoria requiere exportación antes de reiniciar.
+3. Se conserva la decisión del gateway único. R2 MAB en ctrl-1 continúa siendo
+   una limitación explícita y separada; no se declara resuelta por el HA del mapper.
+4. Se agregan medidas `wait_ms` y `hold_ms` por transacción y pruebas simuladas
+   de quórum perdido y failover ONOS. No son una medición de login real ni una
+   prueba de apagar ONOS en la slice.
+5. Regresión local: 402 pruebas aprobadas; 10 de integración etcd omitidas por
+   requerir un entorno aislado. Se incluyen presencia, logout, revocación,
+   ascenso por portal, políticas y vigilante. La prueba que abre un servidor HTTP
+   local se ejecutó fuera del sandbox porque éste bloqueaba `bind`.
+
+Antes de declarar validada esta nueva versión en producción, actualizar las
+réplicas gradualmente con rollback disponible, comprobar `/sessions` y `/events`
+en las tres, y repetir presencia y login. Registrar por separado la prueba de
+caída ONOS, pérdida de quórum y latencia del login. No extrapolar resultados de
+pruebas unitarias a la red real.

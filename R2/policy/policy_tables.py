@@ -17,6 +17,10 @@ from collections import Counter
 from typing import Dict, List, Optional
 
 import httpx
+# R2 tools can run without R1 on their import path.
+HA_ENABLED = bool(os.getenv("SESSION_ETCD_ENDPOINTS"))
+if HA_ENABLED:
+    from ha_onos import AsyncClient as HaAsyncClient
 import yaml
 
 POLICY_PATH = os.getenv(
@@ -321,7 +325,7 @@ def flujos_dispositivo(politica: dict, dpid: str) -> List[dict]:
 
 
 async def dispositivos(onos_url: str, auth: tuple) -> List[str]:
-    async with httpx.AsyncClient() as client:
+    async with (HaAsyncClient if HA_ENABLED else httpx.AsyncClient)() as client:
         try:
             r = await client.get(f"{onos_url}/devices", auth=auth, timeout=3.0)
             return [d["id"] for d in r.json().get("devices", []) if d.get("available")]
@@ -332,7 +336,7 @@ async def dispositivos(onos_url: str, auth: tuple) -> List[str]:
 async def sincronizar(politica: dict, dpids: List[str], onos_url: str, auth: tuple) -> Dict[str, int]:
     """Envía a ONOS los flujos de R2 de cada switch (idempotente: mismo selector y prioridad = mismo flujo)."""
     resultado: Dict[str, int] = {}
-    async with httpx.AsyncClient() as client:
+    async with (HaAsyncClient if HA_ENABLED else httpx.AsyncClient)() as client:
         for dpid in dpids:
             flujos = flujos_dispositivo(politica, dpid)
             if not flujos:
@@ -355,7 +359,7 @@ async def purgar_sesiones_huerfanas(onos_url: str, auth: tuple) -> int:
     Un flujo huérfano tiene prioridad sobre el EAPOL->controlador de R1: el supplicant del usuario nunca llega a
     autenticar y, peor, el tráfico seguiría pasando sin sesión. Tras un reinicio todos deben volver a autenticarse."""
     borrados = 0
-    async with httpx.AsyncClient() as client:
+    async with (HaAsyncClient if HA_ENABLED else httpx.AsyncClient)() as client:
         try:
             flujos = (await client.get(f"{onos_url}/flows", auth=auth, timeout=5.0)).json().get("flows", [])
         except (httpx.RequestError, ValueError):
@@ -379,7 +383,7 @@ def dispositivos_incompletos(politica: dict, dpids: List[str], flujos_onos: List
 
 
 async def faltantes(politica: dict, dpids: List[str], onos_url: str, auth: tuple) -> List[str]:
-    async with httpx.AsyncClient() as client:
+    async with (HaAsyncClient if HA_ENABLED else httpx.AsyncClient)() as client:
         try:
             r = await client.get(f"{onos_url}/flows/application/{APP_ID}", auth=auth, timeout=3.0)
             flujos = r.json().get("flows", []) if r.status_code == 200 else []   # 404: el appId aún no existe

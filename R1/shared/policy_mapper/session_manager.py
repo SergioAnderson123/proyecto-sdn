@@ -72,5 +72,11 @@ class SessionManager:
         return session.dpid != dpid or str(session.port) != str(port)
 
 
-# Instancia única singleton para la aplicación
-session_store = SessionManager()
+# In HA mode, all replicas use a quorum-backed store. Legacy tests keep the in-memory class.
+import ha_store
+if ha_store.ENABLED:
+    from ha_sessions import persistent_manager
+    session_store = persistent_manager(SessionManager, ActiveSession)()
+    ha_store.STORE = session_store
+else:
+    session_store = SessionManager()

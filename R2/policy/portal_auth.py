@@ -6,11 +6,15 @@ import os
 from typing import Iterable, Optional, Tuple
 
 import httpx
+# R2 tools can run without R1 on their import path.
+HA_ENABLED = bool(os.getenv("SESSION_ETCD_ENDPOINTS"))
+if HA_ENABLED:
+    from ha_onos import AsyncClient as HaAsyncClient
 
 LDAP_URL = os.getenv("LDAP_URL", "ldap://ldap:389")
 LDAP_BASE = os.getenv("LDAP_BASE", "dc=example,dc=org")
 LDAP_ADMIN_DN = os.getenv("LDAP_ADMIN_DN", f"cn=admin,{LDAP_BASE}")
-LDAP_ADMIN_PASSWORD = os.getenv("LDAP_ADMIN_PASSWORD", "admin")   # laboratorio: ver compose.yml
+LDAP_ADMIN_PASSWORD = os.getenv("LDAP_ADMIN_PASSWORD", "")
 
 
 def rol_de_grupos(politica: dict, grupos: Iterable[str]) -> Optional[str]:
@@ -48,7 +52,7 @@ def autenticar_ldap(usuario: str, clave: str) -> Optional[list]:
 
 async def ubicar_host(mac: str, onos_url: str, auth: tuple) -> Optional[Tuple[str, str]]:
     """(dpid, puerto) donde ONOS ve a la MAC, o None."""
-    async with httpx.AsyncClient() as client:
+    async with (HaAsyncClient if HA_ENABLED else httpx.AsyncClient)() as client:
         try:
             r = await client.get(f"{onos_url}/hosts/{mac.upper()}/None", auth=auth, timeout=3.0)
             if r.status_code != 200:

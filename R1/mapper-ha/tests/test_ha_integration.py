@@ -1,6 +1,9 @@
 """Uses an isolated etcd prefix only. Never calls the ONOS data plane."""
 import asyncio, os, time, concurrent.futures, subprocess, sys
 import pytest
+# Never allow this mutating suite to use the production prefix.
+if os.getenv('SESSION_ETCD_ENDPOINTS') and not os.getenv('SESSION_ETCD_PREFIX', '').startswith('/sdn/mapper/test/'):
+ pytest.skip('requires an explicit /sdn/mapper/test/ prefix', allow_module_level=True)
 import ha_store
 from session_manager import session_store as store,ActiveSession
 from ha_sessions import decode

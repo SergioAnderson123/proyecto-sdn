@@ -11,6 +11,8 @@ import time
 from typing import List, Optional
 from fastapi import FastAPI, Header, HTTPException
 import httpx
+import ha_store
+from ha_onos import AsyncClient as HaAsyncClient
 from pydantic import BaseModel, Field
 import uvicorn
 from fastapi.responses import JSONResponse
@@ -27,7 +29,7 @@ ONOS_HOST = os.getenv("ONOS_HOST", "onos_controller")
 ONOS_PORT = os.getenv("ONOS_PORT", "8181")
 ONOS_BASE_URL = f"http://{ONOS_HOST}:{ONOS_PORT}/onos/v1"
 ONOS_AAA_URL = f"http://{ONOS_HOST}:{ONOS_PORT}/onos/aaa/app/users"
-ONOS_AUTH = ("onos", "rocks")
+ONOS_AUTH = (os.getenv("ONOS_USER", ""), os.getenv("ONOS_PASSWORD", ""))
 R2_MAB_URL = os.getenv("R2_MAB_URL", "http://r2-mab-vm:5001").rstrip("/")
 
 # -----------------------------------------------------------------------------
@@ -75,6 +77,8 @@ async def _expirar_sesiones_portal() -> None:
 
 @app.on_event("startup")
 async def _iniciar_sincronizacion() -> None:
+    if ha_store.ENABLED:
+        return  # HA startup restores durable state; never purge all session flows.
     # las sesiones están en memoria: los flujos de sesión que quedaron en ONOS ya no tienen dueño
     n = await policy_tables.purgar_sesiones_huerfanas(ONOS_BASE_URL, ONOS_AUTH)
     if n:
@@ -97,6 +101,8 @@ async def revocar_sesion(r: Revocacion):
     Borra el flujo de sesión 40001 y deja la MAC en la lista negra temporal (45000) de R1 durante `segundos`, de modo que
     el usuario no recupere acceso con la misma credencial sin volver a pasar por R1 cuando termine el bloqueo."""
     mac = r.mac.lower().replace("-", ":")
+    if ha_store.ENABLED:
+        session_store.plan_block(mac, r.segundos)
     sesion = session_store.remove_session(mac)
     if not sesion:
         return {"status": "sin_sesion"}
@@ -179,7 +185,7 @@ async def equipo_ausente(r: EquipoAusente, x_presencia_token: str = Header(defau
 async def _puertos_sin_enlace(dpids: list) -> dict:
     """{dpid: {numero_de_puerto: habilitado}} leido de ONOS; un switch que ONOS no contesta no aparece (no se sabe nada de el)."""
     salida = {}
-    async with httpx.AsyncClient() as cliente:
+    async with (HaAsyncClient if ha_store.ENABLED else httpx.AsyncClient)() as cliente:
         for dpid in dpids:
             try:
                 r = await cliente.get(f"{ONOS_BASE_URL}/devices/{dpid}/ports", auth=ONOS_AUTH, timeout=3.0)
@@ -478,7 +484,7 @@ async def _pedir_tabla_aaa() -> list:
   """La tabla cruda de /onos/aaa/app/users, sin cachear ni filtrar."""
   global _cache_aaa_peticiones_reales
   _cache_aaa_peticiones_reales += 1
-  async with httpx.AsyncClient() as client:
+  async with (HaAsyncClient if ha_store.ENABLED else httpx.AsyncClient)() as client:
     try:
       response = await client.get(ONOS_AAA_URL, auth=ONOS_AUTH, timeout=2.0)
       if response.status_code == 200:
@@ -653,8 +659,13 @@ async def inyectar_flujo_tabla_0(
         },
     }
 
+    if ha_store.ENABLED:
+        block = session_store.blocks.get(mac.lower())
+        if block and block['until'] > time.time():
+            raise HTTPException(status_code=403, detail='MAC temporalmente revocada')
+        session_store.plan_admission(dpid, port, mac, vlan_id)
     url = f"{ONOS_BASE_URL}/flows/{dpid}"
-    async with httpx.AsyncClient() as client:
+    async with (HaAsyncClient if ha_store.ENABLED else httpx.AsyncClient)() as client:
         try:
             resp = await client.post(
                 url, json=flow_payload, auth=ONOS_AUTH, timeout=2.0
@@ -662,6 +673,8 @@ async def inyectar_flujo_tabla_0(
             if resp.status_code in [200, 201]:
                 location = resp.headers.get("Location", "")
                 flow_id = location.split("/")[-1] if location else "active_flow"
+                if ha_store.ENABLED and flow_id == "active_flow":
+                    raise RuntimeError("ONOS did not identify the session flow")
                 print(
                     f"  [TCAM] Flujo Prio 40001 inyectado exitosamente en {dpid}. Flow ID: {flow_id}"
                 )
@@ -692,15 +705,21 @@ async def inyectar_blacklist_temporal(
         },
     }
     url = f"{ONOS_BASE_URL}/flows/{dpid}"
-    async with httpx.AsyncClient() as client:
+    async with (HaAsyncClient if ha_store.ENABLED else httpx.AsyncClient)() as client:
         try:
-            await client.post(
+            response = await client.post(
                 url, json=flow_payload, auth=ONOS_AUTH, timeout=2.0
             )
+            if ha_store.ENABLED:
+                if response.status_code not in (200,201):
+                    raise RuntimeError('ONOS rejected blacklist')
+                session_store.acknowledge_block(mac)
             print(
                 f"  [BLACKLIST] Regla DROP Prio 45000 aplicada a MAC {mac} en {dpid}:{port} por {idle_timeout}s"
             )
         except Exception as e:
+            if ha_store.ENABLED:
+                raise HTTPException(status_code=503, detail='Bloqueo pendiente de ONOS') from e
             print(f"  [BLACKLIST ERROR] No se pudo inyectar lista negra: {e}")
 
 
@@ -709,11 +728,22 @@ async def eliminar_flujo_onos(dpid: str, flow_id: str) -> None:
     if not flow_id or flow_id == "active_flow":
         return
     url = f"{ONOS_BASE_URL}/flows/{dpid}/{flow_id}"
-    async with httpx.AsyncClient() as client:
+    async with (HaAsyncClient if ha_store.ENABLED else httpx.AsyncClient)() as client:
         try:
-            await client.delete(url, auth=ONOS_AUTH, timeout=2.0)
-            print(f"  [TCAM] Flujo {flow_id} eliminado de {dpid}")
+            response = await client.delete(url, auth=ONOS_AUTH, timeout=2.0)
+            if response.status_code not in (200, 204, 404):
+                raise RuntimeError(f"ONOS delete failed: {response.status_code}")
+            if ha_store.ENABLED:
+                # REST acceptance is not yet confirmation from the data plane.
+                check = await client.get(url, auth=ONOS_AUTH, timeout=2.0)
+                gone = check.status_code == 404 or (check.status_code == 200 and all(
+                    f.get("state") == "REMOVED" for f in check.json().get("flows", [])))
+                if gone:
+                    session_store.acknowledge_delete(dpid, flow_id)
+            print(f"  [TCAM] Retiro solicitado para {flow_id} de {dpid}")
         except Exception as e:
+            if ha_store.ENABLED:
+                raise HTTPException(status_code=503, detail="Retiro pendiente de confirmar en ONOS") from e
             print(f"  [TCAM ERROR] Fallo al eliminar flujo {flow_id}: {e}")
 
 
@@ -937,8 +967,8 @@ async def mab_request(datos: MabRequest):
         servidor = ldap3.Server("ldap", port=389, connect_timeout=5)
         conexion = ldap3.Connection(
             servidor,
-            user="cn=admin,dc=example,dc=org",
-            password="admin",
+            user=os.getenv("LDAP_ADMIN_DN", "cn=admin,dc=example,dc=org"),
+            password=os.getenv("LDAP_ADMIN_PASSWORD", ""),
             auto_bind=True,
             receive_timeout=5,
         )
@@ -967,7 +997,7 @@ async def mab_request(datos: MabRequest):
     if identidad is None:
         print(f"[MAB] MAC no registrada; delegando a R2 MAB VM: {mac}")
         try:
-            async with httpx.AsyncClient(timeout=8) as cliente:
+            async with (HaAsyncClient if ha_store.ENABLED else httpx.AsyncClient)(timeout=8) as cliente:
                 respuesta = await cliente.post(
                     f"{R2_MAB_URL}/api/mab-request",
                     json={
@@ -1022,6 +1052,10 @@ async def mab_request(datos: MabRequest):
     }
 
 
+
+if ha_store.ENABLED:
+    import ha_runtime, sys
+    ha_runtime.install(sys.modules[__name__])
 
 if __name__ == "__main__":
     uvicorn.run("policy_mapper:app", host="0.0.0.0", port=5000, reload=True)
