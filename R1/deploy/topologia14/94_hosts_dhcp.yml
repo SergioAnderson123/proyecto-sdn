@@ -79,8 +79,8 @@
       ansible.builtin.shell:
         cmd: |
           ip -br a show dev ens4; echo ---; ip route; echo ---; networkctl status ens4 --no-pager 2>&1 | grep -iE 'address|gateway|lease|dhcp|state' | head -12
-          echo --- IPv6 en ens4 (debe estar vacio: sin link-local ni RA); ip -6 addr show dev ens4; sysctl net.ipv6.conf.ens4.accept_ra
-          echo --- netplan; sed -n '/ens4/,$p' {{ archivo }}
+          echo "--- IPv6 en ens4 (debe estar vacio: sin link-local ni RA)"; ip -6 addr show dev ens4; sysctl net.ipv6.conf.ens4.accept_ra
+          echo "--- netplan"; sed -n '/ens4/,$p' {{ archivo }}
         executable: /bin/bash
       register: estado
       changed_when: false

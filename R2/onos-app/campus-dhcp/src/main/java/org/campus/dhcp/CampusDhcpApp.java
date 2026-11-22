@@ -219,7 +219,9 @@ public class CampusDhcpApp {
         deviceService.addListener(oyenteDispositivos);
         flowRuleService.addListener(oyenteFlujos);
         cargarConfig();
-        packetService.addProcessor(procesador, PacketProcessor.director(1));
+        // director(0), NO (1): org.onosproject.proxyarp registra el suyo en director(1) y, con la misma prioridad, el orden dependia de quien se registrara antes; si va primero marca
+        // las respuestas ARP del sondeo como manejadas (y las inunda), nunca las vemos y la presencia cierra la sesion de un equipo vivo.
+        packetService.addProcessor(procesador, PacketProcessor.director(0));
         packetService.requestPackets(selectorDhcp, PacketPriority.CONTROL, appId);
         reloj = Executors.newSingleThreadScheduledExecutor();
         reloj.scheduleWithFixedDelay(this::vencer, 10, 10, TimeUnit.SECONDS);
