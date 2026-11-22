@@ -47,6 +47,18 @@
         chdir: "{{ repo }}/R2/policy"
       changed_when: true
 
+    - name: Conservar la presencia ya publicada (URL y clave del Policy Mapper, sondeo lento) para que reinstalar no la borre
+      ansible.builtin.shell:
+        cmd: "curl -sS -u {{ onos_user }}:{{ onos_pass }} {{ api }}/network/configuration/apps/{{ app }} 2>/dev/null | python3 {{ playbook_dir }}/files/mezclar_presencia.py {{ config_dhcp }}"
+      register: conservar
+      changed_when: false
+      when: accion == 'instalar'
+
+    - name: Presencia
+      ansible.builtin.debug:
+        msg: "{{ conservar.stdout | default('') }}"
+      when: accion == 'instalar'
+
     - name: Generar la configuracion del ARP de los gateways CON el servidor DHCP de cada subred
       ansible.builtin.command:
         cmd: "python3 generar_config_gateway_arp.py --plan {{ plan }} --dhcp {{ config_dhcp }} --salida {{ config_arp }}"
