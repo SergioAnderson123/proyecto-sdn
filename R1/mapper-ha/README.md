@@ -25,7 +25,9 @@ En la actualización VNRT del 22-nov-2026, los mappers se sustituyeron uno por u
 
 ## Pendientes conocidos
 
-No se apagó un ONOS en el slice durante la validación, para evitar interrumpir el laboratorio. El gateway aún es un único punto de entrada y el servicio R2 MAB para VM sigue en ctrl-1.
+El gateway aún es un único punto de entrada y el servicio R2 MAB para VM sigue en ctrl-1. La pérdida de quórum etcd y la latencia de un login EAP real siguen sin probarse.
+
+El 22-nov-2026 se detuvo solo ONOS en ctrl-1 durante la prueba de failover. Ctrl-2 y ctrl-3 permanecieron `READY`, conservaron los 5/5 switches y el gateway siguió sirviendo 2 sesiones y 4 eventos. Tras iniciar ctrl-1, los tres ONOS volvieron a `READY`, cada uno vio 5/5 switches y se restauró ctrl-1 como maestro de los cinco.
 
 
 Las credenciales de ONOS y LDAP se leen de `ONOS_USER`, `ONOS_PASSWORD`, `LDAP_ADMIN_DN` y `LDAP_ADMIN_PASSWORD`. El ejemplo deja los secretos vacíos intencionalmente: definirlos únicamente en el env-file local con permisos `0600` antes de desplegar.

@@ -80,10 +80,16 @@ solicitudes MAB sintéticas a través del gateway devolvieron HTTP 403, con
 mediana de 189.91 ms y p95 de rango más cercano de 310.90 ms. No equivalen a una
 autenticación EAP/RADIUS real.
 
-Quedan como límites explícitos, no como pruebas aprobadas: el gateway de gestión
-sigue siendo único por decisión del grupo; el servicio R2 MAB sigue en ctrl-1
-(ahora accesible desde las tres réplicas); no se apagó un ONOS ni se quitó
-quórum etcd en producción. La caída de mapper sí quedó probada en vivo; la caída
-de ONOS, la pérdida de quórum y la latencia EAP real requieren una ventana de
-laboratorio controlada. Las pruebas unitarias/simuladas no sustituyen esas
-pruebas operativas.
+La prueba real de caída ONOS se ejecutó el 22-nov-2026. Se detuvo solo ONOS en
+ctrl-1; ctrl-2 y ctrl-3 siguieron `READY`, cada uno conservó los 5/5 switches y
+el gateway respondió desde ctrl-2 con las 2 sesiones y 4 eventos. Después de
+reiniciar ctrl-1, los tres miembros volvieron a `READY`, cada uno vio 5/5
+switches, y se restituyó ctrl-1 como maestro de los cinco dispositivos. No se
+detuvieron Atomix ni miembros etcd.
+
+Siguen como límites explícitos: el gateway de gestión es único por decisión del
+grupo y R2 MAB continúa como una instancia en ctrl-1, aunque es alcanzable desde
+las tres réplicas del mapper. No se ensayó pérdida de quórum etcd en producción
+ni se midió una autenticación EAP real; se requieren un clúster aislado y una
+prueba controlada de cliente, respectivamente. Las pruebas simuladas no
+sustituyen esas mediciones operativas.
