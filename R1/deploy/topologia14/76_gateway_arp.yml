@@ -109,9 +109,12 @@
         seconds: 5
       tags: [instalar]
 
-    - name: Instalar el feature gateway-arp en Karaf
+    - name: Instalar el feature gateway-arp en Karaf de los TRES nodos (ONOS no siempre lo propaga, ctrl-3 y ctrl-1 se quedaron sin el bundle)
       ansible.builtin.command:
-        argv: "{{ karaf + ['feature:install gateway-arp'] }}"
+        argv: "{{ karaf[:-1] + [onos_user ~ '@' ~ item, 'feature:install gateway-arp'] }}"
+      loop: "{{ nodos_onos_ip }}"
+      loop_control:
+        label: "{{ item }}"
       register: feature
       changed_when: "'Adding features' in feature.stdout"
       failed_when: false
