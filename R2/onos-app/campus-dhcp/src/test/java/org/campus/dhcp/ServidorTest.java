@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -341,5 +342,72 @@ public class ServidorTest {
         servidor.liberarPuerto(ACC1, 1);
         Servidor.Salida s = servidor.procesar(cliente(mac(1), MsgType.DHCPREQUEST, "10.0.1.100", null, mac(1)), ACC1, 1, T0 + 5000);
         assertEquals(MsgType.DHCPACK, dhcpDe(s.respuesta).getPacketType());
+    }
+
+    // ---- opcion 121 (rutas sin clase, RFC 3442) ----
+    static Subred subredConRutas(String prefijo, String gw, String ini, String fin, String srv, String... rutas) {
+        return new Subred("x", ACC1, new HashSet<>(Collections.singletonList(1L)), prefijo, gw, ini, fin, srv, SERVIDOR_MAC,
+                Arrays.asList("8.8.8.8"), 3600, Arrays.asList(rutas));
+    }
+
+    static byte[] opcion121(DHCP d) {
+        for (DhcpOption o : d.getOptions()) {
+            if (o.getCode() == 121) {
+                return o.getData();
+            }
+        }
+        return null;
+    }
+
+    @Test
+    public void laOfertaYElAckAnuncianElAgregadoDelCampusPorElGatewayDeLaSubred() throws Exception {
+        Servidor s = servidor(Politica.porDefecto(), subredConRutas("10.0.1.0/24", "10.0.1.254", "10.0.1.100", "10.0.1.199", "10.0.1.250", "10.0.0.0/16"));
+        DHCP oferta = dhcpDe(s.procesar(discover(mac(1)), ACC1, 1, T0).respuesta);
+        // 10.0.0.0/16 por 10.0.1.254: longitud 16, dos octetos de red (10, 0) y el gateway (10, 0, 1, 254)
+        assertArrayEquals(new byte[]{16, 10, 0, 10, 0, 1, (byte) 254}, opcion121(oferta));
+        assertEquals(Ip4Address.valueOf("10.0.1.254").toInt(), opcionIp(oferta, DHCPOptionCode.OptionCode_RouterAddress));      // la opcion 3 sigue: la 121 se suma
+        DHCP ack = dhcpDe(s.procesar(cliente(mac(1), MsgType.DHCPREQUEST, "10.0.1.100", "10.0.1.250", mac(1)), ACC1, 1, T0 + 100).respuesta);
+        assertEquals(MsgType.DHCPACK, ack.getPacketType());
+        assertArrayEquals(new byte[]{16, 10, 0, 10, 0, 1, (byte) 254}, opcion121(ack));
+    }
+
+    @Test
+    public void sinRutasNoSeMandaLaOpcion121() throws Exception {
+        assertNull(opcion121(dhcpDe(servidor.procesar(discover(mac(1)), ACC1, 1, T0).respuesta)));
+    }
+
+    @Test
+    public void unNakNoLlevaRutas() throws Exception {
+        Servidor s = servidor(Politica.porDefecto(), subredConRutas("10.0.1.0/24", "10.0.1.254", "10.0.1.100", "10.0.1.199", "10.0.1.250", "10.0.0.0/16"));
+        DHCP nak = dhcpDe(s.procesar(cliente(mac(1), MsgType.DHCPREQUEST, "10.0.2.5", "10.0.1.250", mac(1)), ACC1, 1, T0).respuesta);
+        assertEquals(MsgType.DHCPNAK, nak.getPacketType());
+        assertNull(opcion121(nak));
+    }
+
+    @Test
+    public void lasRutasSeCodificanConSusOctetosSignificativos() {
+        // /24 -> 3 octetos, /12 -> 2, /32 -> 4, /0 -> ninguno (ruta por defecto)
+        Subred s = subredConRutas("10.0.1.0/24", "10.0.1.254", "10.0.1.100", "10.0.1.199", "10.0.1.250", "192.168.7.0/24", "172.16.0.0/12", "10.9.9.9/32", "0.0.0.0/0");
+        byte[] esperado = new byte[]{
+                24, (byte) 192, (byte) 168, 7, 10, 0, 1, (byte) 254,
+                12, (byte) 172, 16, 10, 0, 1, (byte) 254,
+                32, 10, 9, 9, 9, 10, 0, 1, (byte) 254,
+                0, 10, 0, 1, (byte) 254};
+        assertArrayEquals(esperado, s.opcionRutasSinClase());
+    }
+
+    @Test
+    public void unaSubredSinRutasDaUnaOpcionVacia() {
+        assertEquals(0, subred("x", ACC1, "10.0.1.0/24", "10.0.1.254", "10.0.1.100", "10.0.1.199", "10.0.1.250").opcionRutasSinClase().length);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void unaRutaConBitsDeHostSeRechaza() {
+        subredConRutas("10.0.1.0/24", "10.0.1.254", "10.0.1.100", "10.0.1.199", "10.0.1.250", "10.0.0.1/16");
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void unaRutaMalFormadaSeRechaza() {
+        subredConRutas("10.0.1.0/24", "10.0.1.254", "10.0.1.100", "10.0.1.199", "10.0.1.250", "10.0.0.0");
     }
 }

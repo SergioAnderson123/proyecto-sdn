@@ -86,8 +86,26 @@ def analizar(datos, mac, xid):
             r["router"] = socket.inet_ntoa(valor[:4])
         elif codigo == 51:
             r["lease"] = struct.unpack("!I", valor)[0]
+        elif codigo == 121:
+            r["rutas"] = rutas_sin_clase(valor)
         i += 2 + largo
     return r
+
+
+def rutas_sin_clase(valor):
+    """Decodifica la opcion 121 (RFC 3442): por cada ruta, longitud del prefijo, (longitud + 7) // 8 octetos de la red y 4 octetos del gateway. Devuelve ["red/longitud via gateway", ...]."""
+    rutas, i = [], 0
+    while i < len(valor):
+        longitud = valor[i]
+        n = (longitud + 7) // 8
+        if longitud > 32 or i + 1 + n + 4 > len(valor):
+            rutas.append("(opcion 121 mal formada)")
+            break
+        red = bytes(valor[i + 1:i + 1 + n]) + b"\x00" * (4 - n)
+        gw = valor[i + 1 + n:i + 1 + n + 4]
+        rutas.append("%s/%d via %s" % (socket.inet_ntoa(red), longitud, socket.inet_ntoa(bytes(gw))))
+        i += 1 + n + 4
+    return rutas
 
 
 def esperar(sock, mac, xid, tipos, segundos):
@@ -137,7 +155,7 @@ def main():
             resultado = {"mac": arg.mac, "estado": "NAK", "oferta": oferta["yiaddr"]}
         else:
             resultado = {"mac": arg.mac, "estado": "ACK", "ip": final["yiaddr"], "router": final.get("router"), "mascara": final.get("mascara"),
-                         "servidor": final.get("servidor"), "lease": final.get("lease")}
+                         "servidor": final.get("servidor"), "lease": final.get("lease"), "rutas": final.get("rutas")}
     print(time.strftime("%H:%M:%S"), "resultado:", json.dumps(resultado), flush=True)
     with open(arg.salida, "w") as f:
         json.dump(resultado, f)

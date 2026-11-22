@@ -1,6 +1,8 @@
 # Pasa ens4 de UN host de IP fija (plan A, puesta a mano por 67/69, no persistente) a DHCP con systemd-networkd (via netplan). La IP la da la app campus-dhcp de ONOS segun (switch, puerto).
 #   PLAYBOOK=94_hosts_dhcp.yml ./lanzar.sh --limit h2-alumno                      # pasa h2 a DHCP
 #   PLAYBOOK=94_hosts_dhcp.yml ./lanzar.sh --limit h2-alumno -e accion=quitar     # vuelve a la IP fija 10.0.2.102
+#   -e rutas_dhcp=true                    # el host aprende las rutas del DHCP (opcion 121, RFC 3442: use-routes true); la ruta fija 10.0.0.0/16 se CONSERVA salvo con -e ruta_fija=false
+#   -e rutas_dhcp=true -e ruta_fija=false # solo las rutas que anuncia el DHCP: usar tras comprobar que el host las recibe (la app campus-dhcp debe anunciarlas: rutas en el bloque dhcp del plan)
 # Edita /etc/netplan/50-cloud-init.yaml SOLO en el bloque de ens4 y CONSERVA dhcp6: false, accept-ra: false y link-local: [] (evitan tormentas de IPv6); ens3 (gestion) no se toca. Antes guarda copia en 50-cloud-init.yaml.bak-dhcp.
 # Del DHCP se usa SOLO la IP: sin rutas ni DNS del servidor (use-routes/use-dns false). La ruta a 10.0.0.0/16 por el gateway virtual (.254) va fija en el netplan y sobrevive al reinicio.
 # cloud-init puede reescribir ese archivo al arrancar: se crea /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg para que no lo haga (si no, el reinicio volveria a dejar ens4 sin DHCP). Se borra con accion=quitar.
@@ -12,6 +14,8 @@
   gather_facts: false
   vars:
     accion: poner
+    rutas_dhcp: false                # true = use-routes: true (el host acepta las rutas de la opcion 121 del DHCP)
+    ruta_fija: true                  # true = la ruta 10.0.0.0/16 por el gateway queda escrita en el netplan; false = solo la que llegue por DHCP
     archivo: /etc/netplan/50-cloud-init.yaml
     copia: /etc/netplan/50-cloud-init.yaml.bak-dhcp
     datos:
@@ -37,8 +41,11 @@
           d = yaml.safe_load(open(p))
           e = d["network"]["ethernets"]["ens4"]
           e["dhcp4"] = True
-          e["dhcp4-overrides"] = {"use-routes": False, "use-dns": False}
-          e["routes"] = [{"to": "10.0.0.0/16", "via": "{{ yo.gw }}", "on-link": True}]
+          e["dhcp4-overrides"] = {"use-routes": {{ 'True' if rutas_dhcp | bool else 'False' }}, "use-dns": False}
+          if {{ 'True' if ruta_fija | bool else 'False' }}:
+              e["routes"] = [{"to": "10.0.0.0/16", "via": "{{ yo.gw }}", "on-link": True}]
+          else:
+              e.pop("routes", None)
           e["dhcp6"] = False
           e["accept-ra"] = False
           e["link-local"] = []

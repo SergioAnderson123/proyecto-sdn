@@ -15,7 +15,9 @@ import java.util.Set;
  * {"servidorMac": "02:00:5E:00:00:FD",
  *  "politica": {"maxPorPuerto": 3, "ofertaSeg": 15, "solicitudesPorSeg": 2.0, "rafaga": 8, "declinadaSeg": 300},
  *  "subredes": [{"nombre": "acc-1", "device": "of:0000e6925d87354b", "puertos": [1], "prefijo": "10.0.1.0/24", "gateway": "10.0.1.254",
- *                "inicio": "10.0.1.100", "fin": "10.0.1.199", "servidor": "10.0.1.250", "dns": ["8.8.8.8"], "leaseSeg": 3600}]}
+ *                "inicio": "10.0.1.100", "fin": "10.0.1.199", "servidor": "10.0.1.250", "dns": ["8.8.8.8"], "leaseSeg": 3600,
+ *                "rutas": ["10.0.0.0/16"]}]}
+ * `rutas` (opcional): redes que se anuncian al cliente con la opcion 121 (RFC 3442) por el gateway de la subred; sin ellas no se manda la opcion.
  * Se publica con: POST /onos/v1/network/configuration/apps/org.campus.dhcp
  */
 public class DhcpConfig extends Config<ApplicationId> {
@@ -101,9 +103,15 @@ public class DhcpConfig extends Config<ApplicationId> {
                     dns.add(d.asText());
                 }
             }
+            List<String> rutas = new ArrayList<>();
+            if (s.has("rutas")) {
+                for (JsonNode r : s.get("rutas")) {
+                    rutas.add(r.asText());
+                }
+            }
             salida.add(new Subred(s.get("nombre").asText(), s.get("device").asText(), puertos, s.get("prefijo").asText(), s.get("gateway").asText(),
                     s.get("inicio").asText(), s.get("fin").asText(), s.get("servidor").asText(), mac, dns,
-                    s.has("leaseSeg") ? s.get("leaseSeg").asInt() : 3600));
+                    s.has("leaseSeg") ? s.get("leaseSeg").asInt() : 3600, rutas));
         }
         return salida;
     }

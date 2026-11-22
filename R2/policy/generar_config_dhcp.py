@@ -5,8 +5,8 @@
     python3 generar_config_dhcp.py --plan ... --max-por-puerto 5 --dns 8.8.8.8,1.1.1.1
 
 Por cada subred /24 elegida: ambito dinamico .100 a .199 (el resto queda para IP fijas: .1 a .99 y .200 a .249), servidor DHCP virtual en .250 y gateway el del plan.
-Cada subred del PLAN puede traer su propio bloque "dhcp" que cambia esos valores (inicio, fin, servidor, dns y leaseSeg = segundos de concesion), por ejemplo:
-    {"nombre": "acc-1", "dispositivo": "acc-1", "prefijo": "10.0.1.0/24", "gateway": "10.0.1.254", "puertos": [1], "dhcp": {"leaseSeg": 900}}
+Cada subred del PLAN puede traer su propio bloque "dhcp" que cambia esos valores (inicio, fin, servidor, dns, leaseSeg = segundos de concesion y rutas = redes que se anuncian al cliente por el gateway de la subred con la opcion 121 del DHCP, RFC 3442), por ejemplo:
+    {"nombre": "acc-1", "dispositivo": "acc-1", "prefijo": "10.0.1.0/24", "gateway": "10.0.1.254", "puertos": [1], "dhcp": {"leaseSeg": 900, "rutas": ["10.0.0.0/16"]}}
 Las subredes de servicios y externa NO llevan DHCP por defecto (sus equipos tienen IP fija). Ver docs/DISENO_DHCP_POR_SUBRED.md.
 """
 import argparse
@@ -21,10 +21,10 @@ from plan_arboles import NOMBRES
 SERVIDOR_MAC = "02:00:5E:00:00:FD"
 
 
-def _ambito(s: l3.Subred, dns, lease: int, extra: dict = None) -> dict:
-    """El ambito de una subred: por defecto .100 a .199 en una /24; el bloque `dhcp` del plan (`extra`) puede cambiar inicio, fin, servidor, dns y leaseSeg."""
+def _ambito(s: l3.Subred, dns, lease: int, extra: dict = None, rutas=()) -> dict:
+    """El ambito de una subred: por defecto .100 a .199 en una /24; el bloque `dhcp` del plan (`extra`) puede cambiar inicio, fin, servidor, dns, leaseSeg y rutas (opcion 121)."""
     extra = extra or {}
-    desconocidos = sorted(set(extra) - {"inicio", "fin", "servidor", "dns", "leaseSeg"})
+    desconocidos = sorted(set(extra) - {"inicio", "fin", "servidor", "dns", "leaseSeg", "rutas"})
     if desconocidos:
         raise l3.PlanInvalido(f"{s.nombre}: campos desconocidos en el bloque dhcp: {', '.join(desconocidos)}")
     if s.prefijo.prefixlen != 24 and not {"inicio", "fin", "servidor"} <= set(extra):
@@ -40,12 +40,24 @@ def _ambito(s: l3.Subred, dns, lease: int, extra: dict = None) -> dict:
         raise l3.PlanInvalido(f"{s.nombre}: el gateway y el servidor DHCP no pueden caer en el ambito dinamico ni coincidir")
     if a["leaseSeg"] < 30:
         raise l3.PlanInvalido(f"{s.nombre}: la concesion debe durar al menos 30 s")
+    anunciadas = []
+    for r in extra.get("rutas", rutas):                                        # opcion 121 (RFC 3442): redes que el cliente aprende por el gateway de esta subred
+        try:
+            anunciadas.append(str(ipaddress.IPv4Network(str(r), strict=True)))
+        except ValueError:
+            raise l3.PlanInvalido(f"{s.nombre}: ruta invalida para la opcion 121: {r} (se espera red/longitud sin bits de host, p. ej. 10.0.0.0/16)")
+    if len(anunciadas) != len(set(anunciadas)):
+        raise l3.PlanInvalido(f"{s.nombre}: rutas repetidas para la opcion 121")
+    if len(anunciadas) > 28:
+        raise l3.PlanInvalido(f"{s.nombre}: demasiadas rutas para la opcion 121 (maximo 28)")
+    if anunciadas:
+        a["rutas"] = anunciadas
     return a
 
 
 def construir(plan: l3.Plan, subredes=None, dns=("8.8.8.8",), lease: int = 3600, max_por_puerto: int = 3, servidor_mac: str = SERVIDOR_MAC, politica: dict = None, extras: dict = None,
-              presencia: dict = None) -> dict:
-    """La configuracion (clave `campusdhcp`) que lee la app. `subredes` = nombres a servir (por defecto, las que empiezan por "acc")."""
+              presencia: dict = None, rutas=()) -> dict:
+    """La configuracion (clave `campusdhcp`) que lee la app. `subredes` = nombres a servir (por defecto, las que empiezan por "acc"). `rutas` = redes que se anuncian con la opcion 121 a todas las subredes (el bloque dhcp de cada una puede cambiarlas)."""
     elegidas = [s for s in plan.subredes if (s.nombre in subredes if subredes else s.nombre.startswith("acc"))]
     if subredes:
         faltan = sorted(set(subredes) - {s.nombre for s in plan.subredes})
@@ -58,7 +70,7 @@ def construir(plan: l3.Plan, subredes=None, dns=("8.8.8.8",), lease: int = 3600,
     pres = {"intervaloSeg": 5, "intentos": 3, "sondeoLentoSeg": 120}                  # sondeo de presencia: 3 ARP cada 5 s tras una sospecha (15 s) y una comprobacion cada 120 s
     pres.update(presencia or {})
     return {"campusdhcp": {"servidorMac": servidor_mac, "gwMac": plan.gw_mac, "politica": pol, "presencia": pres,
-                           "subredes": [_ambito(s, dns, lease, (extras or {}).get(s.nombre)) for s in elegidas]}}
+                           "subredes": [_ambito(s, dns, lease, (extras or {}).get(s.nombre), rutas) for s in elegidas]}}
 
 
 def main(argv=None):
@@ -70,6 +82,7 @@ def main(argv=None):
     a.add_argument("--max-por-puerto", type=int, default=3, help="concesiones y ofertas simultaneas por puerto de acceso (defensa contra el agotamiento)")
     a.add_argument("--pm-url", default="", help="URL del Policy Mapper (http://IP:5000) al que se avisa de un equipo ausente; sin ella solo se libera la IP")
     a.add_argument("--sondeo-lento", type=int, default=120, help="segundos entre comprobaciones de presencia de cada equipo con concesion (0 = solo tras una sospecha)")
+    a.add_argument("--rutas", default="", help="redes separadas por comas que se anuncian con la opcion 121 a todas las subredes, por el gateway de cada una (p. ej. 10.0.0.0/16); cada subred del plan puede traer las suyas en su bloque dhcp")
     a.add_argument("--salida")
     arg = a.parse_args(argv)
     try:
@@ -77,7 +90,7 @@ def main(argv=None):
             datos = json.load(f)
         plan = l3.cargar_plan(datos, nombres=NOMBRES)
         extras = {s.get("nombre"): s["dhcp"] for s in datos.get("subredes", []) if isinstance(s.get("dhcp"), dict)}
-        cfg = construir(plan, [x for x in arg.subredes.split(",") if x] if arg.subredes else None, [x for x in arg.dns.split(",") if x], arg.lease, arg.max_por_puerto, extras=extras,
+        cfg = construir(plan, [x for x in arg.subredes.split(",") if x] if arg.subredes else None, [x for x in arg.dns.split(",") if x], arg.lease, arg.max_por_puerto, extras=extras, rutas=[x for x in arg.rutas.split(",") if x],
                         presencia={"sondeoLentoSeg": arg.sondeo_lento, **({"policyMapperUrl": arg.pm_url, "policyMapperToken": os.environ.get("PRESENCIA_TOKEN", "")} if arg.pm_url else {})})
     except (OSError, ValueError) as e:
         print("DETENIDO:", e)

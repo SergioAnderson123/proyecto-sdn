@@ -251,6 +251,14 @@ public final class Servidor {
             opciones.add(opcion(DHCPOptionCode.OPtionCode_RebindingTime, entero((int) (s.leaseSeg * 7L / 8))));
             opciones.add(opcion(DHCPOptionCode.OptionCode_SubnetMask, entero(s.mascara)));
             opciones.add(opcion(DHCPOptionCode.OptionCode_RouterAddress, entero(s.gateway)));
+            if (!s.rutas.isEmpty()) {
+                DhcpOption sinClase = new DhcpOption();                              // opcion 121 (RFC 3442): rutas por el gateway de la subred; el cliente que la entiende ignora la opcion 3
+                byte[] rutas = s.opcionRutasSinClase();
+                sinClase.setCode((byte) 121);
+                sinClase.setLength((byte) rutas.length);
+                sinClase.setData(rutas);
+                opciones.add(sinClase);
+            }
             opciones.add(opcion(DHCPOptionCode.OptionCode_BroadcastAddress, entero(s.broadcast())));
             if (!s.dns.isEmpty()) {
                 ByteBuffer b = ByteBuffer.allocate(4 * s.dns.size());

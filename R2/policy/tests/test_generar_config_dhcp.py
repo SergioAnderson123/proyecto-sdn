@@ -96,5 +96,31 @@ class TestBloqueDhcpDelPlan(unittest.TestCase):
                 g.construir(self.plan, extras={"acc-1": malo})
 
 
+    def test_el_plan_anuncia_las_rutas_de_la_opcion_121_por_el_gateway_de_cada_subred(self):
+        c = g.construir(self.plan, extras={"acc-1": {"rutas": ["10.0.0.0/16"]}, "acc-2": {"rutas": ["10.0.0.0/16", "172.16.0.0/12"]}})["campusdhcp"]
+        self.assertEqual(c["subredes"][0]["rutas"], ["10.0.0.0/16"])
+        self.assertEqual(c["subredes"][1]["rutas"], ["10.0.0.0/16", "172.16.0.0/12"])
+
+    def test_sin_rutas_no_aparece_la_clave_y_el_valor_general_las_pone_en_todas(self):
+        self.assertNotIn("rutas", g.construir(self.plan, extras={"acc-1": {}, "acc-2": {}})["campusdhcp"]["subredes"][0])
+        general = g.construir(self.plan, extras={"acc-1": {}, "acc-2": {}}, rutas=["10.0.0.0/16"])["campusdhcp"]["subredes"]
+        self.assertEqual([s["rutas"] for s in general], [["10.0.0.0/16"], ["10.0.0.0/16"]])
+        propia = g.construir(self.plan, extras={"acc-1": {"rutas": ["192.168.0.0/16"]}}, rutas=["10.0.0.0/16"])["campusdhcp"]["subredes"][0]
+        self.assertEqual(propia["rutas"], ["192.168.0.0/16"])                          # la de la subred manda sobre la general
+
+    def test_rutas_invalidas_se_rechazan(self):
+        for malas in (["10.0.0.1/16"],                                               # bits de host
+                      ["10.0.0.0/33"],                                               # longitud fuera de rango
+                      ["no-es-una-red"],
+                      ["10.0.0.0/16", "10.0.0.0/16"],                                # repetida
+                      ["10.%d.0.0/16" % i for i in range(29)]):                      # demasiadas para la opcion 121
+            with self.assertRaises(l3.PlanInvalido, msg=str(malas)):
+                g.construir(self.plan, extras={"acc-1": {"rutas": malas}})
+
+    def test_el_plan_de_la_slice_anuncia_el_agregado_del_campus(self):
+        c = g.construir(self.plan, extras={s["nombre"]: s["dhcp"] for s in json.load(open(PLAN, encoding="utf-8"))["subredes"] if "dhcp" in s})["campusdhcp"]
+        self.assertEqual([s["rutas"] for s in c["subredes"]], [["10.0.0.0/16"], ["10.0.0.0/16"]])
+
+
 if __name__ == "__main__":
     unittest.main()

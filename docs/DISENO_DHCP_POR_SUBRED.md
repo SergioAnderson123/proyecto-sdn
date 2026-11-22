@@ -52,6 +52,17 @@ Límite honesto: en la red virtual de VNRT apagar o bajar la interfaz de un host
 ## 4. Configuración (generada del mismo plan de subredes)
 Clave `campusdhcp`, por subred: switch, puertos, prefijo, gateway, ámbito dinámico, IP y MAC del servidor virtual (`.250`), DNS, concesión. Un generador (como `generar_config_gateway_arp.py`) la saca de `R2/policy/planes/*.json`. Las estáticas (`.1-.99`: server, portal, servicios) quedan fuera del ámbito y siguen en `hosts_fijos`.
 
+### 4 bis. Rutas por DHCP: la opción 121 (RFC 3442)
+**Para qué.** Con solo la opción 3 (router) el cliente aprende una ruta por defecto. Los hosts de la slice tienen dos tarjetas: `ens3` (gestión, con su propia ruta por defecto) y `ens4` (campus). Si `ens4` aceptara también la ruta por defecto de DHCP, habría dos rutas por defecto compitiendo y se podría afectar a la gestión, así que sus netplan llevan `use-routes: false`; sin ella, `ens4` solo sabía llegar a su propia subred y la ruta hacia el resto del campus (`10.0.0.0/16 via <gateway>`) estaba **escrita a mano** en cada netplan. La opción 121 permite que esa ruta la anuncie la app.
+
+**Qué hace la app.** Si una subred tiene `rutas` en su bloque `dhcp` del plan (`R2/policy/planes/vnrt_topologia14.json`: `"dhcp": {"leaseSeg": 900, "rutas": ["10.0.0.0/16"]}`), el OFFER y el ACK llevan la opción 121 con cada red y **el gateway de esa subred** (acc-1: `10.0.1.254`; acc-2: `10.0.2.254`). La opción 3 se sigue mandando (la 121 se suma, no la reemplaza). Un NAK no lleva rutas. Sin `rutas` no se manda la opción, y un cliente que no la entiende la ignora.
+
+**Formato.** Por cada ruta: 1 byte con la longitud del prefijo, los `(longitud + 7) / 8` octetos significativos de la red y los 4 octetos del gateway. `10.0.0.0/16 via 10.0.1.254` son 7 bytes: `16, 10, 0, 10, 0, 1, 254`. Máximo 255 bytes en total (28 rutas); el generador y la app rechazan redes con bits de host, rutas repetidas o demasiadas.
+
+**Cómo se prueba.** Java: 7 pruebas nuevas en `ServidorTest` (bytes exactos de OFFER y ACK, sin rutas, NAK, codificación de /24, /12, /32 y /0, rechazos). Python: `tests/test_generar_config_dhcp.py`. En vivo: el cliente de `83_prueba_dhcp.yml` decodifica la opción y la muestra como `"rutas": ["10.0.0.0/16 via 10.0.1.254"]`. En un host real, `94_hosts_dhcp.yml -e rutas_dhcp=true` pone `use-routes: true` conservando la ruta fija (retroceso inmediato), y con `-e ruta_fija=false` la deja solo por DHCP.
+
+**Pendiente de comprobar en un host real (hipótesis).** La RFC dice que un cliente que recibe la 121 debe ignorar la opción 3. Que `systemd-networkd` lo haga así con `use-routes: true` no está probado: si instalara también una ruta por defecto por `ens4`, habría que revisar el netplan antes de quitar la ruta fija.
+
 ## 5. Qué se puede probar sin tocar hosts reales
 - **Offline:** la lógica del ámbito (asignar, renovar, vencer, no repetir, ámbito agotado) y la construcción de OFFER y ACK se prueban con pruebas Java ejecutadas en Docker, sin ONOS.
 - **En vivo y aislado:** un cliente DHCP de prueba en h1 con una **interfaz macvlan** (otra MAC sobre ens4, que entra por acc-1/1): obtiene IP de `10.0.1.0/24`, se ve en `/hosts` con su IP, y el vigilante monta su /32 (comprobable sin tráfico de usuarios). Se retira borrando la interfaz.
