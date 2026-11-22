@@ -1,6 +1,7 @@
 # PRUEBA EN VIVO de la app DHCP por subred (82) con interfaces MACVLAN en h1: cada una tiene su propia MAC (02:aa:bb:00:01:NN) y entra por acc-1/1 como un equipo distinto, SIN tocar la IP real de h1.
 #   PLAYBOOK=83_prueba_dhcp.yml ./lanzar.sh                              # prueba=una: un cliente pide IP, se mira ONOS y el vigilante, y libera (RELEASE)
 #   PLAYBOOK=83_prueba_dhcp.yml ./lanzar.sh -e prueba=agotamiento        # 6 clientes con MAC distintas a la vez: la CUOTA por puerto (3) debe dejar solo 3 con IP
+#   PLAYBOOK=83_prueba_dhcp.yml ./lanzar.sh -e prueba=ocupada            # SONDEO ARP PREVIO (opcion B): una macvlan `sq1` hace de equipo con IP FIJA (10.0.1.150, dentro del ambito .100-.199) y el cliente PIDE esa IP: el servidor no debe ofrecerla
 # Requisitos: 82_dhcp_app.yml aplicado (la app DHCP estandar desactivada). Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh.
 # El cliente es files/cliente_dhcp_prueba.py (DISCOVER, REQUEST y RELEASE por un socket crudo): NO configura ninguna IP, ruta ni DNS en h1 y no depende de dhclient. Sus tramas se comprobaron contra el servidor Java (ClientePruebaTest).
 # Los clientes corren con `async` de Ansible: en dos intentos con `nohup ... &` el proceso moria al cerrarse la tarea y nunca enviaba su RELEASE. Las interfaces y los procesos se borran SIEMPRE al final; h1 no pierde su IP, su ruta ni su sesion.
@@ -11,8 +12,10 @@
   gather_facts: false
   vars:
     prueba: una
-    n: "{{ 1 if prueba == 'una' else 6 }}"
-    mantener: "{{ 15 if prueba == 'una' else 45 }}"
+    n: "{{ 6 if prueba == 'agotamiento' else 1 }}"
+    mantener: "{{ 45 if prueba == 'agotamiento' else 15 }}"
+    ip_ocupada: 10.0.1.150          # prueba=ocupada: la IP fija del equipo simulado y la que pide el cliente
+    mac_ocupada: "02:aa:bb:00:01:0f"
   tasks:
     - name: Copiar el cliente de prueba
       ansible.builtin.copy:
@@ -26,10 +29,31 @@
           touch /tmp/dhcp_prueba_parar; sleep 3
           pkill -TERM -f '[c]liente_dhcp_prueba.py' 2>/dev/null; sleep 1
           for i in 1 2 3 4 5 6; do ip link del dhc$i 2>/dev/null; rm -f /tmp/dhcp_prueba_dhc$i.json /tmp/dhc$i.log; done
+          ip link del sq1 2>/dev/null
+          [ -f /tmp/arp_ignore_ens4.orig ] && sysctl -qw net.ipv4.conf.ens4.arp_ignore=$(cat /tmp/arp_ignore_ens4.orig) && rm -f /tmp/arp_ignore_ens4.orig
           rm -f /tmp/dhcp_prueba_parar
           true
       changed_when: false
       tags: [probar, limpiar]
+
+    - name: prueba=ocupada, crear el equipo con IP fija (macvlan sq1 con 10.0.1.150/32 y su propia MAC); ens4 deja de contestar por IPs que no son suyas (arp_ignore=1, se restaura al limpiar) para que conteste SOLO sq1
+      ansible.builtin.shell:
+        cmd: |
+          cat /proc/sys/net/ipv4/conf/ens4/arp_ignore > /tmp/arp_ignore_ens4.orig
+          sysctl -qw net.ipv4.conf.ens4.arp_ignore=1
+          ip link add link ens4 name sq1 address {{ mac_ocupada }} type macvlan mode bridge
+          ip link set sq1 up
+          ip addr add {{ ip_ocupada }}/32 dev sq1
+          ip -br addr show sq1
+          echo "arp_ignore de ens4 (antes: $(cat /tmp/arp_ignore_ens4.orig)): $(cat /proc/sys/net/ipv4/conf/ens4/arp_ignore)"
+      register: squatter
+      changed_when: true
+      when: prueba == 'ocupada'
+
+    - name: prueba=ocupada, el equipo simulado
+      ansible.builtin.debug:
+        msg: "{{ squatter.stdout_lines }}"
+      when: prueba == 'ocupada'
 
     - name: Crear las interfaces macvlan de prueba
       ansible.builtin.shell:
@@ -44,7 +68,7 @@
 
     - name: Lanzar los clientes todos a la vez (async de Ansible; cada uno termina solo tras enviar su RELEASE)
       ansible.builtin.shell:
-        cmd: "python3 /tmp/cliente_dhcp_prueba.py --iface dhc{{ item }} --mac 02:aa:bb:00:01:0{{ item }} --salida /tmp/dhcp_prueba_dhc{{ item }}.json --mantener {{ mantener }} > /tmp/dhc{{ item }}.log 2>&1"
+        cmd: "python3 /tmp/cliente_dhcp_prueba.py --iface dhc{{ item }} --mac 02:aa:bb:00:01:0{{ item }} --salida /tmp/dhcp_prueba_dhc{{ item }}.json --mantener {{ mantener }}{{ (' --pedir ' ~ ip_ocupada) if prueba == 'ocupada' else '' }} > /tmp/dhc{{ item }}.log 2>&1"
       async: 150
       poll: 0
       loop: "{{ range(1, n | int + 1) | list }}"
@@ -102,7 +126,7 @@
         msg:
           - "{{ onos.stdout_lines }}"
           - "{{ logapp.stdout_lines }}"
-          - "Esperado (prueba=una): 1 equipo con IP de 10.0.1.100 a 199, ubicado en acc-1/1, con regla_entrega_32=SI. Esperado (prueba=agotamiento): solo 3 equipos con IP (maxPorPuerto) y en el log un aviso de cuota agotada."
+          - "Esperado (prueba=una): 1 equipo con IP de 10.0.1.100 a 199, ubicado en acc-1/1, con regla_entrega_32=SI. Esperado (prueba=agotamiento): solo 3 equipos con IP (maxPorPuerto) y en el log un aviso de cuota agotada. Esperado (prueba=ocupada): el cliente recibe ACK con una IP DISTINTA de 10.0.1.150 (con el sondeo previo activo; con `-e sondeo_previo_ms=0` en el 82 recibiria 10.0.1.150, la IP del equipo fijo), y el log trae 'la IP 10.0.1.150 ya la usa 02:aa:bb:00:01:0f ... se aparta y se busca otra'."
 
 - name: Prueba DHCP, paso 3 - esperar el RELEASE y limpiar (siempre)
   hosts: h1-profesor
@@ -143,8 +167,11 @@
             cmd: |
               touch /tmp/dhcp_prueba_parar; sleep 1
               for i in 1 2 3 4 5 6; do ip link del dhc$i 2>/dev/null; rm -f /tmp/dhcp_prueba_dhc$i.json /tmp/dhc$i.log; done
+              ip link del sq1 2>/dev/null
+              [ -f /tmp/arp_ignore_ens4.orig ] && sysctl -qw net.ipv4.conf.ens4.arp_ignore=$(cat /tmp/arp_ignore_ens4.orig) && rm -f /tmp/arp_ignore_ens4.orig
               rm -f /tmp/cliente_dhcp_prueba.py /tmp/dhcp_prueba_parar
-              echo "interfaces dhc que quedan: $(ip -br link show | grep -c dhc)"
+              echo "interfaces dhc y sq que quedan: $(ip -br link show | grep -c -E 'dhc|sq1')"
+              echo "arp_ignore de ens4: $(cat /proc/sys/net/ipv4/conf/ens4/arp_ignore) (el de siempre es 0)"
               echo "direcciones de ens4: $(ip -4 -o addr show dev ens4 | awk '{print $4}' | tr '\n' ' ')"
           register: limpio
           changed_when: true
@@ -163,6 +190,16 @@
       ansible.builtin.shell:
         cmd: "sleep 6"
       changed_when: false
+
+    - name: prueba=ocupada, borrar de ONOS el equipo simulado (ONOS lo aprendio por su respuesta ARP; la MAC es de la prueba, no de h1)
+      ansible.builtin.uri:
+        url: "http://{{ onos_ip }}:8181/onos/v1/hosts/02:AA:BB:00:01:0F/None"
+        method: DELETE
+        user: "{{ onos_user }}"
+        password: "{{ onos_pass }}"
+        force_basic_auth: true
+        status_code: [200, 204, 404]
+      when: prueba | default('una') == 'ocupada'
 
     - name: Equipos de la prueba en ONOS (ips=[] = retiradas) y reglas de entrega que quedan
       ansible.builtin.command:

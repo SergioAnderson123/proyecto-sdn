@@ -13,6 +13,7 @@ import org.onlab.packet.dhcp.DhcpOption;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -51,16 +52,47 @@ public final class Servidor {
         }
     }
 
-    /** Lo que hay que hacer con un paquete: contestar (o no) y/o avisar a ONOS; `motivo` explica por que no se contesto. */
+    /** Un sondeo ARP que la app debe emitir: "quien tiene `ip`?" por los puertos de acceso de la subred, antes de ofrecerla (opcion B del diseno). */
+    public static final class Sondeo {
+        public final Subred subred;
+        public final int ip;
+
+        Sondeo(Subred subred, int ip) {
+            this.subred = subred;
+            this.ip = ip;
+        }
+    }
+
+    /**
+     * Lo que hay que hacer con un paquete: contestar (o no), avisar a ONOS y/o emitir sondeos ARP; `motivo` explica por que no se contesto.
+     * Las salidas que no responden a un paquete recien llegado (las de `tick` y `respuestaArp`) traen `device` y `puerto` (el puerto del cliente); en las de `procesar` valen null y -1.
+     * `detalle`, si no es null, es una linea para el registro (por ejemplo, que se aparto una IP porque la contesto otro equipo).
+     */
     public static final class Salida {
         public final Ethernet respuesta;
         public final Evento evento;
         public final String motivo;
+        public final List<Sondeo> sondeos;
+        public final String device;
+        public final long puerto;
+        public final String detalle;
 
         Salida(Ethernet respuesta, Evento evento, String motivo) {
+            this(respuesta, evento, motivo, Collections.<Sondeo>emptyList(), null, -1L, null);
+        }
+
+        Salida(Ethernet respuesta, Evento evento, String motivo, List<Sondeo> sondeos, String device, long puerto, String detalle) {
             this.respuesta = respuesta;
             this.evento = evento;
             this.motivo = motivo;
+            this.sondeos = sondeos;
+            this.device = device;
+            this.puerto = puerto;
+            this.detalle = detalle;
+        }
+
+        Salida conOrigen(String dispositivo, long numero, String aviso) {
+            return new Salida(respuesta, evento, motivo, sondeos, dispositivo, numero, aviso);
         }
 
         static Salida ignorar(String motivo) {
@@ -68,11 +100,42 @@ public final class Servidor {
         }
     }
 
+    /** Una oferta o un ACK que espera la respuesta del sondeo ARP previo: si nadie contesta antes de `vence`, se concluye; si contesta otro equipo, la IP se aparta. */
+    private static final class Pendiente {
+        final boolean oferta;                 // true: falta enviar el OFFER; false: falta confirmar un REQUEST (ACK o NAK)
+        final Subred subred;
+        final DHCP dhcp;
+        final MacAddress mac;
+        final String clavePuerto;
+        final int ip;
+        final int intento;
+        final long vence;
+
+        Pendiente(boolean oferta, Subred subred, DHCP dhcp, MacAddress mac, String clavePuerto, int ip, int intento, long vence) {
+            this.oferta = oferta;
+            this.subred = subred;
+            this.dhcp = dhcp;
+            this.mac = mac;
+            this.clavePuerto = clavePuerto;
+            this.ip = ip;
+            this.intento = intento;
+            this.vence = vence;
+        }
+    }
+
+    /** Tope de equipos esperando el sondeo previo a la vez (las ofertas ya estan acotadas por la cuota de cada puerto; los REQUEST sin registro no reservan nada). */
+    private static final int MAX_PENDIENTES = 256;
+
     private final List<Subred> subredes;
     private final Map<String, Pool> pools = new HashMap<>();
     private final Limitador limitador;
+    private final Politica politica;
+    private final boolean sondeoPrevio;
+    private final Map<MacAddress, Pendiente> pendientes = new HashMap<>();
 
     public Servidor(List<Subred> subredes, Politica politica) {
+        this.politica = politica;
+        this.sondeoPrevio = politica.sondeoPrevioMs > 0;
         this.subredes = new ArrayList<>(subredes);
         for (Subred s : subredes) {
             pools.put(s.nombre, new Pool(s, politica));
@@ -259,14 +322,131 @@ public final class Servidor {
     }
 
     private Salida discover(Subred subred, Pool pool, DHCP dhcp, MacAddress mac, String clavePuerto, long ahora) {
+        if (enEspera(mac)) {
+            return Salida.ignorar("sondeo previo en curso");                  // el DISCOVER repetido del cliente no abre un segundo sondeo ni gasta limite de tasa
+        }
         if (!limitador.permitir(clavePuerto, ahora)) {
             return Salida.ignorar("limite de tasa del puerto " + clavePuerto);
         }
-        Pool.Oferta oferta = pool.ofrecer(mac, clavePuerto, opcionIp(dhcp, DHCPOptionCode.OptionCode_RequestedIP), ahora);
+        return ofertar(subred, pool, dhcp, mac, clavePuerto, opcionIp(dhcp, DHCPOptionCode.OptionCode_RequestedIP), 1, ahora);
+    }
+
+    /**
+     * Reserva una IP para el cliente y la ofrece. Si es una IP nueva y el sondeo previo esta activo, NO se ofrece todavia: se pide a la app que pregunte por ARP si alguien la usa
+     * y la oferta queda en espera (`tick` la concluye si nadie contesta; `respuestaArp` la cambia por otra IP si alguien contesta). Una oferta o concesion que el cliente ya tenia no se vuelve a sondear.
+     */
+    private Salida ofertar(Subred subred, Pool pool, DHCP dhcp, MacAddress mac, String clavePuerto, int pedida, int intento, long ahora) {
+        Pool.Oferta oferta = pool.ofrecer(mac, clavePuerto, pedida, ahora);
         if (oferta.ip == null) {
             return Salida.ignorar(oferta.rechazo == Pool.Rechazo.CUOTA_PUERTO ? "cuota del puerto " + clavePuerto + " agotada" : "ambito agotado");
         }
-        return new Salida(respuesta(subred, dhcp, mac, MsgType.DHCPOFFER, oferta.ip), null, "oferta");
+        if (!sondeoPrevio || !oferta.nueva) {
+            return new Salida(respuesta(subred, dhcp, mac, MsgType.DHCPOFFER, oferta.ip), null, "oferta");
+        }
+        if (intento > politica.sondeoIntentos) {
+            pool.liberar(mac);
+            return Salida.ignorar("sin IP libre comprobada por ARP tras " + politica.sondeoIntentos + " intentos");
+        }
+        return esperar(true, subred, dhcp, mac, clavePuerto, oferta.ip, intento, ahora);
+    }
+
+    /** Deja la oferta o el REQUEST en espera de la respuesta ARP y pide el sondeo. */
+    private Salida esperar(boolean oferta, Subred subred, DHCP dhcp, MacAddress mac, String clavePuerto, int ip, int intento, long ahora) {
+        int corte = clavePuerto.lastIndexOf('/');
+        synchronized (pendientes) {
+            if (pendientes.size() >= MAX_PENDIENTES && !pendientes.containsKey(mac)) {
+                pools.get(subred.nombre).liberar(mac);
+                return Salida.ignorar("demasiados equipos esperando el sondeo previo");
+            }
+            pendientes.put(mac, new Pendiente(oferta, subred, dhcp, mac, clavePuerto, ip, intento, ahora + politica.sondeoPrevioMs));
+        }
+        return new Salida(null, null, "sondeo previo", Collections.singletonList(new Sondeo(subred, ip)),
+                clavePuerto.substring(0, corte), Long.parseLong(clavePuerto.substring(corte + 1)), null);
+    }
+
+    private boolean enEspera(MacAddress mac) {
+        synchronized (pendientes) {
+            return pendientes.containsKey(mac);
+        }
+    }
+
+    /**
+     * Cada ~100 ms: concluye lo que esperaba el sondeo previo y nadie contesto antes de su plazo. Devuelve las respuestas a enviar (OFFER, ACK o NAK) con el puerto del cliente.
+     * Una oferta cuya reserva se perdio entretanto (vencio) y recibe otra IP vuelve a esperar el sondeo de la nueva.
+     */
+    public List<Salida> tick(long ahora) {
+        List<Pendiente> vencidos = new ArrayList<>();
+        synchronized (pendientes) {
+            java.util.Iterator<Map.Entry<MacAddress, Pendiente>> it = pendientes.entrySet().iterator();
+            while (it.hasNext()) {
+                Pendiente p = it.next().getValue();
+                if (p.vence <= ahora) {
+                    vencidos.add(p);
+                    it.remove();
+                }
+            }
+        }
+        List<Salida> salidas = new ArrayList<>();
+        for (Pendiente p : vencidos) {
+            Pool pool = pools.get(p.subred.nombre);
+            int corte = p.clavePuerto.lastIndexOf('/');
+            String device = p.clavePuerto.substring(0, corte);
+            long puerto = Long.parseLong(p.clavePuerto.substring(corte + 1));
+            Salida s;
+            if (p.oferta) {
+                Pool.Oferta o = pool.ofrecer(p.mac, p.clavePuerto, 0, ahora);                 // renueva la reserva (la oferta dura ofertaSeg desde ahora)
+                if (o.ip == null) {
+                    s = Salida.ignorar("la oferta ya no se puede dar: " + (o.rechazo == Pool.Rechazo.CUOTA_PUERTO ? "cuota del puerto agotada" : "ambito agotado"));
+                } else if (o.ip == p.ip) {
+                    s = new Salida(respuesta(p.subred, p.dhcp, p.mac, MsgType.DHCPOFFER, p.ip), null, "oferta");
+                } else if (p.intento + 1 > politica.sondeoIntentos) {
+                    pool.liberar(p.mac);
+                    s = Salida.ignorar("sin IP libre comprobada por ARP tras " + politica.sondeoIntentos + " intentos");
+                } else {
+                    s = esperar(true, p.subred, p.dhcp, p.mac, p.clavePuerto, o.ip, p.intento + 1, ahora);
+                }
+            } else {
+                s = concluirRequest(p.subred, pool, p.dhcp, p.mac, p.clavePuerto, p.ip, ahora);
+            }
+            salidas.add(s.conOrigen(device, puerto, null));
+        }
+        return salidas;
+    }
+
+    /**
+     * Llego una respuesta ARP de `mac` que dice tener `ip` (la app solo la pasa si iba dirigida al gateway). Si hay un cliente esperando precisamente esa IP y quien contesta no es el propio cliente,
+     * la IP esta en uso: se aparta y la oferta busca otra (nueva espera de sondeo) o el REQUEST recibe NAK. Devuelve la salida a despachar, o null si esa respuesta no era de ningun sondeo previo.
+     */
+    public Salida respuestaArp(int ip, MacAddress mac, long ahora) {
+        Pendiente p = null;
+        synchronized (pendientes) {
+            for (Pendiente q : pendientes.values()) {
+                if (q.ip == ip && !q.mac.equals(mac)) {
+                    p = q;
+                    break;
+                }
+            }
+            if (p != null) {
+                pendientes.remove(p.mac);
+            }
+        }
+        if (p == null) {
+            return null;
+        }
+        Pool pool = pools.get(p.subred.nombre);
+        pool.apartar(ip, ahora);
+        int corte = p.clavePuerto.lastIndexOf('/');
+        String device = p.clavePuerto.substring(0, corte);
+        long puerto = Long.parseLong(p.clavePuerto.substring(corte + 1));
+        String detalle = "la IP " + Ip4Address.valueOf(ip) + " ya la usa " + mac + " (contesto al sondeo ARP previo a " + p.mac + "): se aparta " + (p.oferta ? "y se busca otra" : "y se rechaza el REQUEST");
+        Salida s;
+        if (p.oferta) {
+            pool.liberar(p.mac);
+            s = ofertar(p.subred, pool, p.dhcp, p.mac, p.clavePuerto, 0, p.intento + 1, ahora);
+        } else {
+            s = new Salida(respuesta(p.subred, p.dhcp, p.mac, MsgType.DHCPNAK, 0), null, "nak");
+        }
+        return s.conOrigen(device, puerto, detalle);
     }
 
     private Salida request(Subred subred, Pool pool, DHCP dhcp, MacAddress mac, String clavePuerto, long ahora) {
@@ -284,6 +464,16 @@ public final class Servidor {
         if (pedida == 0) {
             return Salida.ignorar("REQUEST sin IP");
         }
+        if (enEspera(mac)) {
+            return Salida.ignorar("sondeo previo en curso");
+        }
+        if (sondeoPrevio && subred.contiene(pedida) && pool.requiereVerificar(mac, clavePuerto, pedida, ahora)) {
+            return esperar(false, subred, dhcp, mac, clavePuerto, pedida, 1, ahora);   // el equipo no tiene registro con nosotros: antes de darle esa IP se comprueba que nadie la use
+        }
+        return concluirRequest(subred, pool, dhcp, mac, clavePuerto, pedida, ahora);
+    }
+
+    private Salida concluirRequest(Subred subred, Pool pool, DHCP dhcp, MacAddress mac, String clavePuerto, int pedida, long ahora) {
         Pool.Concesion c = subred.contiene(pedida) ? pool.confirmar(mac, clavePuerto, pedida, ahora) : null;
         if (c == null) {
             return new Salida(respuesta(subred, dhcp, mac, MsgType.DHCPNAK, 0), null, "nak");

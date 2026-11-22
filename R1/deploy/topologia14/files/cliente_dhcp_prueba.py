@@ -129,6 +129,7 @@ def main():
     a.add_argument("--mac", required=True)
     a.add_argument("--salida", required=True)
     a.add_argument("--mantener", type=int, default=0, help="segundos que se mantiene la concesion antes de enviar RELEASE (0 = no se libera)")
+    a.add_argument("--pedir", default="", help="IP que el cliente pide en su DISCOVER (opcion 50), por ejemplo la de un equipo con IP fija: el servidor no debe ofrecerla si ese equipo contesta al sondeo ARP previo")
     a.add_argument("--parar", default="/tmp/dhcp_prueba_parar", help="si este archivo existe mientras se mantiene la concesion, se envia el RELEASE ya (parada ordenada, sin senales)")
     arg = a.parse_args()
     signal.signal(signal.SIGTERM, lambda *_: globals().__setitem__("parar", True))
@@ -140,7 +141,7 @@ def main():
     oferta = None
     for intento in range(5):
         xid = random.getrandbits(32)
-        sock.send(trama(mac, xid, DISCOVER, b"\0" * 4, b"\xff" * 4, difusion, b"\0" * 4))
+        sock.send(trama(mac, xid, DISCOVER, b"\0" * 4, b"\xff" * 4, difusion, b"\0" * 4, [(50, socket.inet_aton(arg.pedir))] if arg.pedir else ()))
         oferta = esperar(sock, mac, xid, {OFFER}, 2.5)
         if oferta:
             break

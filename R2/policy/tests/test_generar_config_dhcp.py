@@ -31,6 +31,18 @@ class TestConfigDhcp(unittest.TestCase):
         self.assertEqual(c["presencia"], {"intervaloSeg": 5, "intentos": 3, "sondeoLentoSeg": 120})
         self.assertNotIn("policyMapperToken", c["presencia"])                       # la clave nunca viene del plan: solo del entorno al generar
 
+    def test_el_sondeo_arp_previo_a_ofrecer_una_ip_va_activo_por_defecto_y_se_puede_apagar(self):
+        import tempfile
+        c = g.construir(self.plan)["campusdhcp"]["politica"]
+        self.assertEqual((c["sondeoPrevioMs"], c["sondeoIntentos"]), (800, 5))
+        salida = os.path.join(tempfile.mkdtemp(), "c.json")
+        self.assertEqual(g.main(["--plan", PLAN, "--sondeo-previo-ms", "0", "--sondeo-intentos", "3", "--salida", salida]), 0)
+        with open(salida, encoding="utf-8") as f:
+            pol = json.load(f)["campusdhcp"]["politica"]
+        self.assertEqual((pol["sondeoPrevioMs"], pol["sondeoIntentos"], pol["maxPorPuerto"]), (0, 3, 3))
+        self.assertEqual(g.main(["--plan", PLAN, "--sondeo-previo-ms", "-1", "--salida", salida]), 2)           # valor invalido: se detiene sin escribir
+        self.assertEqual(g.main(["--plan", PLAN, "--sondeo-intentos", "0", "--salida", salida]), 2)
+
     def test_la_url_y_la_clave_del_policy_mapper_vienen_de_la_linea_de_comandos_y_del_entorno(self):
         import tempfile
         salida = os.path.join(tempfile.mkdtemp(), "c.json")

@@ -21,10 +21,13 @@ public final class Pool {
     public static final class Oferta {
         public final Integer ip;
         public final Rechazo rechazo;
+        /** true si la IP se acaba de reservar para este cliente (hay que comprobar por ARP que nadie la usa); false si ya era suya (oferta o concesion previas). */
+        public final boolean nueva;
 
-        Oferta(Integer ip, Rechazo rechazo) {
+        Oferta(Integer ip, Rechazo rechazo, boolean nueva) {
             this.ip = ip;
             this.rechazo = rechazo;
+            this.nueva = nueva;
         }
     }
 
@@ -77,10 +80,10 @@ public final class Pool {
             if (!a.confirmada) {
                 a.expira = ahora + politica.ofertaSeg * 1000L;
             }
-            return new Oferta(ya, null);
+            return new Oferta(ya, null, false);
         }
         if (usoDelPuerto(puerto) >= politica.maxPorPuerto) {
-            return new Oferta(null, Rechazo.CUOTA_PUERTO);
+            return new Oferta(null, Rechazo.CUOTA_PUERTO, false);
         }
         Integer elegida = null;
         if (pedida != 0 && libre(pedida, ahora)) {
@@ -96,10 +99,26 @@ public final class Pool {
             }
         }
         if (elegida == null) {
-            return new Oferta(null, Rechazo.AGOTADO);
+            return new Oferta(null, Rechazo.AGOTADO, false);
         }
         asignar(mac, puerto, elegida, ahora + politica.ofertaSeg * 1000L, false);
-        return new Oferta(elegida, null);
+        return new Oferta(elegida, null, true);
+    }
+
+    /**
+     * Un equipo sin registro con nosotros pide una IP (REQUEST de arranque con una IP anterior): ¿hay que comprobar por ARP que nadie la usa antes de confirmarla?
+     * Si, cuando todavia se le podria dar (esta libre y su puerto tiene cuota); en cualquier otro caso `confirmar` ya contestara NAK sin necesidad de sondear.
+     */
+    public synchronized boolean requiereVerificar(MacAddress mac, String puerto, int ip, long ahora) {
+        purgar(ahora);
+        return !porMac.containsKey(mac) && usoDelPuerto(puerto) < politica.maxPorPuerto && libre(ip, ahora);
+    }
+
+    /** Alguien que no es el cliente contesto al sondeo ARP de esta IP: ya esta en uso (por ejemplo, un equipo con IP fija dentro del ambito). Se aparta el tiempo de una IP declinada. */
+    public synchronized void apartar(int ip, long ahora) {
+        if (subred.contiene(ip)) {
+            declinadas.put(ip, ahora + politica.declinadaSeg * 1000L);
+        }
     }
 
     /**

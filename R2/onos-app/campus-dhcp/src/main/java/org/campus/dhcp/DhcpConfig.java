@@ -13,7 +13,7 @@ import java.util.Set;
 /**
  * Configuracion de la app (clave "campusdhcp" en apps/org.campus.dhcp), generada del plan de subredes por R2/policy/generar_config_dhcp.py:
  * {"servidorMac": "02:00:5E:00:00:FD",
- *  "politica": {"maxPorPuerto": 3, "ofertaSeg": 15, "solicitudesPorSeg": 2.0, "rafaga": 8, "declinadaSeg": 300},
+ *  "politica": {"maxPorPuerto": 3, "ofertaSeg": 15, "solicitudesPorSeg": 2.0, "rafaga": 8, "declinadaSeg": 300, "sondeoPrevioMs": 800, "sondeoIntentos": 5},
  *  "subredes": [{"nombre": "acc-1", "device": "of:0000e6925d87354b", "puertos": [1], "prefijo": "10.0.1.0/24", "gateway": "10.0.1.254",
  *                "inicio": "10.0.1.100", "fin": "10.0.1.199", "servidor": "10.0.1.250", "dns": ["8.8.8.8"], "leaseSeg": 3600,
  *                "rutas": ["10.0.0.0/16"]}]}
@@ -83,7 +83,9 @@ public class DhcpConfig extends Config<ApplicationId> {
                 p.has("ofertaSeg") ? p.get("ofertaSeg").asInt() : d.ofertaSeg,
                 p.has("solicitudesPorSeg") ? p.get("solicitudesPorSeg").asDouble() : d.solicitudesPorSeg,
                 p.has("rafaga") ? p.get("rafaga").asInt() : d.rafaga,
-                p.has("declinadaSeg") ? p.get("declinadaSeg").asInt() : d.declinadaSeg);
+                p.has("declinadaSeg") ? p.get("declinadaSeg").asInt() : d.declinadaSeg,
+                p.has("sondeoPrevioMs") ? p.get("sondeoPrevioMs").asInt() : d.sondeoPrevioMs,
+                p.has("sondeoIntentos") ? p.get("sondeoIntentos").asInt() : d.sondeoIntentos);
     }
 
     public List<Subred> subredes() {

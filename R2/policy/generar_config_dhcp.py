@@ -3,6 +3,7 @@
     python3 generar_config_dhcp.py --plan planes/vnrt_topologia14.json                       # imprime el JSON (las subredes de acceso: nombre que empieza por "acc")
     python3 generar_config_dhcp.py --plan ... --subredes acc-1,acc-2 --salida config.json
     python3 generar_config_dhcp.py --plan ... --max-por-puerto 5 --dns 8.8.8.8,1.1.1.1
+    python3 generar_config_dhcp.py --plan ... --sondeo-previo-ms 0                           # sin sondeo ARP previo a ofrecer una IP (por defecto 800 ms)
 
 Por cada subred /24 elegida: ambito dinamico .100 a .199 (el resto queda para IP fijas: .1 a .99 y .200 a .249), servidor DHCP virtual en .250 y gateway el del plan.
 Cada subred del PLAN puede traer su propio bloque "dhcp" que cambia esos valores (inicio, fin, servidor, dns, leaseSeg = segundos de concesion y rutas = redes que se anuncian al cliente por el gateway de la subred con la opcion 121 del DHCP, RFC 3442), por ejemplo:
@@ -65,7 +66,8 @@ def construir(plan: l3.Plan, subredes=None, dns=("8.8.8.8",), lease: int = 3600,
             raise l3.PlanInvalido("subredes que no estan en el plan: " + ", ".join(faltan))
     if not elegidas:
         raise l3.PlanInvalido("ninguna subred elegida para DHCP")
-    pol = {"maxPorPuerto": max_por_puerto, "ofertaSeg": 15, "solicitudesPorSeg": 2.0, "rafaga": 8, "declinadaSeg": 300}
+    pol = {"maxPorPuerto": max_por_puerto, "ofertaSeg": 15, "solicitudesPorSeg": 2.0, "rafaga": 8, "declinadaSeg": 300,
+           "sondeoPrevioMs": 800, "sondeoIntentos": 5}              # sondeo ARP antes de ofrecer una IP nueva (opcion B): espera 800 ms y prueba hasta 5 IP; 0 ms = sin sondeo
     pol.update(politica or {})
     pres = {"intervaloSeg": 5, "intentos": 3, "sondeoLentoSeg": 120}                  # sondeo de presencia: 3 ARP cada 5 s tras una sospecha (15 s) y una comprobacion cada 120 s
     pres.update(presencia or {})
@@ -83,6 +85,8 @@ def main(argv=None):
     a.add_argument("--pm-url", default="", help="URL del Policy Mapper (http://IP:5000) al que se avisa de un equipo ausente; sin ella solo se libera la IP")
     a.add_argument("--sondeo-lento", type=int, default=120, help="segundos entre comprobaciones de presencia de cada equipo con concesion (0 = solo tras una sospecha)")
     a.add_argument("--rutas", default="", help="redes separadas por comas que se anuncian con la opcion 121 a todas las subredes, por el gateway de cada una (p. ej. 10.0.0.0/16); cada subred del plan puede traer las suyas en su bloque dhcp")
+    a.add_argument("--sondeo-previo-ms", type=int, default=800, help="milisegundos que la app espera una respuesta ARP antes de ofrecer una IP nueva: si alguien contesta, esa IP ya esta en uso (IP fija dentro del ambito dinamico) y se ofrece otra; 0 = sin sondeo previo")
+    a.add_argument("--sondeo-intentos", type=int, default=5, help="cuantas IP candidatas prueba la app para un mismo cliente antes de desistir")
     a.add_argument("--salida")
     arg = a.parse_args(argv)
     try:
@@ -90,7 +94,10 @@ def main(argv=None):
             datos = json.load(f)
         plan = l3.cargar_plan(datos, nombres=NOMBRES)
         extras = {s.get("nombre"): s["dhcp"] for s in datos.get("subredes", []) if isinstance(s.get("dhcp"), dict)}
+        if arg.sondeo_previo_ms < 0 or arg.sondeo_intentos < 1:
+            raise ValueError("--sondeo-previo-ms debe ser >= 0 y --sondeo-intentos >= 1")
         cfg = construir(plan, [x for x in arg.subredes.split(",") if x] if arg.subredes else None, [x for x in arg.dns.split(",") if x], arg.lease, arg.max_por_puerto, extras=extras, rutas=[x for x in arg.rutas.split(",") if x],
+                        politica={"sondeoPrevioMs": arg.sondeo_previo_ms, "sondeoIntentos": arg.sondeo_intentos},
                         presencia={"sondeoLentoSeg": arg.sondeo_lento, **({"policyMapperUrl": arg.pm_url, "policyMapperToken": os.environ.get("PRESENCIA_TOKEN", "")} if arg.pm_url else {})})
     except (OSError, ValueError) as e:
         print("DETENIDO:", e)

@@ -113,6 +113,7 @@ public class CampusDhcpApp {
     private HostProviderService hostProviderService;
     private ScheduledExecutorService reloj;
     private ScheduledExecutorService avisos;                                   // un solo hilo para hablar con el Policy Mapper sin frenar al latido
+    private ScheduledExecutorService espera;                                   // hilo propio para concluir las ofertas que esperan el sondeo ARP previo (el latido de 1 s puede tardar con el mapa lento)
     private volatile Presencia presencia;
     private volatile MacAddress gwMac;
     private volatile String pmUrl = "";
@@ -246,6 +247,8 @@ public class CampusDhcpApp {
         reloj.scheduleWithFixedDelay(this::vencer, 10, 10, TimeUnit.SECONDS);
         reloj.scheduleWithFixedDelay(this::latido, 1, 1, TimeUnit.SECONDS);
         avisos = Executors.newSingleThreadScheduledExecutor();
+        espera = Executors.newSingleThreadScheduledExecutor();
+        espera.scheduleWithFixedDelay(this::diferidas, 100, 100, TimeUnit.MILLISECONDS);
         log.info("DHCP por subred iniciado (appId {})", appId.id());
     }
 
@@ -253,6 +256,7 @@ public class CampusDhcpApp {
     protected void deactivate() {
         reloj.shutdownNow();
         avisos.shutdownNow();
+        espera.shutdownNow();
         flowRuleService.removeListener(oyenteFlujos);
         flowRuleService.removeFlowRulesById(appId);
         deviceService.removeListener(oyenteDispositivos);
@@ -274,13 +278,20 @@ public class CampusDhcpApp {
             log.warn("DHCP por subred: sin configuracion valida (clave '{}' en apps/{}); no se atiende ningun puerto", CLAVE_CONFIG, APP);
             return;
         }
-        servidor = new Servidor(cfg.subredes(), cfg.politica());
-        gwMac = cfg.gwMac();
+        MacAddress gw = cfg.gwMac();
+        Politica politica = cfg.politica();
+        if (gw == null && politica.sondeoPrevioMs > 0) {
+            log.warn("DHCP por subred: el sondeo ARP previo a ofrecer una IP necesita gwMac (el emisor del ARP); se desactiva");
+            politica = politica.sinSondeoPrevio();
+        }
+        servidor = new Servidor(cfg.subredes(), politica);
+        gwMac = gw;
         presencia = gwMac == null ? null : cfg.presencia();
         pmUrl = cfg.policyMapperUrl();
         pmToken = cfg.policyMapperToken();
-        log.info("DHCP por subred: {} ambitos cargados; sondeo de presencia {}; aviso al Policy Mapper {}", cfg.subredes().size(),
-                presencia == null ? "desactivado (falta gwMac)" : "activo", pmUrl.isEmpty() ? "desactivado" : pmUrl);
+        log.info("DHCP por subred: {} ambitos cargados; sondeo de presencia {}; sondeo ARP previo a ofrecer una IP {}; aviso al Policy Mapper {}", cfg.subredes().size(),
+                presencia == null ? "desactivado (falta gwMac)" : "activo", politica.sondeoPrevioMs > 0 ? "activo (" + politica.sondeoPrevioMs + " ms, hasta " + politica.sondeoIntentos + " IP)" : "desactivado",
+                pmUrl.isEmpty() ? "desactivado" : pmUrl);
         instalarFlujosRespuesta();
         anunciadas.clear();                                                  // ONOS puede haber perdido los hosts de esta app: se vuelven a anunciar los que sean de este nodo
         restaurarDesdeMapa();
@@ -315,13 +326,39 @@ public class CampusDhcpApp {
             return;
         }
         contexto.block();                                                    // este puerto es nuestro: que ninguna otra app conteste el mismo DHCP
+        despachar(salida, origen);
+    }
+
+    /** Lo que decidio el servidor: sondeos ARP previos que emitir, la respuesta (si la hay) y el aviso a ONOS. Sirve para un paquete recien llegado y para lo que concluye `diferidas`. */
+    private void despachar(Servidor.Salida salida, ConnectPoint origen) {
+        if (salida.detalle != null) {
+            log.warn("DHCP por subred: {}", salida.detalle);
+        }
+        for (Servidor.Sondeo sondeo : salida.sondeos) {
+            emitirSondeo(sondeo);
+        }
         if (salida.respuesta != null) {
             enviar(origen, salida.respuesta);
         } else {
-            avisar(salida.motivo, device + "/" + puerto);
+            avisar(salida.motivo, origen.deviceId() + "/" + origen.port().toLong());
         }
         if (salida.evento != null) {
             avisarOnos(salida.evento, origen);
+        }
+    }
+
+    /** Cada 100 ms: las ofertas y los REQUEST que esperaban el sondeo ARP previo y nadie contesto a tiempo se concluyen (OFFER, ACK o NAK). */
+    private void diferidas() {
+        try {
+            Servidor s = servidor;
+            if (s == null) {
+                return;
+            }
+            for (Servidor.Salida salida : s.tick(System.currentTimeMillis())) {
+                despachar(salida, ConnectPoint.deviceConnectPoint(salida.device + "/" + salida.puerto));
+            }
+        } catch (RuntimeException ex) {
+            log.error("DHCP por subred: error al concluir las ofertas en espera del sondeo ARP", ex);
         }
     }
 
@@ -377,19 +414,65 @@ public class CampusDhcpApp {
         }
     }
 
-    /** Una respuesta ARP dirigida al gateway: si es de un equipo vigilado, esta vivo. */
+    /**
+     * Una respuesta ARP dirigida al gateway: dos usos. Si es de un equipo vigilado, esta vivo (presencia). Y si responde a un sondeo previo a ofrecer una IP, esa IP ya la usa quien contesta:
+     * el servidor la aparta y busca otra (un equipo con IP fija dentro del ambito dinamico).
+     */
     private void respuestaDeSondeo(PacketContext contexto, Ethernet eth) {
-        Presencia p = presencia;
         MacAddress gw = gwMac;
-        if (p == null || gw == null || !(eth.getPayload() instanceof ARP)) {
+        if (gw == null || !(eth.getPayload() instanceof ARP)) {
             return;
         }
         ARP arp = (ARP) eth.getPayload();
         if (arp.getOpCode() != ARP.OP_REPLY || !gw.equals(eth.getDestinationMAC())) {
             return;
         }
-        p.respuesta(eth.getSourceMAC(), System.currentTimeMillis());
+        long ahora = System.currentTimeMillis();
+        Presencia p = presencia;
+        if (p != null) {
+            p.respuesta(eth.getSourceMAC(), ahora);
+        }
+        Servidor s = servidor;
+        if (s != null) {
+            Servidor.Salida salida = s.respuestaArp(Ip4Address.valueOf(arp.getSenderProtocolAddress()).toInt(), eth.getSourceMAC(), ahora);
+            if (salida != null) {
+                despachar(salida, ConnectPoint.deviceConnectPoint(salida.device + "/" + salida.puerto));
+            }
+        }
         contexto.block();
+    }
+
+    /** ARP "quien tiene la IP?" (emisor: el gateway) a todos los puertos de acceso de la subred, antes de ofrecer esa IP. Si hay un equipo con ella (IP fija), contesta al gateway y lo vemos en `respuestaDeSondeo`. */
+    private void emitirSondeo(Servidor.Sondeo sondeo) {
+        MacAddress gw = gwMac;
+        if (gw == null) {
+            return;
+        }
+        byte[] trama = preguntaArp(gw, sondeo.subred.gateway, sondeo.ip, MacAddress.BROADCAST).serialize();
+        for (long puerto : sondeo.subred.puertos) {
+            packetService.emit(new DefaultOutboundPacket(DeviceId.deviceId(sondeo.subred.device),
+                    DefaultTrafficTreatment.builder().setOutput(PortNumber.portNumber(puerto)).build(), ByteBuffer.wrap(trama)));
+        }
+    }
+
+    /** La trama de un ARP request "quien tiene `ip`?" con el gateway como emisor, hacia `destino` (una MAC para un sondeo unicast de presencia, difusion para el sondeo previo). */
+    private static Ethernet preguntaArp(MacAddress gw, int ipGateway, int ip, MacAddress destino) {
+        ARP arp = new ARP();
+        arp.setHardwareType(ARP.HW_TYPE_ETHERNET);
+        arp.setProtocolType(ARP.PROTO_TYPE_IP);
+        arp.setHardwareAddressLength((byte) Ethernet.DATALAYER_ADDRESS_LENGTH);
+        arp.setProtocolAddressLength((byte) Ip4Address.BYTE_LENGTH);
+        arp.setOpCode(ARP.OP_REQUEST);
+        arp.setSenderHardwareAddress(gw.toBytes());
+        arp.setSenderProtocolAddress(Ip4Address.valueOf(ipGateway).toOctets());
+        arp.setTargetHardwareAddress(MacAddress.ZERO.toBytes());
+        arp.setTargetProtocolAddress(Ip4Address.valueOf(ip).toOctets());
+        Ethernet eth = new Ethernet();
+        eth.setSourceMACAddress(gw);
+        eth.setDestinationMACAddress(destino);
+        eth.setEtherType(Ethernet.TYPE_ARP);
+        eth.setPayload(arp);
+        return eth;
     }
 
     /** Cada segundo: los sondeos que toquen y los equipos que no contestaron. */
@@ -419,21 +502,7 @@ public class CampusDhcpApp {
         if (gw == null || corte < 0) {
             return;
         }
-        ARP arp = new ARP();
-        arp.setHardwareType(ARP.HW_TYPE_ETHERNET);
-        arp.setProtocolType(ARP.PROTO_TYPE_IP);
-        arp.setHardwareAddressLength((byte) Ethernet.DATALAYER_ADDRESS_LENGTH);
-        arp.setProtocolAddressLength((byte) Ip4Address.BYTE_LENGTH);
-        arp.setOpCode(ARP.OP_REQUEST);
-        arp.setSenderHardwareAddress(gw.toBytes());
-        arp.setSenderProtocolAddress(Ip4Address.valueOf(o.gateway).toOctets());
-        arp.setTargetHardwareAddress(MacAddress.ZERO.toBytes());
-        arp.setTargetProtocolAddress(Ip4Address.valueOf(o.ip).toOctets());
-        Ethernet eth = new Ethernet();
-        eth.setSourceMACAddress(gw);
-        eth.setDestinationMACAddress(o.mac);
-        eth.setEtherType(Ethernet.TYPE_ARP);
-        eth.setPayload(arp);
+        Ethernet eth = preguntaArp(gw, o.gateway, o.ip, o.mac);
         packetService.emit(new DefaultOutboundPacket(DeviceId.deviceId(o.puerto.substring(0, corte)),
                 DefaultTrafficTreatment.builder().setOutput(PortNumber.portNumber(Long.parseLong(o.puerto.substring(corte + 1)))).build(),
                 ByteBuffer.wrap(eth.serialize())));
@@ -613,7 +682,7 @@ public class CampusDhcpApp {
 
     /** Registro de lo ignorado, como mucho una vez cada 10 s por motivo y puerto (una inundacion no llena el log). */
     private void avisar(String motivo, String puerto) {
-        if (motivo == null || motivo.equals("oferta") || motivo.equals("liberada") || motivo.equals("decline")) {
+        if (motivo == null || motivo.equals("oferta") || motivo.equals("liberada") || motivo.equals("decline") || motivo.startsWith("sondeo previo")) {
             return;
         }
         String clave = motivo + "@" + puerto;

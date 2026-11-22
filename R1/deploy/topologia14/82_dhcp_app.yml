@@ -2,6 +2,7 @@
 # (ambitos de las subredes de acceso, sacados del plan) y la del ARP del servidor DHCP de cada subred (.250) en la app Gateway ARP.
 #   PLAYBOOK=82_dhcp_app.yml ./lanzar.sh -e confirmar=true                       # instala, desactiva org.onosproject.dhcp, publica configuraciones
 #   PLAYBOOK=82_dhcp_app.yml ./lanzar.sh -e confirmar=true -e reinstalar=true    # reemplaza la app por el .oar del repositorio
+#   PLAYBOOK=82_dhcp_app.yml ./lanzar.sh -e confirmar=true -e sondeo_previo_ms=0 # sin el sondeo ARP previo a ofrecer una IP (retroceso de esa parte sin quitar la app; solo cambia la configuracion)
 #   PLAYBOOK=82_dhcp_app.yml ./lanzar.sh -e accion=quitar -e confirmar=true      # RETROCESO: desactiva la nuestra, reactiva org.onosproject.dhcp y quita las entradas .250 del ARP
 # Efecto en la red: ninguno sobre los hosts actuales (h1, h2 y el server tienen IP fija y no piden DHCP). Cambia QUIEN contesta el DHCP de las subredes de acceso (de la app estandar, un solo rango, a la nuestra, un ambito por subred).
 # Antes y despues: PLAYBOOK=95_diagnostico_lazos.yml ./lanzar.sh. Probar despues con 83_prueba_dhcp.yml (interfaces macvlan en h1, sin tocar su IP real).
@@ -12,6 +13,8 @@
     accion: instalar
     confirmar: false
     reinstalar: false
+    sondeo_previo_ms: 800     # espera (ms) de una respuesta ARP antes de ofrecer una IP nueva: si alguien contesta, esa IP ya esta en uso (host con IP fija dentro de .100-.199) y se ofrece otra; 0 = sin sondeo previo
+    sondeo_intentos: 5        # IP candidatas que se prueban para un mismo cliente antes de desistir
     app: org.campus.dhcp
     estandar: org.onosproject.dhcp
     api: "http://{{ onos_ip }}:8181/onos/v1"
@@ -43,7 +46,7 @@
 
     - name: Generar la configuracion del DHCP (ambitos de las subredes de acceso)
       ansible.builtin.command:
-        cmd: "python3 generar_config_dhcp.py --plan {{ plan }} --salida {{ config_dhcp }}"
+        cmd: "python3 generar_config_dhcp.py --plan {{ plan }} --sondeo-previo-ms {{ sondeo_previo_ms }} --sondeo-intentos {{ sondeo_intentos }} --salida {{ config_dhcp }}"
         chdir: "{{ repo }}/R2/policy"
       changed_when: true
 
