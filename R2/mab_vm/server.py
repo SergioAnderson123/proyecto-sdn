@@ -5,14 +5,17 @@ import threading
 import time
 import urllib.request
 import urllib.error
+from urllib.parse import urlsplit
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from mab_vm import MabVM, Parent, Child, Denied
+import ha_state
 
 R1 = os.getenv("R1_URL", "http://policy_mapper:5000").rstrip("/")
 ONOS = os.getenv("ONOS_URL", "http://onos:8181").rstrip("/")
+ONOS_URLS = [value.rstrip("/") for value in os.getenv("ONOS_URLS", ONOS).split(",") if value.strip()]
 USER = os.getenv("ONOS_USER", "onos")
 PASSWORD = os.getenv("ONOS_PASSWORD", "rocks")
 AUTH = base64.b64encode(f"{USER}:{PASSWORD}".encode()).decode()
@@ -23,24 +26,43 @@ ALLOWED = {
     if "/" in value
 }
 QUOTA = int(os.getenv("VM_MAX_CHILDREN", "2"))
+_onos_preferred = 0
 
 
 def request(method, url, body=None, onos=False):
+    global _onos_preferred
     headers = {"Accept": "application/json"}
     if body is not None:
         headers["Content-Type"] = "application/json"
     if onos:
         headers["Authorization"] = "Basic " + AUTH
     data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(
-        url, data=data, headers=headers, method=method
-    )
-    with urllib.request.urlopen(req, timeout=5) as response:
-        raw = response.read()
-        return (
-            json.loads(raw) if raw else {},
-            response.headers,
-        )
+    targets = [url]
+    if onos and ONOS_URLS:
+        parsed = urlsplit(url)
+        suffix = parsed.path + ("?" + parsed.query if parsed.query else "")
+        targets = [ONOS_URLS[(i + _onos_preferred) % len(ONOS_URLS)] + suffix
+                   for i in range(len(ONOS_URLS))]
+    last_error = None
+    for index, target in enumerate(targets):
+        req = urllib.request.Request(target, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as response:
+                raw = response.read()
+                if onos:
+                    _onos_preferred = (index + _onos_preferred) % len(targets)
+                return json.loads(raw) if raw else {}, response.headers
+        except urllib.error.HTTPError as error:
+            last_error = error
+            # A GET/DELETE can safely try another ONOS cluster member. Never
+            # replay a flow POST after an ambiguous HTTP failure.
+            if not onos or method not in ("GET", "DELETE"):
+                raise
+        except urllib.error.URLError as error:
+            last_error = error
+            if not onos or method not in ("GET", "DELETE"):
+                raise
+    raise last_error
 
 
 def get_parent(dpid, port):
@@ -148,6 +170,22 @@ def install_flow(dpid, port, mac, vlan):
             {"type": "TABLE", "tableId": vlan},
         ]},
     }
+    # A prior POST may have reached ONOS even if the response was lost. Search
+    # every cluster member before retrying so an admission retry stays idempotent.
+    try:
+        data, _ = request("GET", ONOS + f"/onos/v1/flows/{dpid}", onos=True)
+    except Exception:
+        data = {"flows": []}
+    for flow in data.get("flows", []):
+        criteria = {item.get("type"): item for item in flow.get("selector", {}).get("criteria", [])}
+        if (str(flow.get("priority")) == "40001"
+                and str(criteria.get("IN_PORT", {}).get("port")) == str(port)
+                and criteria.get("ETH_SRC", {}).get("mac", "").lower() == mac.lower()
+                and flow.get("state") == "ADDED"):
+            instructions = flow.get("treatment", {}).get("instructions", [])
+            if any(item.get("subtype") == "VLAN_ID" and int(item.get("vlanId", -1)) == int(vlan)
+                   for item in instructions):
+                return str(flow["id"])
     _, headers = request(
         "POST", f"{ONOS}/onos/v1/flows/{dpid}", payload, onos=True
     )
@@ -254,10 +292,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != "/sessions":
             return self.reply(404, {"error": "NOT_FOUND"})
-        with service.lock:
-            self.reply(200, {
-                "sessions": [asdict(c) for c in service.children.values()]
-            })
+        try:
+            with ha_state.transaction(service):
+                sessions = [asdict(c) for c in service.children.values()]
+            self.reply(200, {"sessions": sessions})
+        except ha_state.StateUnavailable:
+            self.reply(503, {"error": "SHARED_STATE_UNAVAILABLE"})
 
     def do_POST(self):
         if self.path != "/api/mab-request":
@@ -267,17 +307,21 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= 4096:
                 raise ValueError("INVALID_BODY")
             data = json.loads(self.rfile.read(length))
-            with service.lock:
+            with ha_state.transaction(service):
                 reconcile()
                 child = service.admit(
                     data["mac"], data["deviceId"], str(data["port"])
                 )
                 save()
-                self.reply(200, {"status": "FOUND", **asdict(child)})
+                result = {"status": "FOUND", **asdict(child)}
+            self.reply(200, result)
         except Denied as error:
             self.reply(403, {"status": "DENIED", "reason": str(error)})
         except (ValueError, KeyError, TypeError):
             self.reply(422, {"error": "INVALID_REQUEST"})
+        except ha_state.StateUnavailable as error:
+            print("Estado HA R2 no disponible:", str(error), flush=True)
+            self.reply(503, {"error": "SHARED_STATE_UNAVAILABLE"})
         except Exception as error:
             print("Error de integracion:", str(error), flush=True)
             self.reply(503, {"error": "DEPENDENCY_UNAVAILABLE"})
@@ -286,7 +330,8 @@ class Handler(BaseHTTPRequestHandler):
 def monitor():
     while True:
         try:
-            reconcile()
+            with ha_state.transaction(service):
+                reconcile()
         except Exception as error:
             print("Monitor:", str(error), flush=True)
         time.sleep(5)

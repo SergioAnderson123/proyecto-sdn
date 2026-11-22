@@ -1,5 +1,6 @@
 """Contrato AAA de ONOS observado en VNRT; todas las dependencias son simuladas."""
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 import server
@@ -62,17 +63,42 @@ class FlowConfirmationTests(unittest.TestCase):
     def test_waits_for_onos_statistics_cycle(self):
         pending = ({"flows": [{"state": "PENDING_ADD"}]}, {})
         added = ({"flows": [{"state": "ADDED"}]}, {})
-        replies = [({}, {"Location": f"/flows/{DPID}/123"})] + [pending] * 10 + [added]
-        with patch.object(server, "request", side_effect=replies), patch.object(server.time, "sleep"):
+        replies = [({"flows": []}, {}), ({}, {"Location": f"/flows/{DPID}/123"})] + [pending] * 10 + [added]
+        with patch.object(server, "ONOS_URLS", []), patch.object(server, "request", side_effect=replies), patch.object(server.time, "sleep"):
             self.assertEqual(server.install_flow(DPID, "1", MAC, 10), "123")
 
     def test_unconfirmed_flow_is_removed(self):
         pending = ({"flows": [{"state": "PENDING_ADD"}]}, {})
-        replies = [({}, {"Location": f"/flows/{DPID}/123"})] + [pending] * 12
-        with patch.object(server, "request", side_effect=replies), patch.object(server.time, "sleep"), patch.object(server, "delete_flow", return_value=True) as delete:
+        replies = [({"flows": []}, {}), ({}, {"Location": f"/flows/{DPID}/123"})] + [pending] * 12
+        with patch.object(server, "ONOS_URLS", []), patch.object(server, "request", side_effect=replies), patch.object(server.time, "sleep"), patch.object(server, "delete_flow", return_value=True) as delete:
             with self.assertRaisesRegex(RuntimeError, "no confirmo"):
                 server.install_flow(DPID, "1", MAC, 10)
             delete.assert_called_once_with(DPID, "123")
+
+
+class OnosEndpointTests(unittest.TestCase):
+    class Response:
+        headers = {}
+        def __enter__(self): return self
+        def __exit__(self, *args): return None
+        def read(self): return b'{"ok":true}'
+
+    def test_get_fails_over_to_next_onos_member(self):
+        with patch.object(server, "ONOS_URLS", ["http://ctrl1:8181", "http://ctrl2:8181"]), \
+             patch.object(server, "_onos_preferred", 0), \
+             patch("server.urllib.request.urlopen", side_effect=[urllib.error.URLError("down"), self.Response()]) as open_url:
+            result, _ = server.request("GET", "http://ctrl1:8181/onos/v1/devices", onos=True)
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(open_url.call_count, 2)
+        self.assertEqual(open_url.call_args_list[1].args[0].full_url,
+                         "http://ctrl2:8181/onos/v1/devices")
+
+    def test_post_is_not_replayed_after_ambiguous_failure(self):
+        with patch.object(server, "ONOS_URLS", ["http://ctrl1:8181", "http://ctrl2:8181"]), \
+             patch("server.urllib.request.urlopen", side_effect=urllib.error.URLError("timeout")) as open_url:
+            with self.assertRaises(urllib.error.URLError):
+                server.request("POST", "http://ctrl1:8181/onos/v1/flows/switch", {}, onos=True)
+        self.assertEqual(open_url.call_count, 1)
 
 
 if __name__ == "__main__":

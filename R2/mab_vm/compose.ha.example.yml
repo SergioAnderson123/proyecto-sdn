@@ -1,0 +1,16 @@
+# Overlay de referencia para ejecutar una réplica R2 MAB en cada controlador.
+# No modifica compose.yml ni se aplica automáticamente.
+services:
+  r2_mab_vm:
+    environment:
+      R2_ETCD_ENDPOINTS: ${R2_ETCD_ENDPOINTS:?definir endpoints TLS de etcd}
+      R2_ETCD_PREFIX: ${R2_ETCD_PREFIX:-/sdn/r2-mab/prod}
+      ONOS_URLS: ${R2_ONOS_URLS:?definir los tres endpoints REST de ONOS}
+      R2_ETCD_CA: /run/r2-etcd/ca.crt
+      R2_ETCD_CERT: /run/r2-etcd/client.crt
+      R2_ETCD_KEY: /run/r2-etcd/client.key
+      R2_ETCD_INIT_EMPTY: ${R2_ETCD_INIT_EMPTY:-0}
+    volumes:
+      - ${R2_ETCD_CA_FILE:?definir ruta local CA}:/run/r2-etcd/ca.crt:ro
+      - ${R2_ETCD_CERT_FILE:?definir ruta local certificado cliente}:/run/r2-etcd/client.crt:ro
+      - ${R2_ETCD_KEY_FILE:?definir ruta local clave cliente}:/run/r2-etcd/client.key:ro
