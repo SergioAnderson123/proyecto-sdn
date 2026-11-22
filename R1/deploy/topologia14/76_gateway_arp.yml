@@ -279,3 +279,40 @@
       retries: 4
       delay: 8
       tags: [quitar, never]
+
+- name: Comprobar que el bundle gateway-arp esta Active en los TRES nodos (instalada en caliente, a veces queda en Waiting en ctrl-3 y solo lo arregla reiniciar ese ONOS)
+  hosts: borde
+  gather_facts: false
+  vars:
+    accion: instalar
+    bundle: gateway-arp
+  tasks:
+    - name: Estado del bundle en cada nodo de ONOS (solo lectura)
+      ansible.builtin.shell:
+        cmd: "sshpass -p {{ onos_pass }} ssh -p 8101 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {{ onos_user }}@{{ item }} 'bundle:list' 2>/dev/null | grep -i ' {{ bundle }}' | head -1 | awk -F '│' '{print $2}' | tr -d ' '"
+      loop: "{{ nodos_onos_ip }}"
+      loop_control:
+        label: "{{ item }}"
+      register: estados
+      changed_when: false
+      failed_when: false
+      when: accion == 'instalar'
+      tags: [instalar]
+
+    - name: Estado por nodo
+      ansible.builtin.debug:
+        msg: "{{ item.item }}: {{ (item.stdout | default('') | trim) or 'sin respuesta' }}"
+      loop: "{{ estados.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: accion == 'instalar'
+      tags: [instalar]
+
+    - name: AVISO si algun nodo no lo tiene Active
+      ansible.builtin.debug:
+        msg:
+          - "AVISO: el bundle gateway-arp no esta Active en todos los nodos (mira el estado por nodo de arriba)."
+          - "Si es Waiting en algun nodo, la instalacion en caliente quedo a medias: reiniciar el ONOS de ESE nodo lo arregla (ssh -t ubuntu@<ip> 'sudo docker restart onos'; espera 2 minutos y repite esta comprobacion)."
+          - "No lo reinicies si es el maestro de algun switch sin pensarlo: comprueba antes con `roles` en Karaf. ctrl-3 no suele serlo."
+      when: accion == 'instalar' and (estados.results | map(attribute='stdout') | map('trim') | reject('equalto', 'Active') | list | length > 0)
+      tags: [instalar]
