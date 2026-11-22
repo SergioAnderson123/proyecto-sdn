@@ -2,6 +2,7 @@
 #   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh                       # instala y arranca en modo SOLO AVISAR (no cambia ningun flujo)
 #   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e aplicar=true       # APLICA en la tabla 60: SOLO durante la conmutacion (docs/PLAN_CONMUTACION_CAPA3.md), con el vigilante L2 ya parado
 #   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e accion=parar       # para y deshabilita el servicio en las dos VM
+#   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e aplicar=true -e estable_caida=2 -e min_intervalo_caida=10 -e intervalo=2   # reduce el corte ante la CAIDA de un cable (~18 s -> ~5 s); una subida sigue esperando `estable`
 #   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e aplicar=true -e estable=5   # cambia la espera de estabilidad (s; por defecto 15) y el intervalo minimo entre cambios (-e min_intervalo=60)
 #   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e quitar_aplicar=true       # vuelve a SOLO AVISAR (si no, repetir el 68 sin aplicar=true se niega cuando el servicio ya aplica)
 # Solo avisando es inocuo: lee ONOS y escribe en el registro lo que cambiaria (journalctl -u vigilante-capa3 -f). Los dos vigilantes no se pelean mientras el de capa 3 no aplique. NUNCA con aplicar=true y el L2 aplicando a la vez.
@@ -19,6 +20,9 @@
     quitar_aplicar: false
     estable: 15                      # segundos que debe durar una diferencia antes de actuar (corte ante una caida de cable = esto + ~2 s; ver DISENO_CAPA3 V9)
     min_intervalo: 60                # segundos minimos entre dos cambios (acota el vaiven ante un cable inestable)
+    estable_caida: ""                # espera (s) cuando el cambio viene de una CAIDA de cable o de switch (lo que lo usaba ya no funciona); vacio = la misma que estable
+    min_intervalo_caida: ""         # intervalo minimo (s) entre cambios tras una caida; vacio = el mismo que min_intervalo
+    intervalo: ""                   # segundos entre consultas a ONOS; vacio = el valor del programa (5). Menos = detecta antes y carga mas a ONOS
     nucleo: "core-1,core-2,borde"
     carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
     destino: /opt/vigilante
@@ -86,7 +90,7 @@
 
           [Service]
           WorkingDirectory={{ destino }}
-          ExecStart=/usr/bin/python3 {{ destino }}/vigilante.py --subredes {{ config }}/plan_capa3.json --nucleo {{ nucleo }} --hosts-fijos {{ config }}/hosts_fijos_capa3.json --onos {{ nodos_onos }} --salud-puerto {{ puerto_salud }} --estable {{ estable }} --min-intervalo {{ min_intervalo }} --interruptor {{ config }}/desactivar{{ (' --respaldo-de ' ~ url_principal) if rol == 'respaldo' else '' }}{{ ' --aplicar' if (aplicar | bool) else '' }}
+          ExecStart=/usr/bin/python3 {{ destino }}/vigilante.py --subredes {{ config }}/plan_capa3.json --nucleo {{ nucleo }} --hosts-fijos {{ config }}/hosts_fijos_capa3.json --onos {{ nodos_onos }} --salud-puerto {{ puerto_salud }} --estable {{ estable }} --min-intervalo {{ min_intervalo }}{{ (' --estable-caida ' ~ estable_caida) if estable_caida | string | length > 0 else '' }}{{ (' --min-intervalo-caida ' ~ min_intervalo_caida) if min_intervalo_caida | string | length > 0 else '' }}{{ (' --intervalo ' ~ intervalo) if intervalo | string | length > 0 else '' }} --interruptor {{ config }}/desactivar{{ (' --respaldo-de ' ~ url_principal) if rol == 'respaldo' else '' }}{{ ' --aplicar' if (aplicar | bool) else '' }}
           Restart=always
           RestartSec=5
 

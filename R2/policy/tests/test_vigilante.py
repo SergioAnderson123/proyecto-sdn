@@ -10,7 +10,7 @@ import recalculo as rc  # noqa: E402
 import vigilante as vg  # noqa: E402
 from test_caminos import LINKS, PREF, A1, C1, C2  # noqa: E402
 from test_flujos_proactivos import ACCESO, HOSTS  # noqa: E402
-from test_recalculo import DISP, TODOS, _como_onos, sin_cable  # noqa: E402
+from test_recalculo import DISP, TODOS, _como_onos, sin_cable, sin_switch  # noqa: E402
 
 
 class Reloj:
@@ -317,3 +317,95 @@ def test_el_principal_publica_la_hora_de_su_ultimo_ciclo():
     antes = time.time()
     v.ciclo()
     assert v.ultimo_ciclo >= antes
+
+
+# ---------- espera corta ante una caida (estable_caida_s / min_intervalo_caida_s) ----------
+def cae_el_cable_core2_acc2(onos):
+    onos.enlaces = [e for e in onos.enlaces if {e["src"]["device"], e["dst"]["device"]} != {C2, "acc2"}]
+
+
+def test_una_caida_actua_con_la_espera_corta_y_una_subida_con_la_larga():
+    v, onos, reloj, logs = nuevo(estable_caida_s=2, min_intervalo_caida_s=10)
+    assert v.ciclo() == "sin cambios"                                            # un ciclo con la red sana: asi el vigilante sabe que despues se pierde algo
+    cae_el_cable_core1_acc1(onos)
+    assert v.ciclo() == "esperando" and onos.borrados == 0
+    reloj.pasar(1)
+    assert v.ciclo() == "esperando"
+    reloj.pasar(2)                                                               # 3 s: ya pasaron los 2 de la caida (con los valores de siempre habria que esperar 15)
+    assert v.ciclo() == "aplicado" and onos.borrados > 0
+    assert any("espera corta" in x for x in logs)
+    reloj.pasar(70)                                                              # pasa el intervalo largo: lo que sigue es solo la SUBIDA del cable
+    onos.enlaces = list(LINKS)
+    assert v.ciclo() == "esperando"
+    reloj.pasar(5)
+    assert v.ciclo() == "esperando"                                              # la subida no es urgente: sigue con los 15 s
+    reloj.pasar(11)
+    assert v.ciclo() == "aplicado"
+    assert onos.estado() == {rc.clave(f) for f in rc.flujos_deseados(rc.grafo_vivo(LINKS, DISP), HOSTS, ACCESO, PREF)}
+
+
+def test_una_caida_no_espera_el_intervalo_largo_tras_otro_cambio():
+    v, onos, reloj, _ = nuevo(estable_caida_s=2, min_intervalo_caida_s=10)
+    assert v.ciclo() == "sin cambios"
+    cae_el_cable_core1_acc1(onos)
+    v.ciclo()
+    reloj.pasar(3)
+    assert v.ciclo() == "aplicado"                                               # t = 3
+    reloj.pasar(8)
+    cae_el_cable_core2_acc2(onos)                                                # otro cable cae 8 s despues
+    assert v.ciclo() == "esperando"
+    reloj.pasar(3)                                                               # t = 14: 11 s desde el cambio, 3 s de diferencia estable
+    assert v.ciclo() == "aplicado"                                               # con los 60 s de siempre habria quedado en "intervalo" hasta t = 63
+
+
+def test_sin_los_parametros_nuevos_una_caida_espera_lo_de_siempre():
+    v, onos, reloj, _ = nuevo()
+    cae_el_cable_core1_acc1(onos)
+    v.ciclo()
+    reloj.pasar(3)
+    assert v.ciclo() == "esperando"                                              # 3 s < 15 s
+    reloj.pasar(13)
+    assert v.ciclo() == "aplicado"
+
+
+def test_un_parpadeo_mas_corto_que_la_espera_corta_no_cambia_nada_y_no_deja_la_urgencia_puesta():
+    v, onos, reloj, _ = nuevo(estable_caida_s=2, min_intervalo_caida_s=10)
+    antes = onos.estado()
+    assert v.ciclo() == "sin cambios"
+    cae_el_cable_core1_acc1(onos)
+    assert v.ciclo() == "esperando"
+    reloj.pasar(1)
+    onos.enlaces = list(LINKS)                                                   # el cable vuelve antes de 2 s
+    assert v.ciclo() == "sin cambios" and onos.estado() == antes and onos.borrados == 0
+    assert v._caida_pendiente is False
+    cae_el_cable_core1_acc1(onos)                                                # y una caida real posterior si actua con la espera corta
+    reloj.pasar(5)
+    assert v.ciclo() == "esperando"
+    reloj.pasar(3)
+    assert v.ciclo() == "aplicado"
+
+
+def test_la_caida_de_un_switch_tambien_es_urgente():
+    v, onos, reloj, _ = nuevo(estable_caida_s=2, min_intervalo_caida_s=10)
+    assert v.ciclo() == "sin cambios"
+    onos.enlaces, onos.dispositivos = sin_switch(C1)                             # cae core-1 entero: la raiz pasa a core-2
+    assert v.ciclo() == "esperando"
+    reloj.pasar(3)
+    assert v.ciclo() == "aplicado"
+
+
+def test_si_el_vigilante_arranca_con_un_cable_ya_caido_espera_lo_de_siempre():
+    v, onos, reloj, _ = nuevo(estable_caida_s=2, min_intervalo_caida_s=10)
+    cae_el_cable_core1_acc1(onos)                                                # no vio nunca la red sana: no puede saber que algo se perdio
+    assert v.ciclo() == "esperando"
+    reloj.pasar(3)
+    assert v.ciclo() == "esperando"                                              # espera los 15 s generales
+    reloj.pasar(13)
+    assert v.ciclo() == "aplicado"
+
+
+def test_con_espera_corta_cero_aplica_en_el_ciclo_siguiente_a_la_caida():
+    v, onos, reloj, _ = nuevo(estable_caida_s=0, min_intervalo_caida_s=0)
+    assert v.ciclo() == "sin cambios"
+    cae_el_cable_core1_acc1(onos)
+    assert v.ciclo() == "aplicado"

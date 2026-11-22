@@ -14,6 +14,9 @@ Cuándo NO hace nada (y lo escribe en el log):
   - la diferencia aún no lleva `estable_s` segundos sin cambiar, o ya hubo un cambio hace menos de `min_intervalo_s`;
   - el cambio supera `max_cambios` flujos (señal de datos incompletos);
   - sin --aplicar.
+Espera corta ante una CAIDA (opcional): si entre dos ciclos se pierde un cable o un switch, lo que lo usaba ya no funciona y la diferencia se aplica tras `estable_caida_s`
+(y respetando `min_intervalo_caida_s`) en vez de `estable_s` y `min_intervalo_s`. Una SUBIDA no es urgente (los caminos actuales siguen funcionando), asi que sigue con la espera
+larga, que es la que protege contra un cable que parpadea. Sin esos parametros todo funciona exactamente como antes.
 Los puertos de acceso salen de un archivo fijo (hecho con la red completa); además, cualquier puerto que alguna vez haya aparecido en un enlace
 (activo o no) se trata siempre como troncal: un cable caído NUNCA convierte sus puertos en "de acceso".
 """
@@ -77,9 +80,14 @@ def consultar_salud(url, timeout=3, max_edad_s=30):
 
 class Vigilante:
     def __init__(self, onos, preferidos, acceso, aplicar=False, estable_s=15, min_intervalo_s=60, max_cambios=200,
-                 interruptor=None, log=print, nombre=_nombre, reloj=time.monotonic, monitoreo=None, salud_principal=None, muerto_s=45, hosts_fijos=(), copiar_arp=False, plan=None, nucleo=None, tabla=fp.TABLA_REENVIO, retirar=False):
+                 interruptor=None, log=print, nombre=_nombre, reloj=time.monotonic, monitoreo=None, salud_principal=None, muerto_s=45, hosts_fijos=(), copiar_arp=False, plan=None, nucleo=None, tabla=fp.TABLA_REENVIO, retirar=False,
+                 estable_caida_s=None, min_intervalo_caida_s=None):
         self.onos, self.preferidos, self.aplicar = onos, list(preferidos), aplicar
         self.estable_s, self.min_intervalo_s, self.max_cambios = estable_s, min_intervalo_s, max_cambios
+        # Ante una CAIDA (un cable o un switch menos desde el ciclo anterior) lo que lo usaba ya no funciona: se puede actuar antes y sin esperar el intervalo largo. Sin valor, igual que los generales.
+        self.estable_caida_s = estable_s if estable_caida_s is None else estable_caida_s
+        self.min_intervalo_caida_s = min_intervalo_s if min_intervalo_caida_s is None else min_intervalo_caida_s
+        self._enlaces_prev, self._caida_pendiente = None, False        # enlaces vivos del ciclo anterior; ¿hubo una caida desde el ultimo cambio o desde que no hay diferencia?
         self.interruptor, self.log, self.nombre, self.reloj = interruptor, log, nombre, reloj
         self.acceso_fijo = sin_monitoreo(acceso or {}, monitoreo)        # capa 3 no necesita los puertos de acceso (acceso.json); sin el archivo llega None
         self.troncales = set()                 # (switch, puerto) que alguna vez salió en un enlace
@@ -108,6 +116,7 @@ class Vigilante:
 
     def _reiniciar_espera(self):
         self._huella = self._desde = None
+        self._caida_pendiente = False
 
     def _soy_activo(self):
         """El principal siempre actúa. El respaldo solo si el principal lleva `muerto_s` segundos sin responder; en cuanto vuelve, cede."""
@@ -172,6 +181,11 @@ class Vigilante:
             return "partida"
         self._olvidar_avisos("partida")
 
+        enlaces = frozenset((d, vecino, puerto) for d, vecinos in grafo.items() for vecino, puerto in vecinos)
+        if self._enlaces_prev is not None and self._enlaces_prev - enlaces:
+            self._caida_pendiente = True              # se perdio un cable (o un switch) desde el ciclo anterior
+        self._enlaces_prev = enlaces
+
         acceso = {d: [p for p in ps if (d, p) not in self.troncales] for d, ps in self.acceso_fijo.items() if d in grafo}
         if self.plan:                                             # capa 3: rutas por prefijo, entrega por host y ARP local (el ARP del gateway es estático, no lo gestiona el vigilante)
             deseados = [] if self.retirar else rc.flujos_deseados_capa3(grafo, list(self.hosts.values()), self.plan, self.preferidos, self.nucleo, self.tabla)
@@ -203,23 +217,26 @@ class Vigilante:
             self.log(f"ALTA RÁPIDA: {rc.resumen(dif, self.nombre)} (host nuevo; no cambia ninguna regla existente).")
             return "alta rápida"
 
+        urgente = self._caida_pendiente
+        estable = self.estable_caida_s if urgente else self.estable_s
+        minimo = self.min_intervalo_caida_s if urgente else self.min_intervalo_s
         huella = hash(frozenset(rc.clave(f) for f in dif["borrar"]) | frozenset(("+",) + rc.clave(f) for f in dif["agregar"]))
         ahora = self.reloj()
         if huella != self._huella:
             self._huella, self._desde = huella, ahora
             self._olvidar_avisos("simulacion", "intervalo")
-            self.log(f"CAMBIO DETECTADO ({rc.resumen(dif, self.nombre)}). Raíz: {self.nombre(raiz)}. Espero {self.estable_s}s a que se estabilice.")
+            self.log(f"CAMBIO DETECTADO ({rc.resumen(dif, self.nombre)}). Raíz: {self.nombre(raiz)}. Espero {estable:g}s a que se estabilice{' (hubo una caída: espera corta)' if urgente and estable != self.estable_s else ''}.")
             for tipo, flujos in (("sobra", dif["borrar"]), ("falta", dif["agregar"])):          # qué flujos exactos difieren (máx. 6 de cada tipo)
                 for f in flujos[:6]:
                     self.log(f"    {tipo}: {rc.describir(f, self.nombre)}")
                 if len(flujos) > 6:
                     self.log(f"    ... y {len(flujos) - 6} más que {tipo}n")
-            if self.estable_s > 0:
+            if estable > 0:
                 return "esperando"
-        if ahora - self._desde < self.estable_s:
+        if ahora - self._desde < estable:
             return "esperando"
-        if self._ultimo_cambio is not None and ahora - self._ultimo_cambio < self.min_intervalo_s:
-            self._aviso("intervalo", f"Espero: hubo un cambio hace menos de {self.min_intervalo_s}s.")
+        if self._ultimo_cambio is not None and ahora - self._ultimo_cambio < minimo:
+            self._aviso("intervalo", f"Espero: hubo un cambio hace menos de {minimo:g}s.")
             return "intervalo"
         if not self.aplicar:
             self._aviso("simulacion", f"SIMULACIÓN (sin --aplicar): se cambiaría {rc.resumen(dif, self.nombre)}.")
@@ -267,6 +284,8 @@ def main(argv=None):
     a.add_argument("--intervalo", type=float, default=5, help="segundos entre comprobaciones")
     a.add_argument("--estable", type=float, default=15, help="segundos que debe durar una diferencia antes de actuar")
     a.add_argument("--min-intervalo", type=float, default=60, help="segundos mínimos entre dos cambios")
+    a.add_argument("--estable-caida", type=float, default=None, help="como --estable pero cuando el cambio viene de una CAIDA de cable o de switch (por defecto, igual que --estable)")
+    a.add_argument("--min-intervalo-caida", type=float, default=None, help="como --min-intervalo pero tras una caida (por defecto, igual que --min-intervalo)")
     a.add_argument("--max-cambios", type=int, default=200)
     a.add_argument("--hosts-fijos", metavar="ARCHIVO", help="JSON con hosts que ONOS no aprende (server, portal); se suman a los de ONOS")
     a.add_argument("--subredes", metavar="ARCHIVO", help="MODO CAPA 3: plan de subredes (JSON de capa3.cargar_plan, con nombres de switch como core-1, acc-1...)")
@@ -328,7 +347,7 @@ def main(argv=None):
             return 2
         log(f"Hosts fijos: {len(fijos)} ({', '.join(h['nombre'] for h in fijos)}).")
     salud = (lambda: consultar_salud(arg.respaldo_de)) if arg.respaldo_de else None
-    v = Vigilante(onos, PREFERIDOS, acceso, aplicar=arg.aplicar, estable_s=arg.estable, min_intervalo_s=arg.min_intervalo,
+    v = Vigilante(onos, PREFERIDOS, acceso, aplicar=arg.aplicar, estable_s=arg.estable, min_intervalo_s=arg.min_intervalo, estable_caida_s=arg.estable_caida, min_intervalo_caida_s=arg.min_intervalo_caida,
                   max_cambios=arg.max_cambios, interruptor=arg.interruptor, log=log, salud_principal=salud, muerto_s=arg.muerto,
                   hosts_fijos=fijos, copiar_arp=arg.copiar_arp, plan=plan, nucleo=nucleo, tabla=arg.tabla, retirar=arg.retirar)
     rol = f"RESPALDO de {arg.respaldo_de} (asume el mando tras {arg.muerto:g}s sin respuesta)" if arg.respaldo_de else "PRINCIPAL"
