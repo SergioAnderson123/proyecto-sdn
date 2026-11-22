@@ -63,8 +63,8 @@
   gather_facts: false
   vars:
     plan_a:
-      h1-profesor: "10.0.1.101/24 con gw 10.0.1.254"
-      h2-alumno: "10.0.2.102/24 con gw 10.0.2.254"
+      h1-profesor: "10.0.1.101/24 fija (plan A) o una IP DHCP del ambito 10.0.1.100-199, con gw 10.0.1.254"
+      h2-alumno: "10.0.2.102/24 fija (plan A) o una IP DHCP del ambito 10.0.2.100-199 (94_hosts_dhcp.yml), con gw 10.0.2.254"
       server: "10.0.0.10/24 con rutas 10.0.1.0/24 y 10.0.2.0/24 por 10.0.0.254"
   tasks:
     - name: Direcciones y rutas de ens4

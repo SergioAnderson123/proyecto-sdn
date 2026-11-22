@@ -56,13 +56,14 @@
     accion: listar
     medicion_s: 150
   tasks:
-    - name: Prueba cada segundo nc 10.0.0.10:8101 con la IP del plan A (segundo plano)
+    - name: Prueba cada segundo nc 10.0.0.10:8101 con la IP que tenga ens4 en 10.0.1.0/24 (fija del plan A o por DHCP; segundo plano)
       ansible.builtin.shell:
         cmd: |
           rm -f /tmp/medicion_cable.txt
           fin=$(( $(date +%s) + {{ medicion_s }} ))
           while [ $(date +%s) -lt $fin ]; do
-            r=$(nc -zv -w 1 -s 10.0.1.101 10.0.0.10 8101 2>&1 | tr '\n' ' ')
+            ip_h1=$(ip -4 -o addr show dev ens4 | awk '{print $4}' | cut -d/ -f1 | grep '^10[.]0[.]1[.]' | head -1)
+            r=$(nc -zv -w 1 -s "$ip_h1" 10.0.0.10 8101 2>&1 | tr '\n' ' ')
             case "$r" in
               *refused*) e=OK;;
               *) e=SIN_CAMINO;;

@@ -57,6 +57,29 @@
       server: {viejo: "10.0.0.10", nuevo: "10.0.0.10", gw: "10.0.0.254", destinos: ["10.0.1.101", "10.0.2.102"]}
     yo: "{{ datos[inventory_hostname] }}"
   tasks:
+    - name: Modo de ens4 (FIJA o DHCP, 94_hosts_dhcp.yml)
+      ansible.builtin.shell:
+        cmd: "sed -n '/ens4:/,$p' /etc/netplan/50-cloud-init.yaml 2>/dev/null | grep -q 'dhcp4: true' && echo DHCP || echo FIJA"
+      register: modo
+      changed_when: false
+
+    - name: Un host por DHCP no pasa por la conmutacion de IP (ni se quita ni se devuelve la IP vieja)
+      ansible.builtin.assert:
+        that: not (accion in ['quitar_ip_vieja', 'restaurar_ip_vieja'] and inventory_hostname != 'server' and modo.stdout | trim == 'DHCP')
+        fail_msg: "{{ inventory_hostname }} tiene ens4 por DHCP: la conmutacion de IP no aplica (su IP la da el ambito de su subred). Para volver a IP fija: 94_hosts_dhcp.yml -e accion=quitar"
+        quiet: true
+
+    - name: IP que el host usa ahora en su subred (la fija del plan A o la de DHCP)
+      ansible.builtin.shell:
+        cmd: "ip -4 -o addr show dev ens4 | awk '{print $4}' | cut -d/ -f1 | grep '^{{ yo.nuevo.rsplit('.', 1)[0] | replace('.', '[.]') }}[.]' | head -1"
+      register: actual
+      changed_when: false
+      failed_when: false
+
+    - name: Fijar la IP de origen de las pruebas
+      ansible.builtin.set_fact:
+        ip_uso: "{{ (actual.stdout | trim) if (actual.stdout | trim | length > 0) else yo.nuevo }}"
+
     - name: El host debe tener la IP del plan A (67) antes de quitar la vieja
       ansible.builtin.shell:
         cmd: "ip -4 -o addr show dev ens4 | grep -q ' {{ yo.nuevo }}/'"
@@ -88,10 +111,10 @@
       ansible.builtin.shell:
         cmd: |
           ip neigh del {{ yo.gw }} dev ens4 2>/dev/null
-          ping -c 1 -W 1 -I {{ yo.nuevo }} {{ yo.gw }} >/dev/null 2>&1
+          ping -c 1 -W 1 -I {{ ip_uso }} {{ yo.gw }} >/dev/null 2>&1
           echo "vecino del gateway: $(ip neigh show {{ yo.gw }} dev ens4 | awk '{print $3, $5}')"
           echo "direcciones: $(ip -4 -o addr show dev ens4 | awk '{print $4}' | tr '\n' ' ')"
-          {% if inventory_hostname != 'server' %}echo "tcp {{ yo.nuevo }} -> 10.0.0.10:8101: $(nc -zv -w 3 -s {{ yo.nuevo }} 10.0.0.10 8101 2>&1 | tr '\n' ' ')"{% endif %}
+          {% if inventory_hostname != 'server' %}echo "tcp {{ ip_uso }} -> 10.0.0.10:8101: $(nc -zv -w 3 -s {{ ip_uso }} 10.0.0.10 8101 2>&1 | tr '\n' ' ')"{% endif %}
       register: pings
       changed_when: false
       ignore_errors: true

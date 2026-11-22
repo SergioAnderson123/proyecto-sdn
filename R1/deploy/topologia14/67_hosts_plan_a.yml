@@ -15,18 +15,24 @@
       server: {ip: "10.0.0.10", gw: "10.0.0.254", rutas: ["10.0.1.0/24", "10.0.2.0/24"]}
     yo: "{{ datos[inventory_hostname] }}"
   tasks:
+    - name: Modo de ens4 (FIJA o DHCP), un host pasado a DHCP con 94_hosts_dhcp.yml NO recibe la IP fija del plan A ni las rutas con src de esa IP
+      ansible.builtin.shell:
+        cmd: "sed -n '/ens4:/,$p' /etc/netplan/50-cloud-init.yaml 2>/dev/null | grep -q 'dhcp4: true' && echo DHCP || echo FIJA"
+      register: modo
+      changed_when: false
+
     - name: Poner la IP del plan A como secundaria (solo h1 y h2; el server ya tiene la suya)
       ansible.builtin.shell:
         cmd: |
           ip addr show dev ens4 | grep -q "{{ yo.ip }}/" || ip addr add {{ yo.ip }}/24 dev ens4
-      when: accion == 'poner' and inventory_hostname != 'server'
+      when: accion == 'poner' and inventory_hostname != 'server' and modo.stdout | trim == 'FIJA'
       changed_when: true
 
     - name: Rutas hacia las otras subredes por el gateway de la subred
       ansible.builtin.shell:
         cmd: |
           for r in {{ yo.rutas | join(' ') }}; do ip route replace $r via {{ yo.gw }} dev ens4{{ (' src ' ~ yo.ip) if inventory_hostname != 'server' else '' }}; done
-      when: accion == 'poner'
+      when: accion == 'poner' and (inventory_hostname == 'server' or modo.stdout | trim == 'FIJA')
       changed_when: true
 
     - name: Quitar rutas y la IP secundaria
