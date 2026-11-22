@@ -31,6 +31,8 @@ ONOS_BASE_URL = f"http://{ONOS_HOST}:{ONOS_PORT}/onos/v1"
 ONOS_AAA_URL = f"http://{ONOS_HOST}:{ONOS_PORT}/onos/aaa/app/users"
 ONOS_AUTH = (os.getenv("ONOS_USER", ""), os.getenv("ONOS_PASSWORD", ""))
 R2_MAB_URL = os.getenv("R2_MAB_URL", "http://r2-mab-vm:5001").rstrip("/")
+LDAP_HOST = os.getenv("LDAP_HOST", "ldap")
+LDAP_PORT = int(os.getenv("LDAP_PORT", "389"))
 
 # -----------------------------------------------------------------------------
 # R2: TABLAS DE ROL (qué recursos alcanza cada rol) a partir de policy.yaml
@@ -964,7 +966,7 @@ async def mab_request(datos: MabRequest):
     port = str(datos.port)
 
     try:
-        servidor = ldap3.Server("ldap", port=389, connect_timeout=5)
+        servidor = ldap3.Server(LDAP_HOST, port=LDAP_PORT, connect_timeout=5)
         conexion = ldap3.Connection(
             servidor,
             user=os.getenv("LDAP_ADMIN_DN", "cn=admin,dc=example,dc=org"),

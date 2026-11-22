@@ -11,7 +11,10 @@ HA_ENABLED = bool(os.getenv("SESSION_ETCD_ENDPOINTS"))
 if HA_ENABLED:
     from ha_onos import AsyncClient as HaAsyncClient
 
-LDAP_URL = os.getenv("LDAP_URL", "ldap://ldap:389")
+LDAP_URL = os.getenv(
+    "LDAP_URL",
+    f"ldap://{os.getenv('LDAP_HOST', 'ldap')}:{os.getenv('LDAP_PORT', '389')}",
+)
 LDAP_BASE = os.getenv("LDAP_BASE", "dc=example,dc=org")
 LDAP_ADMIN_DN = os.getenv("LDAP_ADMIN_DN", f"cn=admin,{LDAP_BASE}")
 LDAP_ADMIN_PASSWORD = os.getenv("LDAP_ADMIN_PASSWORD", "")
