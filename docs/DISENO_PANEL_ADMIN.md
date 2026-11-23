@@ -163,18 +163,9 @@ El modelo real del proyecto: los **equipos** son estáticos y entran por 802.1X 
 - **Hereda las protecciones del ascenso.** Solo se instalan después de que el ascenso o el login hayan pasado sus comprobaciones (misma MAC que la sesión 802.1X, misma ubicación en ONOS AAA), así que un tercero no puede reclamarlas con otra MAC.
 - **Excepciones por equipo** (opcional): para un equipo estático concreto, la misma tabla con `sujeto: equipo` y la identidad del certificado, sin portal. Mismo mecanismo, otra clave.
 
-**Soporte (administrador) por el portal.** Hoy `policy.yaml` deja fuera a `soporteTI` del portal a propósito: el administrador entra por 802.1X con el certificado de un equipo registrado. Si se decide que soporte use el portal, lo prudente es **tratarlo como el docente: por ascenso**, no por login directo desde un equipo sin sesión. Cambios pequeños en `policy.yaml`:
+**Alcance acordado (23-nov).** Las excepciones son **para cuentas de profesor** (las que suben un equipo por el portal). **Soporte TI no las necesita:** se le asigna un equipo y se autentica por 802.1X, como hoy. La variante «soporte por el portal por ascenso» (grupo `soporteTI` → rol `soporte`, `login_directo` solo `invitado`, `ascenso: alumno: [docente, soporte]`, duración corta) sigue siendo posible y queda aparcada. Si algún día se abre soporte al portal, hay que revisar antes que el portal **limite los intentos fallidos** de contraseña (no se ve en `server.py`).
 
-```yaml
-portal:
-  grupos: {profesor: docente, soporteTI: soporte, invitado: invitado}
-  login_directo: [invitado]            # soporte NO entra directo: sube un equipo ya autenticado
-  duracion_s: {invitado: 1800, soporte: 3600, default: 28800}
-ascenso:
-  alumno: [docente, soporte]
-```
-
-Así un administrador queda atado a un equipo con certificado, ubicado y con la misma MAC, y su sesión dura una hora. Hay que revisar antes que el portal **limite los intentos fallidos** de contraseña (no lo he visto en `server.py`): una cuenta de administrador detrás de un formulario web es lo que más se ataca.
+**El diseño completo y el proceso para construirlo están en [`DISENO_EXCEPCIONES_POR_SESION.md`](DISENO_EXCEPCIONES_POR_SESION.md).**
 
 **Dos formas de guardar las excepciones** (decisión abierta):
 
@@ -185,4 +176,4 @@ Así un administrador queda atado a un equipo con certificado, ubicado y con la 
 
 Recomendación: empezar por la lista en configuración (pocas excepciones, panel de solo lectura más el flujo del repositorio), y dejar el formato listo para pasar a grupos de permiso. En ambos casos el panel tendría: alta con motivo y caducidad, lista de excepciones activas (quién, qué servicio, desde cuándo, sesión asociada), baja manual y el efecto por switch antes de confirmar.
 
-**Lo que hay que construir** (R1 + R2): leer las excepciones al arrancar; al admitir una sesión de portal (login o ascenso) instalar las reglas en la tabla del rol con prioridad mayor y `eth_src` = la MAC, guardando sus ids en la sesión; borrarlas en todos los caminos que cierran una sesión (logout, vencimiento, ausencia, puerto sin enlace, restauración al rol base); incluirlas en la reconciliación (una sesión sin su flujo ya nos dejó a un equipo sin servicio el 23-nov); persistirlas en el estado compartido del HA; y pruebas sin red para cada camino de cierre.
+**Lo que hay que construir** (R1 + R2) está detallado en `DISENO_EXCEPCIONES_POR_SESION.md`, con las fases, los siete caminos de cierre de sesión que deben retirar las reglas, la compatibilidad del estado HA y la validación en vivo.

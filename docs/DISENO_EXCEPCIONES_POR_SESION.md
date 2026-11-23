@@ -1,0 +1,166 @@
+# Diseño: excepciones por sesión (permiso a una cuenta concreta) — borrador para revisar, 23-nov-2026
+
+**Estado: solo diseño. Nada de esto está implementado.** Toca R1 (Policy Mapper, estado HA) y R2 (`policy_tables`, generación de flujos), por eso conviene que lo revisen las dos partes antes de escribir código. Nace de una pregunta del equipo («¿se puede dar un permiso a un usuario concreto o hay que crear un grupo/VLAN?») y de lo que se vio operando la slice el 23-nov. Relacionado: `docs/DISENO_PANEL_ADMIN.md` (sección 13: el panel sería el sitio donde se dan de alta y de baja).
+
+## 1. Decisiones de alcance (acordadas el 23-nov)
+
+| Quién | Qué pasa | Excepciones |
+|---|---|---|
+| **Equipos** (alumno y demás, 802.1X con certificado) | Son computadoras, no personas: en LDAP el «alumno» es un equipo. Todos entran con el rol por defecto (alumno) | **No** en la v1 |
+| **Profesores** (cuenta del portal, por **ascenso** de un equipo ya autenticado) | Única identidad de persona que se usa para decidir permisos | **Sí: es el alcance de este diseño** |
+| **Invitados** (cuenta del portal, login directo) | Acceso mínimo, 30 min | No |
+| **Soporte TI** (administrador) | **Se le da un equipo y se autentica por 802.1X**, como hoy (rol `soporte`, tabla 40). No entra por el portal | No. (Que soporte use el portal por ascenso queda **aparcado**: es una opción válida, pero no se necesita.) |
+
+## 2. El problema
+
+La política se decide por **rol**. El grupo del usuario llega por RADIUS como una VLAN; el flujo de sesión (tabla 0, prioridad 40001, `in_port` + `eth_src`) hace `push_vlan` con ese id y salta a la **tabla de su rol** (docente 10, alumno 20, soporte 40, invitado 50). Esa tabla solo compara **VLAN, IP y puerto TCP del destino** (`flujos_tabla_rol`): no mira quién es la persona, y `policy.yaml` no tiene ninguna sección de excepciones. Un permiso individual obliga hoy a crear un rol nuevo (grupo LDAP + RADIUS + VLAN/tabla + todas las filas de `rules`), que no escala: un rol por excepción, y cada rol es una tabla en cada switch de acceso.
+
+## 3. Qué se quiere
+
+- Dar a una **cuenta de profesor** permiso a uno o varios servicios que su rol no tiene (por ejemplo `student_records` a `profesor01`), **sin** crear rol, VLAN ni tabla.
+- Que valga **mientras dure su sesión de portal** y, opcionalmente, hasta una fecha.
+- Que se retire sola en **todos** los casos en que acaba la sesión.
+- Que quede **auditada** y que se pueda dar de alta y de baja desde el panel.
+- No relajar ninguna de las protecciones actuales (misma MAC y ubicación para el ascenso, lista negra de R5, etc.).
+
+## 4. Diseño
+
+### 4.1 Cómo se define
+
+Una sección nueva de `policy.yaml` (o su propio archivo, a decidir; el panel la mostraría y, con el flujo del repositorio, la editaría). Se define **por cuenta del portal** (el `usuario` tal como lo escribe la persona, el mismo que registra el mapper), nunca por MAC:
+
+```yaml
+excepciones:
+  roles: [docente]                       # solo las cuentas que entran con este rol pueden tener excepciones
+  no_excepcionables: [network_management]  # servicios que nunca se abren por excepción
+  lista:
+    - {usuario: profesor01, servicios: [student_records], hasta: "2026-12-31", motivo: "Coordinación de matrícula"}
+```
+
+`cargar_politica` debe **rechazar** una sección inválida con un mensaje claro: usuario vacío, servicio que no está en `services` o en `no_excepcionables`, `hasta` pasado o mal escrito, rol no permitido, o servicio que el rol ya tiene (redundante). Un archivo mal escrito no puede dejar la política a medias.
+
+### 4.2 Qué reglas se instalan
+
+En la **tabla del rol que tiene la sesión en ese momento** (la 10 mientras dure el ascenso a docente), por cada servicio de la excepción y por cada switch de la sesión, una regla igual a la del rol **más** `ETH_SRC = <MAC del equipo>`:
+
+- **Selector:** `VLAN_VID = tabla`, `ETH_TYPE 0x0800`, `IP_PROTO 6`, `IPV4_DST = <ip del servicio>/32`, `TCP_DST = <puerto>`, `ETH_SRC = <mac>`.
+- **Tratamiento:** el mismo `_salida(politica)` que las reglas del rol (`NORMAL`, o `goto` a la tabla 60 con el reenvío proactivo y la capa 3). La excepción solo abre el **permiso**; el reenvío ya existe.
+- **Prioridad nueva `PRIO_EXCEPCION = 30500`:** sobre las del rol (30000, `PRIO_ROL`) y sin interferir con la 40001 (que está en la tabla 0). Se registra junto a las demás en `R5/deploy/prioridades.yaml`.
+- **appId propio** (por ejemplo `org.campus.excepciones`), **no** el de R2: `dispositivos_incompletos` decide si faltan reglas de R2 **contando** los flujos `ADDED` del appId de R2; si las excepciones usaran el mismo appId, ese contador subiría y un switch al que le faltan reglas del rol podría parecer completo. (Con un appId aparte, además, `/flows/application/<appId>` da de una vez todas las excepciones activas.)
+
+### 4.3 Ciclo de vida: cuándo se instalan y cuándo se retiran
+
+**Instalar:** al terminar con éxito `POST /portal/login` con ascenso a docente (después de `inyectar_flujo_tabla_0`), si la cuenta está en `excepciones.lista` y no ha vencido su `hasta`. No se instalan antes de que el ascenso haya pasado sus comprobaciones (misma MAC que la sesión 802.1X, misma ubicación según ONOS AAA): un tercero no puede reclamarlas con otra MAC.
+
+**Retirar:** hay **siete** caminos que hoy cierran una sesión y todos llaman por su cuenta a `eliminar_flujo_onos(sesion.dpid, sesion.flow_id)`. Cada uno debe borrar también las excepciones:
+
+| # | Camino | Dónde está hoy |
+|---|---|---|
+| 1 | Cierre de sesión por el portal | `portal_logout` (y `_restaurar_base` si es un ascenso) |
+| 2 | Fin del ascenso (vuelve al rol base) | `_restaurar_base` |
+| 3 | Sesión vencida por tiempo | `_expirar_sesiones_portal` **y** su copia en `ha_runtime.expire` (dos sitios) |
+| 4 | Equipo ausente / puerto sin enlace | `_cerrar_por_ausencia`, desde `/sessions/ausente` y desde `ha_runtime.ports` |
+| 5 | Revocación de R5 | `revocar_sesion` (`/sessions/revoke`) |
+| 6 | Logout avisado por el agente 802.1X | `/sessions/logout` |
+| 7 | El propio equipo reautentica por 802.1X y se anula el ascenso | `webhook` |
+
+**Recomendación:** antes de la función nueva, hacer una refactorización pequeña y con pruebas: **una sola función** `_borrar_flujos_de_sesion(sesion)` que borre el flujo 40001 y las excepciones, y que los siete caminos la llamen. Así el camino que se olvide no deja una regla abierta.
+
+Además, la excepción se retira **cuando llega su `hasta`**, aunque la sesión siga viva (el lazo que ya revisa el plazo cada 10 s lo comprobaría), y se vuelve a comprobar al admitir.
+
+### 4.4 Dónde se guardan los ids y qué pasa con el HA
+
+Hay dos formas de saber qué borrar:
+
+| | Cómo | Pros | Contras |
+|---|---|---|---|
+| **A. Guardar los ids en la sesión** | Campo `excepciones` (lista de `{dpid, flow_id}`) en `ActiveSession`; para el HA, entra en el estado de etcd y en el **outbox** de borrados (hoy un registro por sesión; habría uno por flujo) | Borrado directo, reintentable | Ver «versiones mezcladas» abajo |
+| **B. No guardar ids; consultar** | Al borrar, listar los flujos del appId de excepciones del switch y borrar los de `ETH_SRC = mac` y `PRIO_EXCEPCION` | Nada que migrar; sirve también para purgar huérfanos | Una lectura de flujos de ONOS por cierre (leerla del maestro del switch: las lecturas remotas fueron las que se atascaron el 23-nov) |
+
+**Versiones mezcladas (importante para A).** El estado de las sesiones en etcd es `asdict(sesión)` y se lee con `cls(**d)`; un campo nuevo que una réplica **antigua** no conoce hace fallar la lectura (`TypeError`), y el despliegue es réplica por réplica. Para evitarlo: (1) **omitir** `excepciones` del snapshot cuando está vacía, de modo que mientras no haya ninguna excepción el estado sea idéntico al de antes; (2) desplegar **primero** el código nuevo en las tres réplicas **sin** ninguna excepción configurada, y solo después dar de alta la primera; (3) tener claro el camino de vuelta atrás (un snapshot con una excepción activa no lo leería una réplica antigua).
+
+### 4.5 Reconciliación y huérfanos
+
+El mapper ya comprueba y repone el flujo 40001 **al confirmar un login existente** (`6726bc4`); no hay un lazo periódico que lo haga. Las excepciones necesitan, además, una comprobación en las dos direcciones:
+- **Falta una:** sesión de portal viva con excepciones configuradas y sin sus reglas en ONOS → reinstalarlas.
+- **Sobra una:** regla `PRIO_EXCEPCION` en ONOS cuya MAC no tiene sesión viva, o cuyo usuario ya no tiene la excepción → borrarla. Es la red de seguridad si un camino de cierre falla o una réplica cae a mitad de un borrado.
+
+La purga de huérfanos existente (`purgar_sesiones_huerfanas`) solo conoce los flujos 40001: hay que extenderla (o hacer una aparte) para el appId de excepciones.
+
+### 4.6 Qué ve el administrador
+
+- **Eventos nuevos** en la bitácora del mapper (`eventos.TIPOS`): `excepcion_aplicada` y `excepcion_retirada`, con usuario, MAC, servicio y motivo del retiro.
+- **Panel:** lista de excepciones definidas y de las **activas** (quién, qué servicio, desde cuándo, sesión y switch), alta con motivo y caducidad, baja manual, y el efecto por switch antes de confirmar.
+
+## 5. Seguridad
+
+- La cuenta es la del portal: usuario y contraseña de LDAP por HTTPS con el certificado fijado. **Comprobar o añadir un límite de intentos fallidos**: en `R2/portal_cautivo/server.py` no se ve ninguno, y esta función hace más valiosa una cuenta de profesor.
+- Requiere **ascenso**: misma MAC, misma ubicación y una sesión 802.1X previa del equipo. No se puede obtener desde un equipo sin sesión (`login_directo` sigue siendo solo `invitado`).
+- **Caduca** con la sesión (8 h por defecto para el rol docente) y, si se define, con `hasta`.
+- `no_excepcionables` impide abrir servicios críticos aunque alguien lo escriba en la lista.
+- Los cambios de la lista son cambios de política: pasan por validación, simulación y auditoría (ver el panel).
+- El `PORTAL_TOKEN` está **vacío** hoy en el portal y en `mapper-ha-prod` (medido el 23-nov): definirlo en el mismo despliegue.
+
+## 6. Proceso para construirla
+
+**Fase 0 — prerrequisitos.** Sin esto no se puede ni validar:
+1. El **parche del mapper del portal** (`docs/NOTA_PORTAL_MAC_POR_IP.md`): sin él, el login y el ascenso por el portal no funcionan para los clientes de capa 3.
+2. El **ascenso probado en vivo** (equipo de alumno → `profesor01` → rol docente → vuelta al rol base), que hoy no se ha ejecutado en la slice.
+3. Decisiones: dónde vive la lista (4.1), ids guardados o consultados (4.4) y el appId (4.2).
+
+**Fase 1 — R2, funciones puras y pruebas (sin red).** En `policy_tables`: leer y validar `excepciones`, `excepciones_de(politica, usuario, ahora)` y `flujos_excepcion(politica, dpid, tabla, mac, servicios)`. Pruebas con el simulador de la tubería completa (tabla 0 → tabla de rol → tabla 60): la excepción abre **solo** ese servicio, **solo** para esa MAC; otro host del mismo rol no pasa; el alumno no; el servicio no excepcionable no se abre; `hasta` vencido no instala; con capa 3 y reenvío proactivo el tratamiento es el correcto. Entregable: los flujos que se instalarían por switch, visibles en la vista previa.
+
+**Fase 2 — R1, el mapper.**
+1. Refactorización: `_borrar_flujos_de_sesion` y los siete caminos de 4.3, con una prueba por camino (que el camino borre también las excepciones).
+2. Instalar al admitir el ascenso; guardar lo que se necesite (4.4); eventos nuevos.
+3. HA: `ha_runtime.expire`, el outbox y el estado de etcd, con la compatibilidad de versiones de 4.4.
+4. Pruebas de integración del ascenso con excepciones, incluida la restauración del rol base.
+
+**Fase 3 — reconciliación y huérfanos** (4.5), con pruebas de las dos direcciones (falta una / sobra una).
+
+**Fase 4 — despliegue.** Réplica a réplica, con el procedimiento de R1 (paquete, comprobación de sesiones y acceso al gateway, copia de seguridad): **primero el código sin ninguna excepción configurada en las tres**, después la política (cada réplica lee su `policy.yaml`: que las tres tengan el mismo) y por último la primera excepción de prueba.
+
+**Fase 5 — validación en vivo** (cuando 0 a 4 estén hechos). Con h2 como equipo de alumno y `profesor01` por el portal. Por defecto `student_records` (puerto 8102 del server) está denegado al docente: `nc -zv -w 2 -s <IP de h2> 10.0.0.10 8102` da **`timed out`**.
+1. Con la excepción definida y el ascenso hecho: la misma prueba da **`Connection refused`** (hay camino; el servidor no escucha). Otro puerto no autorizado (8105) sigue en `timed out`.
+2. En el switch de h2, `ovs-ofctl -O OpenFlow13 dump-flows br0 table=10 | grep eth_src` muestra la regla; ONOS la lista bajo su appId.
+3. Cerrar sesión en el portal: vuelve a `timed out` y la regla desaparece.
+4. Repetir con: bajar la NIC del equipo (ausencia), vencimiento de `hasta`, revocación de R5 y reinicio de una réplica del mapper a mitad de la sesión.
+5. Comprobar con `95` que no hay reglas huérfanas ni tormentas, y que el panel muestra la excepción activa.
+
+**Fase 6 — el panel.** Alta y baja con motivo y caducidad, lista de activas, simulación del efecto por switch (ver `DISENO_PANEL_ADMIN.md`).
+
+**Orden y reparto.** 0 → 1 (R2) → 2 (R1) → 3 → 4 → 5 → 6. La 1 y la preparación de pruebas de la 2 pueden avanzar en paralelo. Esfuerzo relativo: la fase 2 es la mayor y la más delicada (siete caminos y el HA); la 1 es pequeña y de bajo riesgo; la 4 y la 5 son cuidadosas más que largas.
+
+## 7. Pruebas que debe tener
+
+- Validación de la sección `excepciones` (cada tipo de error) y que un archivo inválido no cambia la política activa.
+- Los flujos generados: selector, prioridad, `eth_src`, tratamiento, un flujo por servicio y switch.
+- Cada uno de los siete caminos de cierre retira las excepciones, también con el HA y con un borrado fallido que se reintenta por el outbox.
+- Ascenso con y sin excepción; ascenso de un usuario sin excepción no instala nada; el logout del portal; la reautenticación 802.1X del equipo.
+- Reconciliación: falta una (se reinstala) y sobra una (se borra).
+- Compatibilidad: un estado de etcd sin excepciones es idéntico al anterior (`schema` 1 y sin el campo).
+- Simulador de la tubería: solo esa MAC, solo ese servicio.
+
+## 8. Riesgos
+
+- **Una regla que no se retira** (un camino de cierre sin cubrir) deja a un equipo con un permiso de más. Mitigación: la función única de borrado y la reconciliación de «sobra una».
+- **Versiones mezcladas en el HA** (4.4).
+- **Carga en ONOS:** reglas extra por switch y lecturas de flujos si se elige la opción B; leerlas del nodo maestro.
+- **Atar el permiso a la MAC del equipo**: si la persona entra desde otro equipo, la excepción se aplica en el nuevo al ascender, no en el anterior; es el comportamiento deseado, pero hay que decirlo al administrador.
+- **Una política mal escrita**: por eso la validación estricta y el flujo de simulación antes de aplicar.
+
+## 9. Decisiones abiertas
+
+1. ¿Dónde vive la lista: en `policy.yaml` o en su propio archivo?
+2. ¿Ids guardados en la sesión (A) o consulta a ONOS (B)?
+3. ¿appId propio (recomendado) o el de R2?
+4. ¿Se permite `hasta` además de la duración de la sesión?
+5. Límite de excepciones por usuario y de usuarios con excepción.
+6. ¿Quién (y con qué permiso en el panel) puede dar de alta y de baja?
+7. ¿Se hace la refactorización de los siete caminos antes o junto con la función nueva? (Recomendado: antes, en su propio cambio.)
+
+## 10. Fuera de este diseño
+
+- **Soporte TI:** sigue por 802.1X con equipo asignado. La variante «soporte por el portal por ascenso» (grupo `soporteTI` mapeado al rol `soporte`, sin `login_directo`) queda aparcada.
+- **Equipos y alumnos:** sin excepciones en la v1; el mismo mecanismo podría servir más adelante con la identidad del certificado como clave.
+- **Permisos por grupo de LDAP** (el mapper ya recibe los grupos en el login): alternativa descrita en `DISENO_PANEL_ADMIN.md`, sección 13.1.
