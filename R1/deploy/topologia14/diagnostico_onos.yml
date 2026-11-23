@@ -18,7 +18,7 @@
           echo "## contenedores (uptime)"; docker ps --format "{% raw %}{{.Names}} {{.Status}}{% endraw %}" | grep -E '^(onos|atomix) '
           echo "## memoria"; docker stats --no-stream --format "{% raw %}{{.Name}} {{.MemUsage}} cpu={{.CPUPerc}}{% endraw %}" onos atomix
           echo "## GC de atomix (O = generacion vieja %, FGC = GC completos)"
-          docker exec atomix sh -c 'jstat -gcutil $(jps -q | head -1)' 2>&1 | tail -2
+          docker exec atomix sh -c 'jstat -gcutil $(jps -l | grep -i atomix | cut -d" " -f1)' 2>&1 | tail -2
           echo "## presion de disco (full avg10/avg60/avg300)"; grep -E '^(some|full)' /proc/pressure/io | cut -c1-60
           echo "## disco vda (w_await en ms, ultimas 3 muestras)"; iostat -x 1 4 vda 2>/dev/null | grep vda | tail -3 | awk '{print "w_await=" $12 " aqu-sz=" $22 " util=" $NF}'
           echo "## TCP desde el arranque"; nstat -az TcpRetransSegs TcpExtTCPTimeouts TcpExtTCPAbortOnTimeout TcpEstabResets 2>/dev/null | grep -v '^#'
