@@ -1,0 +1,65 @@
+# Solo lectura. Estado del portal cautivo en la slice: ¿corre el servicio en el server?, ¿contesta por dentro y por su IP de datos?, ¿llega al Policy Mapper?, y lo que el portal puede ver de los clientes
+# (el portal saca la MAC del cliente de SU tabla ARP, /proc/net/arp; con capa 3 el cliente esta en otra subred y esa tabla solo tiene la MAC del gateway). No cambia nada ni muestra el token.
+#   PLAYBOOK=diagnostico_portal.yml ./lanzar.sh
+- name: Portal cautivo en el server (solo lectura)
+  hosts: server
+  become: true
+  gather_facts: false
+  vars:
+    ip_server: 10.0.0.10
+    puerto_portal: 8443
+    mapper_url: "http://192.168.201.254:5000"
+  tasks:
+    - name: Reunir los datos del portal
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          echo "## hora"; date +%T
+          echo "## interfaces"; ip -br addr
+          echo "## servicios (activo / habilitado)"
+          for s in r1-portal r1-ip-datos r1-portal-arp; do echo "$s: $(systemctl is-active $s 2>&1) / $(systemctl is-enabled $s 2>&1)"; done
+          echo "## archivos del portal"; ls -la /opt/portal 2>&1 | head -8; ls -la /opt/portal/tls 2>&1 | head -5
+          echo "## quien escucha en 8080, 8083 y {{ puerto_portal }}"; ss -ltnp 2>/dev/null | grep -E ':(8080|8083|{{ puerto_portal }})\b' || echo "nadie escucha ahi"
+          echo "## unidad de systemd (sin el token)"
+          sed -E 's/(PORTAL_TOKEN=).+/\1***oculto***/' /etc/systemd/system/r1-portal.service 2>&1 | grep -E 'MAPPER_URL|PORTAL_TOKEN|PORTAL_IP|PORTAL_PUERTOS|PORTAL_BIND|PORTAL_TLS|ExecStart' || echo "no hay unidad r1-portal"
+          echo "## el portal por dentro (https://127.0.0.1:{{ puerto_portal }}/)"; curl -sk -m 6 -o /dev/null -w "%{http_code} en %{time_total}s" https://127.0.0.1:{{ puerto_portal }}/; echo
+          echo "## el portal por su IP de datos (https://{{ ip_server }}:{{ puerto_portal }}/)"; curl -sk -m 6 -o /dev/null -w "%{http_code} en %{time_total}s" https://{{ ip_server }}:{{ puerto_portal }}/; echo
+          echo "## el Policy Mapper desde el server ({{ mapper_url }}/health/ha)"; curl -s -m 6 -o /dev/null -w "%{http_code} en %{time_total}s" {{ mapper_url }}/health/ha; echo
+          echo "## vecinos que ve el server (de aqui saca el portal la MAC del cliente)"; cat /proc/net/arp
+          echo "## ultimas lineas del portal"; journalctl -u r1-portal -n 15 --no-pager 2>&1 | cut -c1-220
+      register: datos
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar el server
+      ansible.builtin.debug:
+        msg: "{{ datos.stdout_lines }}"
+
+- name: Politica del portal y datos que ONOS tiene de los clientes (node-ctrl-1)
+  hosts: servicios
+  become: true
+  gather_facts: false
+  vars:
+    carpeta: "{{ repo_dir }}/R2/policy"
+    mapper_url: "http://192.168.201.254:5000"
+  tasks:
+    - name: Reunir los datos
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          echo "## policy.local.yaml (lo que el mapper sabe del portal)"
+          ls -la {{ carpeta }}/policy.local.yaml 2>&1 | cut -c1-120
+          grep -n -i -E 'portal|8443|mac' {{ carpeta }}/policy.local.yaml 2>/dev/null | head -14 || true
+          echo "## PORTAL_TOKEN definido en R1/deploy/.env (solo si existe, sin mostrarlo)"
+          grep -c '^PORTAL_TOKEN=.' {{ repo_dir }}/R1/deploy/.env 2>&1
+          echo "## /portal/estado del mapper para una MAC cualquiera (debe dar 200 y sesion nula)"
+          curl -s -m 6 -w "  -> %{http_code}\n" "{{ mapper_url }}/portal/estado?mac=00:00:00:00:00:01" | cut -c1-200
+          echo "## hosts que ONOS conoce (mac, ips, ubicacion): lo que permitiria sacar la MAC a partir de la IP del cliente"
+          curl -s -m 15 -u {{ onos_user }}:{{ onos_pass }} http://{{ ansible_host }}:8181/onos/v1/hosts | python3 -c "import sys,json; [print(h['mac'], h.get('ipAddresses'), h['locations'][0]['elementId'][-4:] + '/' + str(h['locations'][0]['port'])) for h in json.load(sys.stdin)['hosts']]"
+      register: datos
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar node-ctrl-1
+      ansible.builtin.debug:
+        msg: "{{ datos.stdout_lines }}"
