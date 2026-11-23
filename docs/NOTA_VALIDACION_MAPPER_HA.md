@@ -160,3 +160,38 @@ VM. Esto **no equivale a desplegar R2 HA**, que sigue pendiente.
 
 La regresión local se repitió: 401 pruebas aprobaron en el sandbox y la única
 prueba que abre un servidor HTTP local aprobó fuera de él (402 en total).
+
+## Actualización de HA y failover de R2 (23-nov-2026)
+
+Esta sección reemplaza los estados pendientes de R2 descritos arriba. El
+gateway de gestión `.254` se dejó intacto, según decisión del grupo.
+
+- **Fuente y sesiones:** `R1/shared/policy_mapper/` sigue siendo la fuente
+  canónica. Se añadieron identificadores de generación estables por sesión,
+  replicados junto con el snapshot etcd, para que R2 distinga una sesión actual
+  de marcadores de revocación antiguos. Las sesiones existentes se conservaron.
+- **Eventos y quórum:** se mantiene el historial compartido de hasta 200
+  eventos y el comportamiento HTTP 503 al perder quórum, ya documentado y
+  probado con un etcd aislado. No se detuvo el etcd de producción.
+- **R2 MAB:** se desplegó en ctrl-1, ctrl-2 y ctrl-3 sobre el mismo estado etcd.
+  Los mappers prueban las réplicas R2 ante errores de conexión; R2 consulta
+  mappers y ONOS alternativos para operaciones seguras. Una respuesta ambigua a
+  una operación que podría instalar un flujo no se reintenta a ciegas. Los
+  contenedores anteriores y el estado previo quedaron disponibles para
+  rollback; no se borraron las marcas de revocación existentes.
+- **Prueba de failover R2:** con una sesión hija sintética activa se detuvo R2
+  en ctrl-2. El reintento llegó a ctrl-3 y devolvió el mismo `flow_id`; las
+  sesiones padre continuaron presentes y el estado compartido coincidió. La
+  prueba terminó `PASS` en 682 ms. Tras vencer el TTL de 60 s del flujo
+  sintético, las tres réplicas informaron cero hijos. No se desconectaron hosts
+  ni se hizo flooding; el ensayo no cambió las sesiones reales.
+- **EAP/DHCP:** sigue pendiente una medición conjunta nueva en h1-profesor. El
+  script `/home/ubuntu/sdn-ha-eap-check.py` está preparado para reautenticar y
+  renovar la concesión DHCP actual; requiere ejecutarlo allí con `sudo`. La
+  medición EAP-TLS previa de 2384 ms no sustituye esa comprobación de failover.
+
+Con esto, la redundancia del mapper, la persistencia de sesiones/eventos y el
+failover de R2 tienen evidencia operativa. Permanecen como límites aceptados el
+gateway único y, hasta completar la medición anterior, la verificación conjunta
+en vivo de los consumidores DHCP/portal/vigilante durante failover. No se afirma
+que esos servicios se hayan apagado y probado en esta actualización.

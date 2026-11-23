@@ -2,6 +2,7 @@
 from dataclasses import asdict
 import copy
 import time
+import uuid
 import ha_store
 
 
@@ -20,6 +21,7 @@ def persistent_manager(base_cls, session_cls):
             self.outbox={}
             self.intents={}
             self.blocks={}
+            self.generations={}
         def refresh(self):
             state, rev=self.client.get('state')
             if state is None:
@@ -33,9 +35,10 @@ def persistent_manager(base_cls, session_cls):
             self.outbox=copy.deepcopy(state.get('outbox',{}))
             self.intents=copy.deepcopy(state.get('intents',{}))
             self.blocks=copy.deepcopy(state.get('blocks',{}))
+            self.generations=copy.deepcopy(state.get('generations',{}))
             self.revision=rev
         def snapshot(self):
-            return {'schema':1,'sessions':{k:asdict(v) for k,v in self._sessions_by_mac.items()},'outbox':self.outbox,'intents':self.intents,'blocks':self.blocks}
+            return {'schema':1,'sessions':{k:asdict(v) for k,v in self._sessions_by_mac.items()},'outbox':self.outbox,'intents':self.intents,'blocks':self.blocks,'generations':self.generations}
         def save(self):
             self.revision=self.client.cas('state',self.snapshot(),self.revision,ha_store.owner())
         def register_session(self,session):
@@ -44,12 +47,14 @@ def persistent_manager(base_cls, session_cls):
             old=self._sessions_by_mac.get(session.mac.lower())
             if old: super().remove_session(old.mac)
             super().register_session(session)
+            self.generations[session.mac.lower()]=uuid.uuid4().hex
             self.intents.pop(session.mac.lower(),None)
             self.save()
         def remove_session(self,mac):
             ha_store.fence()
             s=super().remove_session(mac)
             if s:
+                self.generations.pop(mac.lower(),None)
                 if s.flow_id: self.outbox[f'{s.dpid}/{s.flow_id}']=asdict(s)
                 self.save()
             return s

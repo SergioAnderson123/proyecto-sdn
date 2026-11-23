@@ -14,6 +14,7 @@ from mab_vm import MabVM, Parent, Child, Denied
 import ha_state
 
 R1 = os.getenv("R1_URL", "http://policy_mapper:5000").rstrip("/")
+R1_URLS = [value.strip().rstrip("/") for value in os.getenv("R1_URLS", R1).split(",") if value.strip()]
 ONOS = os.getenv("ONOS_URL", "http://onos:8181").rstrip("/")
 ONOS_URLS = [value.rstrip("/") for value in os.getenv("ONOS_URLS", ONOS).split(",") if value.strip()]
 USER = os.getenv("ONOS_USER", "onos")
@@ -43,6 +44,9 @@ def request(method, url, body=None, onos=False):
         suffix = parsed.path + ("?" + parsed.query if parsed.query else "")
         targets = [ONOS_URLS[(i + _onos_preferred) % len(ONOS_URLS)] + suffix
                    for i in range(len(ONOS_URLS))]
+    elif method == "GET" and url.startswith(R1 + "/"):
+        suffix = url[len(R1):]
+        targets = [endpoint + suffix for endpoint in R1_URLS]
     last_error = None
     for index, target in enumerate(targets):
         req = urllib.request.Request(target, data=data, headers=headers, method=method)
@@ -56,11 +60,11 @@ def request(method, url, body=None, onos=False):
             last_error = error
             # A GET/DELETE can safely try another ONOS cluster member. Never
             # replay a flow POST after an ambiguous HTTP failure.
-            if not onos or method not in ("GET", "DELETE"):
+            if method not in ("GET", "DELETE") or (not onos and len(targets) == 1):
                 raise
         except urllib.error.URLError as error:
             last_error = error
-            if not onos or method not in ("GET", "DELETE"):
+            if method not in ("GET", "DELETE") or (not onos and len(targets) == 1):
                 raise
     raise last_error
 
@@ -116,7 +120,7 @@ def get_parent(dpid, port):
             port=str(port),
             vlan=int(session["vlan"]),
             role=session["rol"],
-            session_id=f"{dpid}/{port}/{mac.lower()}/{flow}",
+            session_id=session.get("session_id") or f"{dpid}/{port}/{mac.lower()}/{flow}",
             authorized=True,
         ))
 
@@ -245,6 +249,10 @@ def reconcile():
                     and all(parent.vlan == c.vlan for c in children)
                 )
             except Exception:
+                # An unavailable dependency is not proof of logout. Explicit
+                # revocations still proceed; temporary flows expire by TTL.
+                if parent_id not in service.revoking:
+                    continue
                 valid = False
 
             if not valid or parent_id in service.revoking:

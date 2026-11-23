@@ -11,6 +11,7 @@ import time
 from typing import List, Optional
 from fastapi import FastAPI, Header, HTTPException
 import httpx
+from r2_transport import post_mab
 import ha_store
 from ha_onos import AsyncClient as HaAsyncClient
 from pydantic import BaseModel, Field
@@ -31,6 +32,7 @@ ONOS_BASE_URL = f"http://{ONOS_HOST}:{ONOS_PORT}/onos/v1"
 ONOS_AAA_URL = f"http://{ONOS_HOST}:{ONOS_PORT}/onos/aaa/app/users"
 ONOS_AUTH = (os.getenv("ONOS_USER", ""), os.getenv("ONOS_PASSWORD", ""))
 R2_MAB_URL = os.getenv("R2_MAB_URL", "http://r2-mab-vm:5001").rstrip("/")
+R2_MAB_URLS = [u.strip().rstrip("/") for u in os.getenv("R2_MAB_URLS", R2_MAB_URL).split(",") if u.strip()]
 LDAP_HOST = os.getenv("LDAP_HOST", "ldap")
 LDAP_PORT = int(os.getenv("LDAP_PORT", "389"))
 
@@ -1000,14 +1002,9 @@ async def mab_request(datos: MabRequest):
         print(f"[MAB] MAC no registrada; delegando a R2 MAB VM: {mac}")
         try:
             async with (HaAsyncClient if ha_store.ENABLED else httpx.AsyncClient)(timeout=8) as cliente:
-                respuesta = await cliente.post(
-                    f"{R2_MAB_URL}/api/mab-request",
-                    json={
-                        "mac": mac,
-                        "deviceId": dpid,
-                        "port": port,
-                    },
-                )
+                respuesta = await post_mab(cliente, R2_MAB_URLS, {
+                    "mac": mac, "deviceId": dpid, "port": port,
+                })
 
             return JSONResponse(
                 status_code=respuesta.status_code,

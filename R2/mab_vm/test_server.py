@@ -103,3 +103,26 @@ class OnosEndpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class DependencyContinuityTests(unittest.TestCase):
+    def test_parent_read_uses_second_mapper(self):
+        with patch.object(server, 'R1_URLS', ['http://one:5000', 'http://two:5000']), patch('server.urllib.request.urlopen', side_effect=[urllib.error.URLError('down'), OnosEndpointTests.Response()]) as call:
+            result, _ = server.request('GET', server.R1 + '/sessions')
+        self.assertEqual(result, {'ok': True})
+        self.assertEqual(call.call_args_list[1].args[0].full_url, 'http://two:5000/sessions')
+
+    def test_dependency_outage_does_not_revoke_existing_child(self):
+        from mab_vm import Child
+        from unittest.mock import Mock
+        child = Child(MAC, 'parent', DPID, '1', 10, '123')
+        with patch.object(server.service, 'children', {MAC: child}), patch.object(server.service, 'revoking', set()), patch.object(server, 'get_parent', side_effect=urllib.error.URLError('down')), patch.object(server.service, 'revoke_parent') as revoke, patch.object(server, 'save'):
+            server.reconcile()
+            revoke.assert_not_called()
+            self.assertIn(MAC, server.service.children)
+
+    def test_confirmed_logout_revokes_child(self):
+        from mab_vm import Child
+        child = Child(MAC, 'parent', DPID, '1', 10, '123')
+        with patch.object(server.service, 'children', {MAC: child}), patch.object(server.service, 'revoking', set()), patch.object(server, 'get_parent', return_value=None), patch.object(server.service, 'revoke_parent') as revoke, patch.object(server, 'save'):
+            server.reconcile()
+            revoke.assert_called_once_with('parent')

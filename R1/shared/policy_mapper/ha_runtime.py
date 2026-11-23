@@ -1,6 +1,7 @@
 import asyncio
 import time
 import os
+import uuid
 from ha_onos import AsyncClient
 from fastapi.responses import JSONResponse
 import ha_store
@@ -96,9 +97,22 @@ def install(mapper):
                 return JSONResponse({'detail':'Event quorum unavailable'}, status_code=503)
         if request.url.path == '/sessions'  and request.method == 'GET':
             try:
-                state,_=await asyncio.to_thread(mapper.session_store.client.get,'state')
-                if state is None: raise ha_store.Unavailable('migration missing')
-                return JSONResponse({'total_sessions':len(state['sessions']),'sessions':state['sessions']})
+                async with ha_store.transaction():
+                    mapper.session_store.refresh()
+                    generations=mapper.session_store.generations
+                    changed=False
+                    for mac in mapper.session_store._sessions_by_mac:
+                        if mac not in generations:
+                            generations[mac]=uuid.uuid4().hex
+                            changed=True
+                    if changed:
+                        mapper.session_store.save()
+                    state,_=await asyncio.to_thread(mapper.session_store.client.get,'state')
+                    sessions={mac:dict(session) for mac,session in state['sessions'].items()}
+                    for mac,session in sessions.items():
+                        generation=state.get('generations',{}).get(mac)
+                        if generation: session['session_id']=generation
+                return JSONResponse({'total_sessions':len(sessions),'sessions':sessions})
             except Exception:
                 return JSONResponse({'detail':'Session quorum unavailable'},status_code=503)
         if request.url.path in ('/health/ha','/docs','/openapi.json') or request.url.path.startswith('/sadis/'):
