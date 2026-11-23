@@ -1,0 +1,5 @@
+=== node-sec-1 | liberacion manual del atacante (r5ctl desbloquear) ===
+$ r5ctl.py desbloquear 203.0.113.103
+Desbloqueada 203.0.113.103 (3 flujo(s) retirado(s)). El integrador la olvida en su próxima reconciliación (hasta RECONCILE_SEC s).
+$ r5ctl.py bloqueos
+Sin bloqueos de R5 en ONOS.

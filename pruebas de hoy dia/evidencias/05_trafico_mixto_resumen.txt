@@ -1,0 +1,10 @@
+=== trafico_mixto.py | 120 s, 20 % malo, --src-malo 203.0.113.150, semilla 7 ===
+eventos: 163   normales: 136 (desde 203.0.113.103)   maliciosos: 27 (desde 203.0.113.150)
+normales por tipo: dns 37, tcp_completo 36, ping 33, http_get 30
+malos por tipo   : syn_flood 8, scan_syn 6, scan_fin 5, scan_null 4, scan_xmas 3, web_sqlmap 1
+
+Origen malicioso detectado y bloqueado ........ 1 de 1  (203.0.113.150, en los 3 switches)
+Falsos positivos (IP normal bloqueada) ........ 0 de 1  (203.0.113.103 nunca bloqueada)
+Primer evento malicioso -> DROP ............... ~4 s (+-5 s por la resolucion de ONOS)
+Maliciosos enviados antes del DROP ............ 2  (syn_flood, scan_syn)
+Maliciosos enviados despues del DROP .......... 25 (ya no llegan a la victima)

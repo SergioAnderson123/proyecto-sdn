@@ -1,0 +1,20 @@
+
+
+################################################################################
+  R5-04  Regla DROP del perimetro (3.4.x)
+  Nodo: node-sec-1   Fecha: 2026-11-23 22:47:36   Commit: d5adb14
+  Criterio que valida: Seguridad perimetral (R5)
+  Esperado: Prioridad 42000, timeout 300 s, solo ipv4_src de esa IP, en todos los cores; incidente con tiempos y flow_id.
+################################################################################
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0 -- /usr/bin/python3
+rootdir: /home/ubuntu/proyecto-sdn
+plugins: anyio-4.2.0
+collecting ... collected 39 items / 36 deselected / 3 selected
+
+R5_04_3_4_1_la_regla_descarta_solo_el_origen_con_prioridad_y_timeout PASSED [ 33%]
+R5_04_3_4_2_el_atacante_externo_se_bloquea_en_todos_los_cores PASSED [ 66%]
+R5_04_3_4_3_registra_el_incidente_con_tiempos_y_flow_id PASSED [100%]
+
+======================= 3 passed, 36 deselected in 0.10s =======================
+RESULTADO R5-04: exit=0

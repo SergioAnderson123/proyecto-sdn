@@ -1,0 +1,25 @@
+
+
+################################################################################
+  R5-01  Lectura de la alerta del IDS (3.1.x)
+  Nodo: node-sec-1   Fecha: 2026-11-23 22:47:35   Commit: d5adb14
+  Criterio que valida: Seguridad perimetral (R5)
+  Esperado: Alerta valida -> se procesa y guarda sid/firma/hora. Incompleta o corrupta -> se descarta sin excepcion.
+################################################################################
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0 -- /usr/bin/python3
+rootdir: /home/ubuntu/proyecto-sdn
+plugins: anyio-4.2.0
+collecting ... collected 39 items / 31 deselected / 8 selected
+
+R5_01_3_1_1_alerta_valida_se_procesa_y_guarda_sus_datos PASSED [ 12%]
+R5_01_3_1_2_alerta_incompleta_se_descarta_sin_romper[ev0] PASSED [ 25%]
+R5_01_3_1_2_alerta_incompleta_se_descarta_sin_romper[ev1] PASSED [ 37%]
+R5_01_3_1_2_alerta_incompleta_se_descarta_sin_romper[ev2] PASSED [ 50%]
+R5_01_3_1_2_alerta_incompleta_se_descarta_sin_romper[ev3] PASSED [ 62%]
+R5_01_3_1_2_alerta_incompleta_se_descarta_sin_romper[ev4] PASSED [ 75%]
+R5_01_3_1_2_alerta_incompleta_se_descarta_sin_romper[ev5] PASSED [ 87%]
+R5_01_3_1_3_linea_json_corrupta_es_detectable PASSED [100%]
+
+======================= 8 passed, 31 deselected in 0.10s =======================
+RESULTADO R5-01: exit=0

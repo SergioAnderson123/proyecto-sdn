@@ -1,0 +1,9 @@
+=== vm-atacante | escaneo SYN real contra el server 10.0.0.10 ===
+
+##### ESCANEO SYN real (nmap -sT) 22:30:09 #####
+t0 (epoch) = 1795473009.644136324
+$ nmap -Pn -n -sT --max-rate 300 -p 1-300 10.0.0.10
+Not shown: 177 filtered tcp ports (no-response), 122 closed tcp ports (conn-refused)
+22/tcp open  ssh
+Nmap done: 1 IP address (1 host up) scanned in 22.26 seconds
+t_fin = 1795473031.944467225

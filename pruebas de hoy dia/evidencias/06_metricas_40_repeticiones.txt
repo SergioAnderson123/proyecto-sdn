@@ -1,0 +1,7 @@
+=== repeticiones.py | 40 repeticiones desde vm-atacante (19-nov-2026, slice de 14 VM) ===
+escenario  n  detectados  tasa  deteccion_media  deteccion_p95  mitigacion_media  mitigacion_max
+scan       10     10      100 %      472 ms         1448 ms         10.5 ms          13.5 ms
+flood      10     10      100 %      289 ms          848 ms         11.1 ms          12.7 ms
+fin        10     10      100 %      432 ms         1393 ms         10.2 ms          12.1 ms
+ddos       10     10      100 %      515 ms          541 ms         11.5 ms          14.3 ms
+errores: 0   bloqueadas == esperadas en las 40 repeticiones

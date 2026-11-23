@@ -1,0 +1,27 @@
+
+
+################################################################################
+  R5-02  Decision segun severidad y direccion (3.2.x)
+  Nodo: node-sec-1   Fecha: 2026-11-23 22:47:35   Commit: d5adb14
+  Criterio que valida: Seguridad perimetral (R5)
+  Esperado: Severidad 1-2 bloquea, 3-4 no. Externo->interno bloquea en cores; interno->externo en el borde.
+################################################################################
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0 -- /usr/bin/python3
+rootdir: /home/ubuntu/proyecto-sdn
+plugins: anyio-4.2.0
+collecting ... collected 39 items / 29 deselected / 10 selected
+
+R5_02_3_2_1_severidad_en_el_limite[1-True] PASSED [ 10%]
+R5_02_3_2_1_severidad_en_el_limite[2-True] PASSED [ 20%]
+R5_02_3_2_1_severidad_en_el_limite[3-False] PASSED [ 30%]
+R5_02_3_2_1_severidad_en_el_limite[4-False] PASSED [ 40%]
+R5_02_3_2_2_decide_a_quien_y_donde_bloquear[ev0-esperado0] PASSED [ 50%]
+R5_02_3_2_2_decide_a_quien_y_donde_bloquear[ev1-esperado1] PASSED [ 60%]
+R5_02_3_2_2_decide_a_quien_y_donde_bloquear[ev2-esperado2] PASSED [ 70%]
+R5_02_3_2_2_decide_a_quien_y_donde_bloquear[ev3-esperado3] PASSED [ 80%]
+R5_02_3_2_2_decide_a_quien_y_donde_bloquear[ev4-None] PASSED [ 90%]
+R5_02_3_2_3_externo_se_bloquea_en_el_core_e_interno_en_su_borde PASSED [100%]
+
+====================== 10 passed, 29 deselected in 0.18s =======================
+RESULTADO R5-02: exit=0

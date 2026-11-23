@@ -1,0 +1,17 @@
+=== node-sec-1 | prueba de bloqueo y desbloqueo con IP ficticia 192.0.2.77 (23-nov-2026) ===
+$ r5ctl.py bloquear 192.0.2.77 --seg 120
+Bloqueada 192.0.2.77 en of:000052ca28945241, of:00007e3401ecd842, of:000076f83813d34e por 120 s de inactividad.
+$ r5ctl.py bloqueos
+IP bloqueada  switch               prioridad  paquetes  vida  timeout
+------------  -------------------  ---------  --------  ----  --------------------
+192.0.2.77    of:00007e3401ecd842  42000      0         0 s   120 s de inactividad
+192.0.2.77    of:000076f83813d34e  42000      0         0 s   120 s de inactividad
+192.0.2.77    of:000052ca28945241  42000      0         0 s   120 s de inactividad
+$ GET /flows/application/org.campus.r5  (estado de cada regla)
+of:00007e3401ecd842 prio 42000 estado ADDED ['192.0.2.77/32']
+of:000076f83813d34e prio 42000 estado ADDED ['192.0.2.77/32']
+of:000052ca28945241 prio 42000 estado ADDED ['192.0.2.77/32']
+$ r5ctl.py desbloquear 192.0.2.77
+Desbloqueada 192.0.2.77 (3 flujo(s) retirado(s)).
+$ r5ctl.py bloqueos
+Sin bloqueos de R5 en ONOS.

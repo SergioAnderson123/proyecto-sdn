@@ -1,0 +1,21 @@
+
+
+################################################################################
+  R5-03  Lista blanca (3.3.x)
+  Nodo: node-sec-1   Fecha: 2026-11-23 22:47:36   Commit: d5adb14
+  Criterio que valida: Seguridad perimetral (R5)
+  Esperado: Una IP de la lista blanca nunca se bloquea; su vecina no listada si.
+################################################################################
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0 -- /usr/bin/python3
+rootdir: /home/ubuntu/proyecto-sdn
+plugins: anyio-4.2.0
+collecting ... collected 39 items / 35 deselected / 4 selected
+
+R5_03_3_3_1_ip_en_lista_blanca_no_se_bloquea[10.0.0.99-203.0.113.7] PASSED [ 25%]
+R5_03_3_3_1_ip_en_lista_blanca_no_se_bloquea[10.0.0.10-198.51.100.9] PASSED [ 50%]
+R5_03_3_3_2_ip_no_listada_se_bloquea_y_la_blanca_vecina_no PASSED [ 75%]
+R5_03_3_3_3_la_lista_blanca_protege_solo_a_la_ip_que_se_iba_a_bloquear PASSED [100%]
+
+======================= 4 passed, 35 deselected in 0.11s =======================
+RESULTADO R5-03: exit=0

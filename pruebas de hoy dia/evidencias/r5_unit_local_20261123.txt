@@ -1,0 +1,233 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.2.0, pluggy-1.7.0 -- C:\Users\labtel\AppData\Local\Programs\Python\Python312\python.exe
+rootdir: C:\Users\labtel\Documents\proyecto-sdn-topologia14
+plugins: anyio-4.16.0
+collecting ... collected 156 items
+
+R5/tests/test_espejo.py::test_numero_de_reglas_es_cores_por_entradas_por_prefijos PASSED [  0%]
+R5/tests/test_espejo.py::test_las_reglas_cubren_los_dos_cores PASSED     [  1%]
+R5/tests/test_espejo.py::test_no_se_espeja_la_troncal_entre_cores_ni_la_gestion PASSED [  1%]
+R5/tests/test_espejo.py::test_cada_paquete_se_copia_una_sola_vez_por_core PASSED [  2%]
+R5/tests/test_espejo.py::test_el_reenvio_normal_va_primero_y_cada_sensor_recibe_la_copia_con_su_mac PASSED [  3%]
+R5/tests/test_espejo.py::test_sin_mac_no_se_reescribe_la_direccion PASSED [  3%]
+R5/tests/test_espejo.py::test_prioridad_dentro_de_la_banda_de_r5_y_bajo_el_drop PASSED [  4%]
+R5/tests/test_espejo.py::test_solo_se_espeja_ipv4_de_las_redes_declaradas PASSED [  5%]
+R5/tests/test_espejo.py::test_resolver_puertos_avisa_de_una_interfaz_inexistente PASSED [  5%]
+R5/tests/test_espejo.py::test_resolver_puertos_acepta_la_topologia_correcta PASSED [  6%]
+R5/tests/test_espejo.py::test_puertos_de_lee_el_nombre_de_interfaz_de_las_anotaciones PASSED [  7%]
+R5/tests/test_espejo.py::test_onos_pasa_al_siguiente_nodo_si_uno_cae PASSED [  7%]
+R5/tests/test_espejo.py::test_onos_5xx_tambien_pasa_al_siguiente_nodo PASSED [  8%]
+R5/tests/test_espejo.py::test_onos_sin_ningun_nodo_sale_con_error PASSED [  8%]
+R5/tests/test_espejo.py::test_modo_clasico_sigue_instalando_tres_reglas PASSED [  9%]
+R5/tests/test_espejo.py::test_se_puede_nombrar_un_puerto_por_su_numero_si_onos_no_da_nombres PASSED [ 10%]
+R5/tests/test_espejo.py::test_con_un_sensor_por_core_cada_regla_copia_solo_a_su_sensor PASSED [ 10%]
+R5/tests/test_espejo.py::test_modo_grupo_la_regla_es_grupo_mas_tabla_y_no_lleva_normal PASSED [ 11%]
+R5/tests/test_espejo.py::test_modo_grupo_canario_usa_un_solo_origen_y_prioridad_mayor PASSED [ 12%]
+R5/tests/test_espejo.py::test_cuerpo_del_grupo_tiene_un_cubo_por_sensor_con_su_mac_y_su_puerto PASSED [ 12%]
+R5/tests/test_espejo.py::test_asegurar_grupo_lo_crea_y_devuelve_su_id PASSED [ 13%]
+R5/tests/test_espejo.py::test_asegurar_grupo_no_lo_recrea_si_ya_es_igual_y_lo_recrea_si_cambio PASSED [ 14%]
+R5/tests/test_integrador.py::test_decidir[ev0-esperado0] PASSED          [ 14%]
+R5/tests/test_integrador.py::test_decidir[ev1-esperado1] PASSED          [ 15%]
+R5/tests/test_integrador.py::test_decidir[ev2-esperado2] PASSED          [ 16%]
+R5/tests/test_integrador.py::test_decidir[ev3-None] PASSED               [ 16%]
+R5/tests/test_integrador.py::test_decidir[ev4-None] PASSED               [ 17%]
+R5/tests/test_integrador.py::test_decidir[ev5-esperado5] PASSED          [ 17%]
+R5/tests/test_integrador.py::test_decidir[ev6-None] PASSED               [ 18%]
+R5/tests/test_integrador.py::test_decidir[ev7-esperado7] PASSED          [ 19%]
+R5/tests/test_integrador.py::test_decidir[ev8-None] PASSED               [ 19%]
+R5/tests/test_integrador.py::test_decidir_intranet_desactivable PASSED   [ 20%]
+R5/tests/test_integrador.py::test_decidir_ignora_ipv6_y_datos_invalidos[2001:db8::1-10.0.0.50] PASSED [ 21%]
+R5/tests/test_integrador.py::test_decidir_ignora_ipv6_y_datos_invalidos[10.0.1.10-fe80::1] PASSED [ 21%]
+R5/tests/test_integrador.py::test_decidir_ignora_ipv6_y_datos_invalidos[-10.0.0.50] PASSED [ 22%]
+R5/tests/test_integrador.py::test_decidir_ignora_ipv6_y_datos_invalidos[basura-x] PASSED [ 23%]
+R5/tests/test_integrador.py::test_decidir_evento_sin_campos PASSED       [ 23%]
+R5/tests/test_integrador.py::test_regla_drop_contenido PASSED            [ 24%]
+R5/tests/test_integrador.py::test_procesa_ataque_externo_en_core PASSED  [ 25%]
+R5/tests/test_integrador.py::test_ignora_severidad_alta PASSED           [ 25%]
+R5/tests/test_integrador.py::test_ignora_eventos_que_no_son_alertas PASSED [ 26%]
+R5/tests/test_integrador.py::test_deduplica_misma_ip PASSED              [ 26%]
+R5/tests/test_integrador.py::test_host_interno_se_bloquea_en_su_borde PASSED [ 27%]
+R5/tests/test_integrador.py::test_host_interno_desconocido_cae_al_core PASSED [ 28%]
+R5/tests/test_integrador.py::test_error_permanente_descarta_sin_bloquear PASSED [ 28%]
+R5/tests/test_integrador.py::test_error_transitorio_se_propaga_y_no_registra PASSED [ 29%]
+R5/tests/test_integrador.py::test_clasificacion_http[500-Reintentar] PASSED [ 30%]
+R5/tests/test_integrador.py::test_clasificacion_http[503-Reintentar] PASSED [ 30%]
+R5/tests/test_integrador.py::test_clasificacion_http[401-Reintentar] PASSED [ 31%]
+R5/tests/test_integrador.py::test_clasificacion_http[403-Reintentar] PASSED [ 32%]
+R5/tests/test_integrador.py::test_clasificacion_http[408-Reintentar] PASSED [ 32%]
+R5/tests/test_integrador.py::test_clasificacion_http[429-Reintentar] PASSED [ 33%]
+R5/tests/test_integrador.py::test_clasificacion_http[400-Descartar] PASSED [ 33%]
+R5/tests/test_integrador.py::test_clasificacion_http[404-Descartar] PASSED [ 34%]
+R5/tests/test_integrador.py::test_red_caida_es_reintentable PASSED       [ 35%]
+R5/tests/test_integrador.py::test_exito_devuelve_respuesta PASSED        [ 35%]
+R5/tests/test_integrador.py::test_reconcilia_olvida_ip_sin_flujo PASSED  [ 36%]
+R5/tests/test_integrador.py::test_reconcilia_respeta_periodo_de_gracia PASSED [ 37%]
+R5/tests/test_integrador.py::test_reconcilia_sin_bloqueos_no_consulta PASSED [ 37%]
+R5/tests/test_integrador.py::test_reconcilia_si_onos_falla_conserva_lista PASSED [ 38%]
+R5/tests/test_integrador.py::test_estado_ida_y_vuelta PASSED             [ 39%]
+R5/tests/test_integrador.py::test_estado_inexistente_o_corrupto PASSED   [ 39%]
+R5/tests/test_integrador.py::test_estado_migra_formato_anterior PASSED   [ 40%]
+R5/tests/test_integrador.py::test_guardado_atomico_no_deja_temporales PASSED [ 41%]
+R5/tests/test_integrador.py::test_i11_desactivada_sin_mapper_url PASSED  [ 41%]
+R5/tests/test_integrador.py::test_i11_pide_al_mapper_revocar_con_la_mac_de_onos PASSED [ 42%]
+R5/tests/test_integrador.py::test_i11_sin_mac_en_onos_no_llama_al_mapper PASSED [ 42%]
+R5/tests/test_integrador.py::test_i11_un_mapper_caido_no_rompe_el_bloqueo[falla0] PASSED [ 43%]
+R5/tests/test_integrador.py::test_i11_un_mapper_caido_no_rompe_el_bloqueo[falla1] PASSED [ 44%]
+R5/tests/test_integrador.py::test_i11_host_interno_bloqueado_queda_con_su_sesion_revocada PASSED [ 44%]
+R5/tests/test_integrador.py::test_i11_atacante_externo_no_toca_sesiones PASSED [ 45%]
+R5/tests/test_integrador.py::test_mac_del_evento_toma_la_mac_origen_si_el_atacante_es_el_origen PASSED [ 46%]
+R5/tests/test_integrador.py::test_mac_del_evento_toma_la_mac_destino_si_el_evento_esta_invertido PASSED [ 46%]
+R5/tests/test_integrador.py::test_mac_del_evento_sin_ether_es_none PASSED [ 47%]
+R5/tests/test_integrador.py::test_i11_usa_la_mac_de_la_alerta_sin_consultar_a_onos PASSED [ 48%]
+R5/tests/test_integrador_cluster.py::test_atacante_externo_se_bloquea_en_los_dos_cores_con_una_sola_peticion PASSED [ 48%]
+R5/tests/test_integrador_cluster.py::test_host_interno_se_bloquea_solo_en_su_acceso PASSED [ 49%]
+R5/tests/test_integrador_cluster.py::test_host_interno_desconocido_cae_a_los_dos_cores PASSED [ 50%]
+R5/tests/test_integrador_cluster.py::test_la_misma_ip_no_se_bloquea_dos_veces PASSED [ 50%]
+R5/tests/test_integrador_cluster.py::test_el_registro_dice_que_sensor_bloqueo PASSED [ 51%]
+R5/tests/test_integrador_cluster.py::test_servidores_de_recursos_no_se_bloquean_por_defecto PASSED [ 51%]
+R5/tests/test_integrador_cluster.py::test_onos_pasa_al_siguiente_nodo_si_uno_no_responde PASSED [ 52%]
+R5/tests/test_integrador_cluster.py::test_onos_recuerda_el_nodo_que_funciono PASSED [ 53%]
+R5/tests/test_integrador_cluster.py::test_onos_un_5xx_pasa_al_siguiente_nodo PASSED [ 53%]
+R5/tests/test_integrador_cluster.py::test_onos_un_4xx_no_cambia_de_nodo PASSED [ 54%]
+R5/tests/test_integrador_cluster.py::test_onos_con_todos_los_nodos_caidos_se_reintenta_despues PASSED [ 55%]
+R5/tests/test_integrador_cluster.py::test_lista_urls_ignora_espacios_barras_y_vacios PASSED [ 55%]
+R5/tests/test_integrador_cluster.py::test_i11_usa_la_replica_si_el_primer_mapper_no_responde PASSED [ 56%]
+R5/tests/test_integrador_cluster.py::test_i11_no_llama_a_la_replica_si_el_primero_responde PASSED [ 57%]
+R5/tests/test_integrador_cluster.py::test_i11_con_los_dos_mapper_caidos_devuelve_none_sin_romper_el_bloqueo PASSED [ 57%]
+R5/tests/test_topologia.py::test_el_ejemplo_del_repo_es_valido PASSED    [ 58%]
+R5/tests/test_topologia.py::test_cada_core_espeja_a_los_dos_sensores_y_no_mezcla_entradas_con_espejo PASSED [ 58%]
+R5/tests/test_topologia.py::test_las_urls_pierden_la_barra_final PASSED  [ 59%]
+R5/tests/test_topologia.py::test_la_mac_se_normaliza_a_minusculas PASSED [ 60%]
+R5/tests/test_topologia.py::test_la_mac_es_opcional PASSED               [ 60%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-deviceId] PASSED [ 61%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-repetido] PASSED [ 62%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-MAC] PASSED [ 62%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-desconocidos0] PASSED [ 63%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-falta 'espejo'] PASSED [ 64%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-desconocidos1] PASSED [ 64%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-entradas] PASSED [ 65%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-no puede estar vac\xedo0] PASSED [ 66%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-red] PASSED [ 66%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-no puede estar vac\xedo1] PASSED [ 67%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-no puede estar vac\xedo2] PASSED [ 67%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-al menos un core] PASSED [ 68%]
+R5/tests/test_topologia.py::test_rechaza_topologias_invalidas[<lambda>-no puede estar vac\xedo3] PASSED [ 69%]
+R5/tests/test_topologia.py::test_un_archivo_que_no_es_un_mapa_se_rechaza PASSED [ 69%]
+R5/tests/test_topologia.py::test_nombres_de_switches_incluye_cores_y_accesos PASSED [ 70%]
+R5/tests/test_topologia.py::test_aplicar_entorno_rellena_lo_que_falta_y_no_pisa_lo_definido PASSED [ 71%]
+R5/tests/test_topologia.py::test_aplicar_entorno_sin_topologia_no_hace_nada PASSED [ 71%]
+R5/tests/test_topologia.py::test_el_segmento_de_control_entra_a_la_lista_blanca_y_no_se_solapa_con_el_campus PASSED [ 72%]
+R5/tests/test_topologia.py::test_rechaza_un_segmento_de_control_que_se_solapa_con_home_o_externa[10.0.0.0/16] PASSED [ 73%]
+R5/tests/test_topologia.py::test_rechaza_un_segmento_de_control_que_se_solapa_con_home_o_externa[10.0.0.128/25] PASSED [ 73%]
+R5/tests/test_topologia.py::test_rechaza_un_segmento_de_control_que_se_solapa_con_home_o_externa[203.0.113.0/24] PASSED [ 74%]
+R5/tests/test_topologia.py::test_el_control_es_opcional_y_no_duplica_la_lista_blanca PASSED [ 75%]
+R5/tests/test_topologia.py::test_cada_acceso_tiene_un_solo_uplink_y_ningun_core_espeja_accesos PASSED [ 75%]
+R5/tests/test_topologia.py::test_un_core_puede_espejar_solo_a_su_sensor PASSED [ 76%]
+R5/deploy/tests/test_ids.py::test_af_packet_reemplaza_la_seccion_por_las_interfaces_pedidas PASSED [ 76%]
+R5/deploy/tests/test_ids.py::test_af_packet_no_toca_el_resto_del_archivo PASSED [ 77%]
+R5/deploy/tests/test_ids.py::test_af_packet_es_idempotente PASSED        [ 78%]
+R5/deploy/tests/test_ids.py::test_af_packet_cambia_las_interfaces_en_un_segundo_arranque PASSED [ 78%]
+R5/deploy/tests/test_ids.py::test_af_packet_agrega_la_seccion_si_no_existe PASSED [ 79%]
+R5/deploy/tests/test_ids.py::test_lista_de_interfaces_invalida[] PASSED  [ 80%]
+R5/deploy/tests/test_ids.py::test_lista_de_interfaces_invalida[ , ] PASSED [ 80%]
+R5/deploy/tests/test_ids.py::test_lista_de_interfaces_invalida[ens4,ens4] PASSED [ 81%]
+R5/deploy/tests/test_ids.py::test_lista_de_interfaces_ignora_espacios PASSED [ 82%]
+R5/deploy/tests/test_ids.py::test_el_compose_define_los_tres_servicios FAILED [ 82%]
+R5/deploy/tests/test_ids.py::test_el_integrador_recibe_el_nombre_del_sensor_y_la_topologia PASSED [ 83%]
+R5/deploy/tests/test_ids.py::test_suricata_lee_las_nic_de_espejo_y_la_topologia PASSED [ 83%]
+R5/deploy/tests/test_ids.py::test_el_instalador_del_espejo_solo_se_corre_a_peticion PASSED [ 84%]
+R5/deploy/tests/test_ids.py::test_la_imagen_incluye_topologia_py_y_pyyaml PASSED [ 85%]
+R5/deploy/tests/test_ids.py::test_el_env_de_ejemplo_es_coherente_con_la_topologia_de_ejemplo PASSED [ 85%]
+R5/deploy/tests/test_ids.py::test_topologia_yaml_real_no_se_versiona PASSED [ 86%]
+R5/deploy/tests/test_ids.py::test_los_scripts_de_shell_tienen_sintaxis_valida[ruta0] FAILED [ 87%]
+R5/deploy/tests/test_ids.py::test_los_scripts_de_shell_tienen_sintaxis_valida[ruta1] FAILED [ 87%]
+R5/deploy/tests/test_ids.py::test_los_scripts_de_shell_tienen_sintaxis_valida[ruta2] FAILED [ 88%]
+R5/deploy/tests/test_ids.py::test_los_scripts_de_shell_usan_fin_de_linea_lf[ruta0] PASSED [ 89%]
+R5/deploy/tests/test_ids.py::test_los_scripts_de_shell_usan_fin_de_linea_lf[ruta1] PASSED [ 89%]
+R5/deploy/tests/test_ids.py::test_los_scripts_de_shell_usan_fin_de_linea_lf[ruta2] PASSED [ 90%]
+R5/deploy/tests/test_prioridades.py::test_r5_drop_y_espejo_coinciden_con_el_mapa PASSED [ 91%]
+R5/deploy/tests/test_prioridades.py::test_r2_sesion_confianza_y_tablas_coinciden_con_el_mapa PASSED [ 91%]
+R5/deploy/tests/test_prioridades.py::test_portal_cautivo_coincide_con_el_mapa_y_cede_ante_la_sesion PASSED [ 92%]
+R5/deploy/tests/test_prioridades.py::test_r1_drop_temporal_y_sesion_en_el_policy_mapper_coinciden_con_el_mapa PASSED [ 92%]
+R5/deploy/tests/test_prioridades.py::test_el_espejo_de_r5_queda_sobre_la_sesion_de_r2 PASSED [ 93%]
+R5/deploy/tests/test_prioridades.py::test_el_drop_de_r5_prevalece_sobre_sesion_y_espejo_y_cede_ante_r1 PASSED [ 94%]
+R5/deploy/tests/test_prioridades.py::test_el_eapol_de_un_puerto_con_sesion_gana_a_la_sesion_y_a_la_lista_negra PASSED [ 94%]
+R5/deploy/tests/test_prioridades.py::test_el_policy_mapper_instala_el_eapol_a_la_prioridad_del_mapa PASSED [ 95%]
+R5/deploy/tests/test_prioridades.py::test_r5_usa_solo_su_banda PASSED    [ 96%]
+R5/deploy/tests/test_prioridades.py::test_las_tablas_de_rol_no_compiten_en_la_tabla_0 PASSED [ 96%]
+R5/deploy/tests/test_prioridades.py::test_las_prioridades_clave_son_distintas_entre_requerimientos PASSED [ 97%]
+R5/deploy/tests/test_prioridades.py::test_dhcp_y_cuarentena_coinciden_con_el_mapa PASSED [ 98%]
+R5/deploy/tests/test_prioridades.py::test_el_dhcp_gana_a_la_sesion_pero_cede_ante_la_lista_negra_y_el_drop_de_r5 PASSED [ 98%]
+R5/deploy/tests/test_prioridades.py::test_la_cuarentena_es_lo_ultimo_de_la_tabla_0_y_su_tabla_es_nueva PASSED [ 99%]
+R5/deploy/tests/test_prioridades.py::test_la_entrada_de_la_prueba_aislada_de_capa_3_queda_entre_la_sesion_y_las_reglas_de_r5 PASSED [100%]
+
+================================== FAILURES ===================================
+__________________ test_el_compose_define_los_tres_servicios __________________
+
+compose = {'x-r5-env': {'ONOS_USER': '${ONOS_USER:-onos}', 'ONOS_PASS': '${ONOS_PASS:-rocks}', 'APP_ID': 'org.campus.r5', 'TOPOL...t/r5/topologia.yaml', ...}, ...}}, 'volumes': {'suricata-log': None, 'suricata-rules': None, 'integrador-state': None}}
+
+    def test_el_compose_define_los_tres_servicios(compose):
+>       assert set(compose["services"]) == {"suricata", "integrador", "espejo"}
+E       AssertionError: assert {'espejo', 'e...', 'suricata'} == {'espejo', 'i...', 'suricata'}
+E         
+E         Extra items in the left set:
+E         'exporter'
+E         
+E         Full diff: (-: missing in left side, +: extra in left side)
+E           {
+E               'espejo',...
+E         
+E         ...Full output truncated, use '-vv' to show
+
+R5\deploy\tests\test_ids.py:99: AssertionError
+___________ test_los_scripts_de_shell_tienen_sintaxis_valida[ruta0] ___________
+
+ruta = ('up.sh',)
+
+    @pytest.mark.skipif(shutil.which("bash") is None, reason="sin bash")
+    @pytest.mark.parametrize("ruta", [("up.sh",), ("macs.sh",), ("suricata", "entrypoint.sh")])
+    def test_los_scripts_de_shell_tienen_sintaxis_valida(ruta):
+        r = subprocess.run(["bash", "-n", os.path.join(IDS, *ruta)], capture_output=True, text=True)
+>       assert r.returncode == 0, r.stderr
+E       AssertionError: /bin/bash: C:UserslabtelDocumentsproyecto-sdn-topologia14R5deploytests......R5deployidsup.sh: No such file or directory
+E         
+E       assert 127 == 0
+E        +  where 127 = CompletedProcess(args=['bash', '-n', 'C:\\Users\\labtel\\Documents\\proyecto-sdn-topologia14\\R5\\deploy\\tests\\..\\..\\..\\R5\\deploy\\ids\\up.sh'], returncode=127, stdout='', stderr='/bin/bash: C:UserslabtelDocumentsproyecto-sdn-topologia14R5deploytests......R5deployidsup.sh: No such file or directory\n').returncode
+
+R5\deploy\tests\test_ids.py:155: AssertionError
+___________ test_los_scripts_de_shell_tienen_sintaxis_valida[ruta1] ___________
+
+ruta = ('macs.sh',)
+
+    @pytest.mark.skipif(shutil.which("bash") is None, reason="sin bash")
+    @pytest.mark.parametrize("ruta", [("up.sh",), ("macs.sh",), ("suricata", "entrypoint.sh")])
+    def test_los_scripts_de_shell_tienen_sintaxis_valida(ruta):
+        r = subprocess.run(["bash", "-n", os.path.join(IDS, *ruta)], capture_output=True, text=True)
+>       assert r.returncode == 0, r.stderr
+E       AssertionError: /bin/bash: C:UserslabtelDocumentsproyecto-sdn-topologia14R5deploytests......R5deployidsmacs.sh: No such file or directory
+E         
+E       assert 127 == 0
+E        +  where 127 = CompletedProcess(args=['bash', '-n', 'C:\\Users\\labtel\\Documents\\proyecto-sdn-topologia14\\R5\\deploy\\tests\\..\\..\\..\\R5\\deploy\\ids\\macs.sh'], returncode=127, stdout='', stderr='/bin/bash: C:UserslabtelDocumentsproyecto-sdn-topologia14R5deploytests......R5deployidsmacs.sh: No such file or directory\n').returncode
+
+R5\deploy\tests\test_ids.py:155: AssertionError
+___________ test_los_scripts_de_shell_tienen_sintaxis_valida[ruta2] ___________
+
+ruta = ('suricata', 'entrypoint.sh')
+
+    @pytest.mark.skipif(shutil.which("bash") is None, reason="sin bash")
+    @pytest.mark.parametrize("ruta", [("up.sh",), ("macs.sh",), ("suricata", "entrypoint.sh")])
+    def test_los_scripts_de_shell_tienen_sintaxis_valida(ruta):
+        r = subprocess.run(["bash", "-n", os.path.join(IDS, *ruta)], capture_output=True, text=True)
+>       assert r.returncode == 0, r.stderr
+E       AssertionError: /bin/bash: C:UserslabtelDocumentsproyecto-sdn-topologia14R5deploytests......R5deployidssuricataentrypoint.sh: No such file or directory
+E         
+E       assert 127 == 0
+E        +  where 127 = CompletedProcess(args=['bash', '-n', 'C:\\Users\\labtel\\Documents\\proyecto-sdn-topologia14\\R5\\deploy\\tests\\..\\..\\..\\R5\\deploy\\ids\\suricata\\entrypoint.sh'], returncode=127, stdout='', stderr='/bin/bash: C:UserslabtelDocumentsproyecto-sdn-topologia14R5deploytests......R5deployidssuricataentrypoint.sh: No such file or directory\n').returncode
+
+R5\deploy\tests\test_ids.py:155: AssertionError
+=========================== short test summary info ===========================
+FAILED R5/deploy/tests/test_ids.py::test_el_compose_define_los_tres_servicios
+FAILED R5/deploy/tests/test_ids.py::test_los_scripts_de_shell_tienen_sintaxis_valida[ruta0]
+FAILED R5/deploy/tests/test_ids.py::test_los_scripts_de_shell_tienen_sintaxis_valida[ruta1]
+FAILED R5/deploy/tests/test_ids.py::test_los_scripts_de_shell_tienen_sintaxis_valida[ruta2]
+======================== 4 failed, 152 passed in 7.44s ========================

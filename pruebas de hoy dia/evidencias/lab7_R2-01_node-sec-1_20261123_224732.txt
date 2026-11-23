@@ -1,0 +1,31 @@
+
+
+################################################################################
+  R2-01  Decision de acceso rol -> recurso (2.1.x)
+  Nodo: node-sec-1   Fecha: 2026-11-23 22:47:32   Commit: d5adb14
+  Criterio que valida: Restriccion de recursos privilegiados (R2)
+  Esperado: Administrador: PERMIT a la consola SDN. Docente: DENY con motivo y sin ninguna regla que permita el acceso.
+################################################################################
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0 -- /usr/bin/python3
+rootdir: /home/ubuntu/proyecto-sdn
+plugins: anyio-4.2.0
+collecting ... collected 33 items / 19 deselected / 14 selected
+
+R2_01_2_1_1_el_administrador_accede_a_la_consola_sdn PASSED [  7%]
+R2_01_2_1_2_el_docente_no_accede_a_la_consola_sdn_y_se_indica_el_motivo PASSED [ 14%]
+R2_01_2_1_3_la_denegacion_no_instala_ninguna_regla_que_permita_el_acceso PASSED [ 21%]
+R2_01_2_1_4_acepta_el_rol_del_ldap_o_el_de_la_matriz[docente-professor] PASSED [ 28%]
+R2_01_2_1_4_acepta_el_rol_del_ldap_o_el_de_la_matriz[alumno-student] PASSED [ 35%]
+R2_01_2_1_4_acepta_el_rol_del_ldap_o_el_de_la_matriz[soporte-administrator] PASSED [ 42%]
+R2_01_2_1_4_acepta_el_rol_del_ldap_o_el_de_la_matriz[invitado-guest] PASSED [ 50%]
+R2_01_2_1_5_matriz_rol_recurso[professor-grade_system-PERMIT] PASSED [ 57%]
+R2_01_2_1_5_matriz_rol_recurso[student-grade_system-DENY] PASSED [ 64%]
+R2_01_2_1_5_matriz_rol_recurso[student-virtual_library-PERMIT] PASSED [ 71%]
+R2_01_2_1_5_matriz_rol_recurso[guest-virtual_library-DENY] PASSED [ 78%]
+R2_01_2_1_5_matriz_rol_recurso[guest-university_portal-PERMIT] PASSED [ 85%]
+R2_01_2_1_5_matriz_rol_recurso[professor-student_records-DENY] PASSED [ 92%]
+R2_01_2_1_5_matriz_rol_recurso[administrator-student_records-PERMIT] PASSED [100%]
+
+====================== 14 passed, 19 deselected in 0.56s =======================
+RESULTADO R2-01: exit=0

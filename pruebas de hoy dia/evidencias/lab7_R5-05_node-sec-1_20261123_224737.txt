@@ -1,0 +1,21 @@
+
+
+################################################################################
+  R5-05  Sin duplicar y liberacion (3.5.x)
+  Nodo: node-sec-1   Fecha: 2026-11-23 22:47:37   Commit: d5adb14
+  Criterio que valida: Seguridad perimetral (R5)
+  Esperado: Misma IP 3 veces -> 1 regla. Flujo borrado -> se olvida la IP. Reincidente -> se vuelve a bloquear.
+################################################################################
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0 -- /usr/bin/python3
+rootdir: /home/ubuntu/proyecto-sdn
+plugins: anyio-4.2.0
+collecting ... collected 39 items / 35 deselected / 4 selected
+
+R5_05_3_5_1_una_ip_ya_bloqueada_no_genera_otra_regla PASSED [ 25%]
+R5_05_3_5_2_reconciliar_olvida_la_ip_cuyo_flujo_ya_no_existe PASSED [ 50%]
+R5_05_3_5_3_reconciliar_respeta_el_periodo_de_gracia_y_los_flujos_vigentes PASSED [ 75%]
+R5_05_3_5_4_tras_liberar_la_ip_reincidente_se_vuelve_a_bloquear PASSED [100%]
+
+======================= 4 passed, 35 deselected in 0.10s =======================
+RESULTADO R5-05: exit=0

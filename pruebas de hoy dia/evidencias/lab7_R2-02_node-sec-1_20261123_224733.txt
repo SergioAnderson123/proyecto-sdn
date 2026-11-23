@@ -1,0 +1,30 @@
+
+
+################################################################################
+  R2-02  Rol o recurso inexistente (2.2.x)
+  Nodo: node-sec-1   Fecha: 2026-11-23 22:47:33   Commit: d5adb14
+  Criterio que valida: Denegacion por defecto (R2)
+  Esperado: Un rol o recurso no registrado se deniega siempre (DENY), y cada tabla de rol termina en un DROP explicito.
+################################################################################
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0 -- /usr/bin/python3
+rootdir: /home/ubuntu/proyecto-sdn
+plugins: anyio-4.2.0
+collecting ... collected 33 items / 20 deselected / 13 selected
+
+R2_02_2_2_1_un_rol_que_no_existe_se_deniega[Invitado] PASSED [  7%]
+R2_02_2_2_1_un_rol_que_no_existe_se_deniega[visitante] PASSED [ 15%]
+R2_02_2_2_1_un_rol_que_no_existe_se_deniega[] PASSED [ 23%]
+R2_02_2_2_1_un_rol_que_no_existe_se_deniega[ADMINISTRATOR] PASSED [ 30%]
+R2_02_2_2_1_un_rol_que_no_existe_se_deniega[None] PASSED [ 38%]
+R2_02_2_2_2_un_recurso_fuera_del_inventario_se_deniega_incluso_al_administrador[no_existe] PASSED [ 46%]
+R2_02_2_2_2_un_recurso_fuera_del_inventario_se_deniega_incluso_al_administrador[] PASSED [ 53%]
+R2_02_2_2_2_un_recurso_fuera_del_inventario_se_deniega_incluso_al_administrador[internet] PASSED [ 61%]
+R2_02_2_2_2_un_recurso_fuera_del_inventario_se_deniega_incluso_al_administrador[../etc/passwd] PASSED [ 69%]
+R2_02_2_2_2_un_recurso_fuera_del_inventario_se_deniega_incluso_al_administrador[None] PASSED [ 76%]
+R2_02_2_2_3_servicios_permitidos_de_un_rol_desconocido_es_vacio PASSED [ 84%]
+R2_02_2_2_4_la_tabla_de_un_rol_termina_en_un_drop_explicito PASSED [ 92%]
+R2_02_2_2_5_un_recurso_sin_regla_para_el_rol_se_deniega PASSED [100%]
+
+====================== 13 passed, 20 deselected in 0.47s =======================
+RESULTADO R2-02: exit=0

@@ -1,0 +1,12 @@
+=== node-sec-1 | R5 detecta y bloquea al atacante 203.0.113.103 durante el escaneo ===
+$ r5ctl.py bloqueos
+IP bloqueada   switch               prioridad  paquetes  vida  timeout             
+-------------  -------------------  ---------  --------  ----  --------------------
+203.0.113.103  of:00007e3401ecd842  42000      123       23 s  300 s de inactividad
+203.0.113.103  of:000076f83813d34e  42000      0         24 s  300 s de inactividad
+203.0.113.103  of:000052ca28945241  42000      449       24 s  300 s de inactividad
+
+$ creacion del DROP (hora ONOS) y tiempos
+ecd842 prio 42000 vida 28 s | creado a t0 + 1.54 s | paquetes descartados: 123
+13d34e prio 42000 vida 24 s | creado a t0 + 5.54 s | paquetes descartados: 0
+945241 prio 42000 vida 24 s | creado a t0 + 5.54 s | paquetes descartados: 449

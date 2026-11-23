@@ -1,0 +1,3 @@
+{"flows":[{"deviceId":"of:000052ca28945241","tableId":60,"priority":150,"timeout":3600,"isPermanent":false,
+"selector":{"criteria":[{"type":"ETH_DST","mac":"02:00:5E:00:00:FE"},{"type":"ETH_TYPE","ethType":"0x800"},{"type":"IPV4_DST","ip":"203.0.113.103/32"}]},
+"treatment":{"instructions":[{"type":"L2MODIFICATION","subtype":"ETH_DST","mac":"FA:16:3E:EB:EA:4C"},{"type":"L3MODIFICATION","subtype":"DEC_TTL"},{"type":"OUTPUT","port":"1"}],"deferred":[]}}]}

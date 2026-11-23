@@ -1,0 +1,18 @@
+=== node-sec-1 | vigilancia de bloqueos de R5 durante el trafico mixto (cada 15 s) ===
+--- 22:32:47
+bloqueadas: {'203.0.113.150/32': {'sw': 3, 'pk': 1190, 'vida': 24}}
+--- 22:33:02
+bloqueadas: {'203.0.113.150/32': {'sw': 3, 'pk': 1370, 'vida': 39}}
+--- 22:33:17
+bloqueadas: {'203.0.113.150/32': {'sw': 3, 'pk': 1566, 'vida': 54}}
+--- 22:33:32
+bloqueadas: {'203.0.113.150/32': {'sw': 3, 'pk': 2930, 'vida': 69}}
+--- 22:33:47
+bloqueadas: {'203.0.113.150/32': {'sw': 3, 'pk': 3330, 'vida': 84}}
+--- 22:34:02
+bloqueadas: {'203.0.113.150/32': {'sw': 3, 'pk': 3630, 'vida': 99}}
+--- 22:34:17
+bloqueadas: {'203.0.113.150/32': {'sw': 3, 'pk': 4030, 'vida': 114}}
+--- 22:34:32
+bloqueadas: {'203.0.113.150/32': {'sw': 3, 'pk': 4550, 'vida': 129}}
+--> solo 203.0.113.150 (origen malicioso) bloqueada; 203.0.113.103 (trafico normal) nunca

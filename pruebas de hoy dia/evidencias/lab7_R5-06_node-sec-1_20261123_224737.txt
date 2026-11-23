@@ -1,0 +1,27 @@
+
+
+################################################################################
+  R5-06  Resiliencia ante fallas de ONOS (3.6.x)
+  Nodo: node-sec-1   Fecha: 2026-11-23 22:47:37   Commit: d5adb14
+  Criterio que valida: Seguridad perimetral (R5)
+  Esperado: Nodo caido o 5xx -> siguiente nodo. 401/403/408/429 -> reintento. 4xx -> descarta.
+################################################################################
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0 -- /usr/bin/python3
+rootdir: /home/ubuntu/proyecto-sdn
+plugins: anyio-4.2.0
+collecting ... collected 39 items / 29 deselected / 10 selected
+
+R5_06_3_6_1_si_un_nodo_cae_pasa_al_siguiente_y_lo_recuerda PASSED [ 10%]
+R5_06_3_6_2_nodo_con_5xx_cede_ante_el_siguiente PASSED [ 20%]
+R5_06_3_6_3_errores_transitorios_se_reintentan[401] PASSED [ 30%]
+R5_06_3_6_3_errores_transitorios_se_reintentan[403] PASSED [ 40%]
+R5_06_3_6_3_errores_transitorios_se_reintentan[408] PASSED [ 50%]
+R5_06_3_6_3_errores_transitorios_se_reintentan[429] PASSED [ 60%]
+R5_06_3_6_4_errores_permanentes_se_descartan[400] PASSED [ 70%]
+R5_06_3_6_4_errores_permanentes_se_descartan[404] PASSED [ 80%]
+R5_06_3_6_4_errores_permanentes_se_descartan[409] PASSED [ 90%]
+R5_06_3_6_5_todos_los_nodos_caidos_es_reintentable_y_no_pierde_la_alerta PASSED [100%]
+
+====================== 10 passed, 29 deselected in 0.11s =======================
+RESULTADO R5-06: exit=0

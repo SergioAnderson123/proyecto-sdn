@@ -1,0 +1,80 @@
+
+
+################################################################################
+  R1-02  Credenciales invalidas (1.2.x)
+  Nodo: 23V307   Fecha: 2026-11-23 17:47:31   Commit: d5adb14
+  Criterio que valida: Rechazo seguro (R1)
+  Esperado: Clave mala, usuario inexistente, vacios e inyecciones: se rechazan sin excepcion, con el MISMO mensaje y sin rol ni sesion.
+################################################################################
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.2.0, pluggy-1.7.0 -- C:\Users\labtel\AppData\Local\Programs\Python\Python312\python.exe
+rootdir: C:\Users\labtel\Documents\proyecto-sdn-topologia14
+plugins: anyio-4.16.0
+collecting ... collected 47 items / 16 deselected / 31 selected
+
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[profesor01-contrase\xf1a-incorrecta] PASSED [  3%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[no-existe-Clave-prof-01] PASSED [  6%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[-] PASSED [  9%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[profesor01-] PASSED [ 12%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[-Clave-prof-01] PASSED [ 16%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[' OR '1'='1-' OR '1'='1] PASSED [ 19%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[profesor01' OR '1'='1-x] PASSED [ 22%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[*-*] PASSED [ 25%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[*)(uid=*-x] PASSED [ 29%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[profesor01)(|(uid=*-Clave-prof-01] PASSED [ 32%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[profesor01,ou=users,dc=example,dc=org-x] PASSED [ 35%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[profesor01,ou=users,dc=example,dc=org-Clave-prof-01] PASSED [ 38%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[profesor01\x00-Clave-prof-01] PASSED [ 41%]
+R1_02_1_2_1_cada_intento_invalido_devuelve_none_sin_excepcion[profesor01 -Clave-prof-01] PASSED [ 45%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[profesor01-contrase\xf1a-incorrecta] PASSED [ 48%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[no-existe-Clave-prof-01] PASSED [ 51%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[-] PASSED [ 54%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[profesor01-] PASSED [ 58%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[-Clave-prof-01] PASSED [ 61%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[' OR '1'='1-' OR '1'='1] PASSED [ 64%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[profesor01' OR '1'='1-x] PASSED [ 67%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[*-*] PASSED [ 70%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[*)(uid=*-x] PASSED [ 74%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[profesor01)(|(uid=*-Clave-prof-01] PASSED [ 77%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[profesor01,ou=users,dc=example,dc=org-x] PASSED [ 80%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[profesor01,ou=users,dc=example,dc=org-Clave-prof-01] PASSED [ 83%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[profesor01\x00-Clave-prof-01] PASSED [ 87%]
+R1_02_1_2_2_el_endpoint_rechaza_sin_asignar_rol_ni_sesion[profesor01 -Clave-prof-01] PASSED [ 90%]
+R1_02_1_2_3_el_mensaje_de_rechazo_es_el_mismo_exista_o_no_el_usuario PASSED [ 93%]
+R1_02_1_2_4_si_el_ldap_esta_caido_se_rechaza_y_no_se_abre_el_acceso PASSED [ 96%]
+R1_02_1_2_5_cada_rechazo_queda_registrado_como_evento PASSED [100%]
+
+============================== warnings summary ===============================
+..\..\AppData\Local\Programs\Python\Python312\Lib\site-packages\ldap3\utils\asn1.py:50
+  C:\Users\labtel\AppData\Local\Programs\Python\Python312\Lib\site-packages\ldap3\utils\asn1.py:50: DeprecationWarning: tagMap is deprecated. Please use TAG_MAP instead.
+    from pyasn1.codec.ber.encoder import tagMap, typeMap, AbstractItemEncoder
+
+..\..\AppData\Local\Programs\Python\Python312\Lib\site-packages\ldap3\utils\asn1.py:50
+  C:\Users\labtel\AppData\Local\Programs\Python\Python312\Lib\site-packages\ldap3\utils\asn1.py:50: DeprecationWarning: typeMap is deprecated. Please use TYPE_MAP instead.
+    from pyasn1.codec.ber.encoder import tagMap, typeMap, AbstractItemEncoder
+
+..\..\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\testclient.py:1
+  C:\Users\labtel\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+R1\shared\policy_mapper\policy_mapper.py:82
+  C:\Users\labtel\Documents\proyecto-sdn-topologia14\R1\shared\policy_mapper\policy_mapper.py:82: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+..\..\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\applications.py:5039
+  C:\Users\labtel\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\applications.py:5039: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================ 31 passed, 16 deselected, 5 warnings in 0.74s ================
+RESULTADO R1-02: exit=0

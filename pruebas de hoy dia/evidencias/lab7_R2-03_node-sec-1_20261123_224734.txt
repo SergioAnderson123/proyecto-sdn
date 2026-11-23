@@ -1,0 +1,23 @@
+
+
+################################################################################
+  R2-03  Traduccion de la politica a OpenFlow (2.3.x)
+  Nodo: node-sec-1   Fecha: 2026-11-23 22:47:34   Commit: d5adb14
+  Criterio que valida: Reglas OpenFlow por rol (R2)
+  Esperado: Reglas con match, accion y prioridad por servicio permitido; si una politica permite y otra deniega, prevalece DENY.
+################################################################################
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0 -- /usr/bin/python3
+rootdir: /home/ubuntu/proyecto-sdn
+plugins: anyio-4.2.0
+collecting ... collected 33 items / 27 deselected / 6 selected
+
+R2_03_2_3_1_cada_servicio_permitido_genera_una_regla_con_match_accion_y_prioridad PASSED [ 16%]
+R2_03_2_3_2_solo_se_instalan_reglas_para_lo_permitido PASSED [ 33%]
+R2_03_2_3_3_si_una_politica_permite_y_otra_deniega_el_mismo_recurso_prevalece_la_que_deniega[orden0] PASSED [ 50%]
+R2_03_2_3_3_si_una_politica_permite_y_otra_deniega_el_mismo_recurso_prevalece_la_que_deniega[orden1] PASSED [ 66%]
+R2_03_2_3_4_cada_rol_usa_su_propia_tabla_y_su_propia_vlan PASSED [ 83%]
+R2_03_2_3_5_las_reglas_generadas_son_permanentes_y_no_se_duplican PASSED [100%]
+
+======================= 6 passed, 27 deselected in 0.32s =======================
+RESULTADO R2-03: exit=0
