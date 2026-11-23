@@ -48,3 +48,27 @@ curl -s -m 15 http://192.168.201.254:5000/sessions | python3 -c "import sys,json
 ssh -t ubuntu@192.168.201.12 "sudo ovs-ofctl -O OpenFlow13 dump-flows br0 table=0 | grep 'dl_src=fa:16:3e:b6:96:08'"
 curl -s -u onos:rocks http://192.168.201.2:8181/onos/v1/mastership/of:0000e6925d87354b/master
 ```
+
+## Seguimiento de los cuatro pedidos (23-nov-2026)
+
+1. **Flujo 40001 ausente:** en el webhook, la rama de sesión idéntica antes devolvía Access-Accept sin consultar ONOS; el origen de la pérdida observada sigue desconocido. La fuente canónica ahora comprueba prioridad, tabla, MAC, puerto y tratamiento VLAN en ONOS. Si falta, reinstala la regla y vuelve a leer la tabla; solo confirma el login después de verla. Si ONOS no puede confirmarla, responde 503. Se añadieron pruebas para flujo presente, reparación, y rechazo cuando la reparación no queda visible. Esto corrige la recuperación al siguiente login; no demuestra todavía una reparación en vivo de la sesión observada el 23-nov.
+2. **Dirección del agente:** el commit `73d571a` apunta `[hosts:vars] controller_ip` a `192.168.201.254`, que es el gateway HA. La desconexión manual documentada arriba confirmó que el token coincidía y que el cierre por gateway devolvió HTTP 200. El cambio ya está en `topologia14-deploy`.
+3. **Playbooks 88 y 72:** `88_prueba_sesion_ausente.yml` consulta y notifica por el gateway, ya no por `127.0.0.1:5000` de ctrl-1. `72_suplicante.yml` limita cada ejecución a un host: h1-profesor por defecto; h2-alumno requiere `-e objetivo_host=h2-alumno`. Así `-e parar=true` no detiene ambos agentes por accidente.
+4. **Etcd y maintenance:** se añadió `diagnostico_mapper_ha.yml`, una lectura acotada de logs y estado de contenedores de los tres nodos. No reinicia servicios ni cambia quórum. Los avisos históricos de `apply request took too long` y `maintenance deferred` no bastan para probar su causa; se debe correr el diagnóstico en la slice y correlacionar tiempos de transacción `wait_ms`/`hold_ms` con las advertencias de etcd. La causa raíz queda abierta hasta obtener esa salida en vivo.
+5. **Maestro ONOS:** el transporte HA del mapper identifica las peticiones `/flows/{dpid}` y consulta `/mastership/{dpid}/master`; dirige la lectura y las mutaciones al maestro con caché corta y fallback al resto si falla. Nunca reintenta una mutación después de un timeout de lectura ambiguo. Se añadieron pruebas del enrutamiento por maestro y del fallback. Esto hace que el mapper siga cambios de mastership; no determina qué provocó el cambio de maestro observado el 23-nov.
+
+La comprobación local se ejecuta con:
+
+```sh
+PYTHONPATH=R1/shared/policy_mapper:R2/policy python3 -m pytest \
+  R1/shared/policy_mapper/tests R1/mapper-ha/tests R2/policy/tests \
+  R1/deploy/test_topologia14_ha_playbooks.py -q
+```
+
+Para recoger datos operativos recientes, desde `switch-borde`:
+
+```sh
+PLAYBOOK=diagnostico_mapper_ha.yml ./lanzar.sh
+```
+
+Los cambios de software y las pruebas locales no se consideran despliegue en producción. Antes de usar esta reparación en la autenticación real, empaquetar con `R1/mapper-ha/build_bundle.py`, desplegar una réplica a la vez y verificar sesiones, flujos, login y rollback en cada paso.

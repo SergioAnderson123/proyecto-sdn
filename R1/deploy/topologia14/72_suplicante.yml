@@ -1,7 +1,8 @@
-# Prepara h1-profesor como suplicante 802.1X (usa el playbook de R1/deploy/hosts/hosts.yml sobre el grupo [hosts] de inventario.ini).
-#   PLAYBOOK=72_suplicante.yml ./lanzar.sh                                   # instala wpa_supplicant, certificados y el reescrito de EAPOL; NO autentica
-#   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true                  # además arranca el agente: se autentica solo (ES EL LOGIN: ver el protocolo, paso E)
-#   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e parar=true                     # para el agente (el suplicante envía el logoff)
+# Prepara un solo host (por defecto h1-profesor) como suplicante 802.1X.
+#   PLAYBOOK=72_suplicante.yml ./lanzar.sh                                   # prepara h1-profesor; NO autentica
+#   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true                  # arranca solo h1-profesor
+#   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e parar=true                     # para solo h1-profesor (envía logoff)
+#   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e objetivo_host=h2-alumno -e arrancar=true  # selecciona explícitamente h2
 # Lo que cambia en el host: paquetes (wpasupplicant, tcpdump), /home/ubuntu/supp, el servicio r1-eapol-bcast (un filtro tc de salida en ens4 que cambia el
 # destino del EAPOL 01:80:c2:00:00:03, que la red virtual de VNRT descarta, a broadcast) y el servicio r1-agente (habilitado, no arrancado). La red no cambia:
 # el EAPOL va al controlador por la regla de ONOS (prioridad 40000, tipo 0x888e) y nunca se inunda.
@@ -10,7 +11,16 @@
 - name: Clave del agente tomada del .env de node-ctrl-1
   hosts: servicios
   gather_facts: false
+  vars:
+    host_objetivo: "{{ objetivo_host | default('h1-profesor') }}"
   tasks:
+    - name: Aceptar solo un host del grupo 802.1X
+      ansible.builtin.assert:
+        that:
+          - host_objetivo in groups['hosts']
+        fail_msg: "objetivo_host debe ser h1-profesor o h2-alumno"
+        quiet: true
+
     - name: Leer AGENTE_TOKEN (sin mostrarla)
       ansible.builtin.shell: grep '^AGENTE_TOKEN=' {{ repo_dir }}/R1/deploy/.env | head -1 | cut -d= -f2 | tr -d '\n'
       register: tok
@@ -21,10 +31,11 @@
     - name: Pasarla a los hosts con 802.1X
       ansible.builtin.set_fact:
         agente_token: "{{ tok.stdout | default('') }}"
-      delegate_to: "{{ item }}"
+      delegate_to: "{{ host_objetivo }}"
       delegate_facts: true
-      loop: "{{ groups['hosts'] }}"
       no_log: true
 
-- name: Preparar h1-profesor como suplicante 802.1X
+- name: Preparar el host seleccionado como suplicante 802.1X
   ansible.builtin.import_playbook: ../hosts/hosts.yml
+  vars:
+    hosts_objetivo: "{{ objetivo_host | default('h1-profesor') }}"
