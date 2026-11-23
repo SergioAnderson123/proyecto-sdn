@@ -3,6 +3,7 @@
 #   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e aplicar=true       # APLICA en la tabla 60: SOLO durante la conmutacion (docs/PLAN_CONMUTACION_CAPA3.md), con el vigilante L2 ya parado
 #   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e accion=parar       # para y deshabilita el servicio en las dos VM
 #   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e aplicar=true -e estable_caida= -e min_intervalo_caida= -e intervalo=   # (valores vacios) vuelve al comportamiento de antes: corte de ~18 s ante la caida de un cable. Por defecto ya van estable_caida=2, min_intervalo_caida=10 e intervalo=2 (corte ~3 s); una subida sigue esperando `estable`
+#   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e aplicar=true -e olvidar_host=   # (vacio) el vigilante vuelve a NO olvidar nunca a un host que ONOS deja de listar (por defecto 900 s); un host ausente cuya IP reclama otro listado se olvida siempre (docs/DISENO_CAPA3.md, V9 ter)
 #   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e aplicar=true -e estable=5   # cambia la espera de estabilidad (s; por defecto 15) y el intervalo minimo entre cambios (-e min_intervalo=60)
 #   PLAYBOOK=68_vigilante_capa3_servicio.yml ./lanzar.sh -e quitar_aplicar=true       # vuelve a SOLO AVISAR (si no, repetir el 68 sin aplicar=true se niega cuando el servicio ya aplica)
 # Solo avisando es inocuo: lee ONOS y escribe en el registro lo que cambiaria (journalctl -u vigilante-capa3 -f). Los dos vigilantes no se pelean mientras el de capa 3 no aplique. NUNCA con aplicar=true y el L2 aplicando a la vez.
@@ -23,6 +24,7 @@
     estable_caida: 2                 # espera (s) cuando el cambio viene de una CAIDA de cable o de switch (lo que lo usaba ya no funciona); vacio = la misma que estable. Medido el 22-nov: corte de ~3 s (con 15 eran ~18 s)
     min_intervalo_caida: 10          # intervalo minimo (s) entre cambios tras una caida; vacio = el mismo que min_intervalo
     intervalo: 2                     # segundos entre consultas a ONOS (el programa usa 5 si va vacio). Menos = detecta antes y carga mas a ONOS
+    olvidar_host: 900                # segundos sin aparecer en ONOS tras los que se OLVIDA un host y se retiran sus reglas /32 (vacio o 0 = nunca). Aparte, un host ausente cuya IP pasa a otro host listado se olvida siempre
     nucleo: "core-1,core-2,borde"
     carpeta_codigo: "{{ playbook_dir }}/../../../R2/policy"
     destino: /opt/vigilante
@@ -90,7 +92,7 @@
 
           [Service]
           WorkingDirectory={{ destino }}
-          ExecStart=/usr/bin/python3 {{ destino }}/vigilante.py --subredes {{ config }}/plan_capa3.json --nucleo {{ nucleo }} --hosts-fijos {{ config }}/hosts_fijos_capa3.json --onos {{ nodos_onos }} --salud-puerto {{ puerto_salud }} --estable {{ estable }} --min-intervalo {{ min_intervalo }}{{ (' --estable-caida ' ~ estable_caida) if estable_caida | string | length > 0 else '' }}{{ (' --min-intervalo-caida ' ~ min_intervalo_caida) if min_intervalo_caida | string | length > 0 else '' }}{{ (' --intervalo ' ~ intervalo) if intervalo | string | length > 0 else '' }} --interruptor {{ config }}/desactivar{{ (' --respaldo-de ' ~ url_principal) if rol == 'respaldo' else '' }}{{ ' --aplicar' if (aplicar | bool) else '' }}
+          ExecStart=/usr/bin/python3 {{ destino }}/vigilante.py --subredes {{ config }}/plan_capa3.json --nucleo {{ nucleo }} --hosts-fijos {{ config }}/hosts_fijos_capa3.json --onos {{ nodos_onos }} --salud-puerto {{ puerto_salud }} --estable {{ estable }} --min-intervalo {{ min_intervalo }}{{ (' --estable-caida ' ~ estable_caida) if estable_caida | string | length > 0 else '' }}{{ (' --min-intervalo-caida ' ~ min_intervalo_caida) if min_intervalo_caida | string | length > 0 else '' }}{{ (' --intervalo ' ~ intervalo) if intervalo | string | length > 0 else '' }}{{ (' --olvidar-host ' ~ olvidar_host) if olvidar_host | string | length > 0 else '' }} --interruptor {{ config }}/desactivar{{ (' --respaldo-de ' ~ url_principal) if rol == 'respaldo' else '' }}{{ ' --aplicar' if (aplicar | bool) else '' }}
           Restart=always
           RestartSec=5
 

@@ -17,6 +17,9 @@ Cuándo NO hace nada (y lo escribe en el log):
 Espera corta ante una CAIDA (opcional): si entre dos ciclos se pierde un cable o un switch, lo que lo usaba ya no funciona y la diferencia se aplica tras `estable_caida_s`
 (y respetando `min_intervalo_caida_s`) en vez de `estable_s` y `min_intervalo_s`. Una SUBIDA no es urgente (los caminos actuales siguen funcionando), asi que sigue con la espera
 larga, que es la que protege contra un cable que parpadea. Sin esos parametros todo funciona exactamente como antes.
+Memoria de hosts: un host que ONOS deja de listar NO se olvida (ONOS puede perder hosts un momento, p. ej. al reiniciar, y sus reglas no deben desaparecer). Solo se olvida en dos casos:
+  - en capa 3, cuando OTRO host que ONOS si lista reclama la misma IP (la IP se reasigno: dos hosts recordados con la misma IP darian dos reglas /32 iguales para MAC distintas);
+  - opcional, `olvidar_host_s`: el host lleva ese tiempo sin aparecer en ONOS (0 o sin valor = nunca). Los hosts fijos nunca se olvidan.
 Los puertos de acceso salen de un archivo fijo (hecho con la red completa); además, cualquier puerto que alguna vez haya aparecido en un enlace
 (activo o no) se trata siempre como troncal: un cable caído NUNCA convierte sus puertos en "de acceso".
 """
@@ -81,7 +84,7 @@ def consultar_salud(url, timeout=3, max_edad_s=30):
 class Vigilante:
     def __init__(self, onos, preferidos, acceso, aplicar=False, estable_s=15, min_intervalo_s=60, max_cambios=200,
                  interruptor=None, log=print, nombre=_nombre, reloj=time.monotonic, monitoreo=None, salud_principal=None, muerto_s=45, hosts_fijos=(), copiar_arp=False, plan=None, nucleo=None, tabla=fp.TABLA_REENVIO, retirar=False,
-                 estable_caida_s=None, min_intervalo_caida_s=None):
+                 estable_caida_s=None, min_intervalo_caida_s=None, olvidar_host_s=None):
         self.onos, self.preferidos, self.aplicar = onos, list(preferidos), aplicar
         self.estable_s, self.min_intervalo_s, self.max_cambios = estable_s, min_intervalo_s, max_cambios
         # Ante una CAIDA (un cable o un switch menos desde el ciclo anterior) lo que lo usaba ya no funciona: se puede actuar antes y sin esperar el intervalo largo. Sin valor, igual que los generales.
@@ -94,7 +97,9 @@ class Vigilante:
         self.tabla, self.retirar = tabla, retirar         # tabla != 60: MODO AISLADO (solo con plan): trabaja en esa tabla y en sus reglas de entrada, nunca en la 60; retirar = dejar vacío lo que puso
         self.plan, self.nucleo = plan, (list(nucleo) if nucleo else None)     # capa 3: plan de subredes (capa3.Plan) y switches con rutas completas; sin plan, capa 2
         self.hosts_fijos, self.copiar_arp = list(hosts_fijos), copiar_arp     # hosts que ONOS no aprende solos; copia del ARP de acceso al controlador
-        self.hosts = {}                        # MAC -> host; un host que ONOS deja de listar no se olvida
+        self.hosts = {}                        # MAC -> host; un host que ONOS deja de listar no se olvida, salvo los casos de _olvidar_hosts
+        self.olvidar_host_s = olvidar_host_s or 0
+        self._visto = {}                       # MAC -> ultima vez (reloj) que ONOS lo listo
         self._huella = self._desde = self._ultimo_cambio = None
         self._avisos = set()
         self.salud_principal, self.muerto_s = salud_principal, muerto_s     # solo en el respaldo: callable() -> ¿responde el principal?
@@ -162,10 +167,13 @@ class Vigilante:
         for e in links:                                           # memoria de puertos troncales, activos o no
             self.troncales.add((e["src"]["device"], int(e["src"]["port"])))
             self.troncales.add((e["dst"]["device"], int(e["dst"]["port"])))
+        ahora_hosts = self.reloj()
         for h in hosts:
             self.hosts[h["mac"].upper()] = h
+            self._visto[h["mac"].upper()] = ahora_hosts
         for h in self.hosts_fijos:                                # los fijos mandan sobre lo que diga ONOS
             self.hosts[h["mac"].upper()] = h
+        self._olvidar_hosts(hosts, ahora_hosts)
 
         if dispositivos and not links:
             self._aviso("sin-enlaces", "AVISO: ONOS lista switches pero ningún enlace (¿reiniciando?). No se toca nada.")
@@ -247,6 +255,33 @@ class Vigilante:
         self.log(f"APLICADO: {rc.resumen(dif, self.nombre)}. Raíz: {self.nombre(raiz)}.")
         return "aplicado"
 
+    def _olvidar_hosts(self, listados, ahora):
+        """Quita de la memoria a los hosts que ONOS ya no lista Y (a) en capa 3, otro host listado reclama su IP, o (b) llevan `olvidar_host_s` sin aparecer. Los fijos nunca.
+        Al faltar de lo deseado, sus reglas pasan a `sobra` y se retiran con la espera de siempre."""
+        vigentes = {h["mac"].upper() for h in listados}
+        fijos = {h["mac"].upper() for h in self.hosts_fijos}
+        duenos = {}
+        if self.plan:
+            for h in rc.hosts_con_ip(self.plan, listados):
+                if h.get("ip"):
+                    duenos.setdefault(h["ip"], h["mac"].upper())
+        for mac in list(self.hosts):
+            if mac in vigentes or mac in fijos:
+                continue
+            h, motivo = self.hosts[mac], None
+            if self.plan:
+                ip = rc.hosts_con_ip(self.plan, [h])[0].get("ip")
+                if ip and duenos.get(ip, mac) != mac:
+                    motivo = f"su IP {ip} la usa ahora {duenos[ip]}"
+            if motivo is None and self.olvidar_host_s:
+                ausente = ahora - self._visto.get(mac, ahora)
+                if ausente >= self.olvidar_host_s:
+                    motivo = f"ONOS no lo lista desde hace {int(ausente)} s"
+            if motivo:
+                del self.hosts[mac]
+                self._visto.pop(mac, None)
+                self.log(f"OLVIDO al host {mac} ({self.nombre(h.get('device'))}/{h.get('port')}): {motivo}.")
+
     def _aplicar(self, dif):
         """Borra primero y añade después. Si falla a medias, el siguiente ciclo recalcula la diferencia y termina el trabajo."""
         for tipo, flujos in rc.pasos_de_cambio(dif):
@@ -286,6 +321,7 @@ def main(argv=None):
     a.add_argument("--min-intervalo", type=float, default=60, help="segundos mínimos entre dos cambios")
     a.add_argument("--estable-caida", type=float, default=None, help="como --estable pero cuando el cambio viene de una CAIDA de cable o de switch (por defecto, igual que --estable)")
     a.add_argument("--min-intervalo-caida", type=float, default=None, help="como --min-intervalo pero tras una caida (por defecto, igual que --min-intervalo)")
+    a.add_argument("--olvidar-host", type=float, default=0, help="segundos sin aparecer en ONOS tras los cuales se olvida un host y se retiran sus reglas (0 = nunca; un host cuya IP pasa a otro host listado se olvida siempre, en capa 3)")
     a.add_argument("--max-cambios", type=int, default=200)
     a.add_argument("--hosts-fijos", metavar="ARCHIVO", help="JSON con hosts que ONOS no aprende (server, portal); se suman a los de ONOS")
     a.add_argument("--subredes", metavar="ARCHIVO", help="MODO CAPA 3: plan de subredes (JSON de capa3.cargar_plan, con nombres de switch como core-1, acc-1...)")
@@ -347,7 +383,7 @@ def main(argv=None):
             return 2
         log(f"Hosts fijos: {len(fijos)} ({', '.join(h['nombre'] for h in fijos)}).")
     salud = (lambda: consultar_salud(arg.respaldo_de)) if arg.respaldo_de else None
-    v = Vigilante(onos, PREFERIDOS, acceso, aplicar=arg.aplicar, estable_s=arg.estable, min_intervalo_s=arg.min_intervalo, estable_caida_s=arg.estable_caida, min_intervalo_caida_s=arg.min_intervalo_caida,
+    v = Vigilante(onos, PREFERIDOS, acceso, aplicar=arg.aplicar, estable_s=arg.estable, min_intervalo_s=arg.min_intervalo, estable_caida_s=arg.estable_caida, min_intervalo_caida_s=arg.min_intervalo_caida, olvidar_host_s=arg.olvidar_host,
                   max_cambios=arg.max_cambios, interruptor=arg.interruptor, log=log, salud_principal=salud, muerto_s=arg.muerto,
                   hosts_fijos=fijos, copiar_arp=arg.copiar_arp, plan=plan, nucleo=nucleo, tabla=arg.tabla, retirar=arg.retirar)
     rol = f"RESPALDO de {arg.respaldo_de} (asume el mando tras {arg.muerto:g}s sin respuesta)" if arg.respaldo_de else "PRINCIPAL"
