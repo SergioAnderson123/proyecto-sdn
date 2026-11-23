@@ -1,0 +1,107 @@
+# Registrador de latencia de ONOS en los tres controladores (solo lectura): cada 20 s cronometra GET /devices y GET /flows/{switch} por CADA nodo y lo guarda con hora, junto a la presion de
+# disco y los contadores de TCP, para cazar las rachas intermitentes de timeouts de Atomix (docs/DISENO_CAPA3.md V9 quater/quinquies y memoria del 23-nov).
+#   PLAYBOOK=registrador_onos.yml ./lanzar.sh                   # instala y arranca (servicio `registrador-onos`)
+#   PLAYBOOK=registrador_onos.yml ./lanzar.sh -e accion=quitar  # para y quita el servicio (el registro en /var/log/registrador-onos se conserva)
+#   PLAYBOOK=registrador_onos.yml ./lanzar.sh -e intervalo=10 -e umbral_ms=500   # mas fino
+# Ver lo registrado, en cada controlador:  tail -f /var/log/registrador-onos/medidas.log     y solo lo lento:  grep LENTO /var/log/registrador-onos/medidas.log
+# Nunca escribe en ONOS. Carga: 6 peticiones REST cada 20 s por controlador. Archivo con rotacion (5 MB x 5). Limite de memoria 64 MB y prioridad baja.
+- name: Registrador de latencia de ONOS (solo lectura) en los tres controladores
+  hosts: ctrl
+  become: true
+  gather_facts: false
+  vars:
+    accion: instalar                 # instalar | quitar
+    intervalo: 20                    # segundos entre rondas
+    timeout_s: 20                    # espera maxima por respuesta (ONOS se rinde a los 15 s)
+    umbral_ms: 1000                  # a partir de cuantos ms una peticion se marca LENTO
+    destino: /opt/registrador-onos
+    carpeta_log: /var/log/registrador-onos
+    nodos_onos: "{{ onos_nodos | map('regex_replace', '^', 'http://') | map('regex_replace', '$', ':8181') | join(',') }}"
+  tasks:
+    - name: Parar y quitar el servicio
+      when: accion == 'quitar'
+      block:
+        - name: Parar y deshabilitar
+          ansible.builtin.systemd:
+            name: registrador-onos
+            state: stopped
+            enabled: false
+          failed_when: false
+        - name: Quitar la unidad, el programa y la configuracion (el registro se conserva)
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop: ["/etc/systemd/system/registrador-onos.service", "/etc/registrador-onos.env", "{{ destino }}"]
+        - name: Recargar systemd
+          ansible.builtin.systemd:
+            daemon_reload: true
+
+    - name: Instalar y arrancar el servicio
+      when: accion != 'quitar'
+      block:
+        - name: Carpetas
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0755"
+          loop: ["{{ destino }}", "{{ carpeta_log }}"]
+
+        - name: Copiar el programa
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/files/registrador_onos.py"
+            dest: "{{ destino }}/registrador_onos.py"
+            mode: "0755"
+          register: programa
+
+        - name: Configuracion (nodos y credenciales de ONOS; solo la lee root)
+          ansible.builtin.copy:
+            dest: /etc/registrador-onos.env
+            mode: "0600"
+            content: |
+              ONOS_NODOS={{ nodos_onos }}
+              ONOS_USER={{ onos_user }}
+              ONOS_PASS={{ onos_pass }}
+          register: entorno
+
+        - name: Unidad de systemd
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/registrador-onos.service
+            mode: "0644"
+            content: |
+              [Unit]
+              Description=Registrador de latencia de ONOS (solo lectura)
+              After=network-online.target
+
+              [Service]
+              EnvironmentFile=/etc/registrador-onos.env
+              ExecStart=/usr/bin/python3 {{ destino }}/registrador_onos.py --salida {{ carpeta_log }}/medidas.log --intervalo {{ intervalo }} --timeout {{ timeout_s }} --umbral-ms {{ umbral_ms }} --local {{ inventory_hostname }}
+              Restart=always
+              RestartSec=5
+              Nice=10
+              MemoryMax=64M
+
+              [Install]
+              WantedBy=multi-user.target
+          register: unidad
+
+        - name: Arrancar (se reinicia solo si cambio algo)
+          ansible.builtin.systemd:
+            name: registrador-onos
+            state: "{{ 'restarted' if (programa.changed or entorno.changed or unidad.changed) else 'started' }}"
+            enabled: true
+            daemon_reload: true
+
+        - name: Esperar a la primera ronda y leer el registro
+          ansible.builtin.shell: sleep {{ (intervalo | int) + 25 }}; tail -n 3 {{ carpeta_log }}/medidas.log
+          register: primeras
+          changed_when: false
+
+        - name: Primeras lineas
+          ansible.builtin.debug:
+            msg: "{{ primeras.stdout_lines }}"
+
+        - name: El servicio debe estar activo
+          ansible.builtin.command: systemctl is-active registrador-onos
+          register: activo
+          changed_when: false
+          failed_when: activo.stdout.strip() != 'active'

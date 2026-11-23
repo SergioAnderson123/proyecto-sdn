@@ -1,0 +1,63 @@
+# Instantanea de solo lectura de ONOS y Atomix en los tres controladores, para lanzarla DURANTE una racha de timeouts (o sospecha de ella): todo lo que hasta ahora pedimos a mano, en un paso.
+#   PLAYBOOK=diagnostico_onos.yml ./lanzar.sh
+# No reinicia nada, no escribe en ONOS ni muestra credenciales. Por nodo recoge: uptimes, memoria y GC de Atomix, presion y latencia de disco, contadores de TCP, avisos de ONOS por tramo de
+# 10 min (2 h), conexiones nuevas de Atomix por tramo, el reparto del mando y, si esta instalado el registrador (registrador_onos.yml), sus ultimas lineas LENTO.
+- name: Instantanea de ONOS y Atomix (solo lectura)
+  hosts: ctrl
+  become: true
+  gather_facts: false
+  vars:
+    ventana: 2h
+    nodos_onos: "{{ onos_nodos | join(' ') }}"
+  tasks:
+    - name: Reunir los datos del nodo
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          echo "## hora"; date +%T
+          echo "## contenedores (uptime)"; docker ps --format "{% raw %}{{.Names}} {{.Status}}{% endraw %}" | grep -E '^(onos|atomix) '
+          echo "## memoria"; docker stats --no-stream --format "{% raw %}{{.Name}} {{.MemUsage}} cpu={{.CPUPerc}}{% endraw %}" onos atomix
+          echo "## GC de atomix (O = generacion vieja %, FGC = GC completos)"
+          docker exec atomix sh -c 'jstat -gcutil $(jps -q | head -1)' 2>&1 | tail -2
+          echo "## presion de disco (full avg10/avg60/avg300)"; grep -E '^(some|full)' /proc/pressure/io | cut -c1-60
+          echo "## disco vda (w_await en ms, ultimas 3 muestras)"; iostat -x 1 4 vda 2>/dev/null | grep vda | tail -3 | awk '{print "w_await=" $12 " aqu-sz=" $22 " util=" $NF}'
+          echo "## TCP desde el arranque"; nstat -az TcpRetransSegs TcpExtTCPTimeouts TcpExtTCPAbortOnTimeout TcpEstabResets 2>/dev/null | grep -v '^#'
+          echo "## tiempos desde este nodo a cada ONOS (/devices: codigo, segundos, switches disponibles)"
+          for ip in {{ nodos_onos }}; do
+            r=$(curl -s -m 25 -u {{ onos_user }}:{{ onos_pass }} -o /tmp/dev.$$ -w "%{http_code} %{time_total}s" http://$ip:8181/onos/v1/devices)
+            n=$(python3 -c "import json;d=json.load(open('/tmp/dev.$$'))['devices'];print(sum(1 for x in d if x['available']),'de',len(d))" 2>/dev/null || echo "?")
+            echo "$ip: $r disponibles: $n"
+          done; rm -f /tmp/dev.$$
+          echo "## avisos de ONOS por tramo de 10 min (ventana {{ ventana }})"
+          docker logs --since {{ ventana }} onos 2>&1 | sed -E 's/\x1b\[[0-9;]*m//g' | grep -E 'WARN.*(Unhandled REST|message handler)' | cut -c1-4 | uniq -c | tail -14
+          echo "## conexiones nuevas de atomix por tramo de 10 min (el suelo normal es 600)"
+          docker exec atomix sh -c 'grep -h "Writing client protocol" /opt/atomix/log/atomix.log' 2>/dev/null | cut -c1-4 | sort | uniq -c | tail -8
+          echo "## registrador: ultimas lineas LENTO"
+          grep LENTO /var/log/registrador-onos/medidas.log 2>/dev/null | tail -8 | cut -c1-260 || true
+      register: datos
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar el resultado de este nodo
+      ansible.builtin.debug:
+        msg: "{{ ['=== ' ~ inventory_hostname ~ ' ==='] + datos.stdout_lines }}"
+
+- name: Reparto del mando (una sola vez)
+  hosts: node-ctrl-1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Quien manda en cada switch segun ONOS
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          for d in $(curl -s -m 15 -u {{ onos_user }}:{{ onos_pass }} http://{{ onos_ip }}:8181/onos/v1/devices | python3 -c "import sys,json;print(' '.join(x['id'] for x in json.load(sys.stdin)['devices']))"); do
+            echo "$d $(curl -s -m 15 -u {{ onos_user }}:{{ onos_pass }} http://{{ onos_ip }}:8181/onos/v1/mastership/$d/master)"
+          done
+      register: mando
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar el mando
+      ansible.builtin.debug:
+        msg: "{{ mando.stdout_lines }}"
