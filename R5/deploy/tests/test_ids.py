@@ -96,7 +96,11 @@ def compose():
 
 
 def test_el_compose_define_los_tres_servicios(compose):
-    assert set(compose["services"]) == {"suricata", "integrador", "espejo"}
+    # El exporter de métricas es opcional: solo arranca con el profile "monitoring".
+    servicios = set(compose["services"])
+    assert servicios == {"suricata", "integrador", "espejo", "exporter"}
+    assert compose["services"]["exporter"].get("profiles") == ["monitoring"]
+    assert not any(compose["services"][s].get("profiles") for s in ("suricata", "integrador"))
 
 
 def test_el_integrador_recibe_el_nombre_del_sensor_y_la_topologia(compose):
