@@ -7,6 +7,7 @@ Para quien mantiene `R1/shared/policy_mapper/`. Pedido: un cambio pequeño en `/
 - El portal corre en el `server` (`r1-portal`, `https://10.0.0.10:8443`, activo desde las 14:48) y llega al mapper (`192.168.201.254:5000/health/ha` → 200).
 - El portal saca la MAC del cliente de **su tabla ARP** (`/proc/net/arp`, con la IP de origen de la conexión). Con la capa 3, h1 (`10.0.1.100`) y h2 (`10.0.2.100`) están detrás del gateway y esa tabla **no los tiene**: el ARP del server solo traía las IP viejas de h1/h2 (`10.0.0.201`, `10.0.0.202`) y los gateways (`10.0.0.254`, `10.99.0.254`).
 - Resultado: el portal no puede decir quién entra. Un equipo con sesión 802.1X (h1, `profesor01`) **ve el formulario** en vez de su sesión (el portal ni llega a preguntar `/portal/estado`), y un invitado no puede iniciar sesión (`No se pudo identificar su equipo; reintente`, sin llamar al mapper). En los logs del portal solo hay `GET /` desde `10.0.1.100`, ningún `POST`.
+- **Confirmado en vivo** (23-nov, tarde): un `POST /login` falso desde h2 (`curl -sk -d 'usuario=x&clave=y' https://10.0.0.10:8443/login`) responde **«No se pudo identificar su equipo; reintente.»**: el portal rechaza antes de llamar al mapper.
 - ONOS sí tiene lo necesario, porque la app DHCP lo registra: `GET /onos/v1/hosts` → `FA:16:3E:B6:96:08 ['10.0.1.100'] of:…354b/1` y `FA:16:3E:71:08:66 ['10.0.2.100'] of:…c741/1`.
 
 ## 2. Qué se hizo ya (R2, commit `aa76c56`)
@@ -47,9 +48,9 @@ Orden: **primero el mapper** (con tu procedimiento, una réplica cada vez, verif
 - Dos hosts con la misma IP en ONOS → no se identifica (no se adivina). IP que no es IPv4 válida → no llega a ONOS.
 - Los datos que viajan (usuario, MAC, IP, sesión) son personales: el token y el HTTPS del portal siguen siendo obligatorios fuera del laboratorio.
 
-## 6. Prerrequisito que no pude comprobar: el token del portal
+## 6. El token del portal está vacío en los dos lados (medido el 23-nov)
 
-`R1/deploy/.env` de ctrl-1 **no define `PORTAL_TOKEN`** (0 coincidencias), pero el portal del `server` lleva uno en su unidad. No sé de dónde lee el suyo `mapper-ha-prod`. Si el mapper tiene un token distinto del del portal, **todo login daría 403**, con o sin este parche. Para comparar sin mostrarlos (huella de los primeros 12 caracteres):
+`R1/deploy/.env` de ctrl-1 no define `PORTAL_TOKEN`. Se comparó por huella (sha256, 12 primeros caracteres) el del `server` y el de `mapper-ha-prod`: **los dos dieron `e3b0c44298fc`, que es la huella de la cadena vacía**. Es decir, **ni el portal envía token ni el mapper lo exige**: no hay riesgo de 403 por tokens distintos, pero **`_verificar_portal` está desactivada** y cualquiera que llegue a `192.168.201.254:5000` (red de gestión) puede llamar a `/portal/login` con la MAC que quiera (necesita credenciales LDAP válidas) y a `/portal/estado` por MAC. Con el parche, `?ip=` también quedaría abierto. Recomendación: definir el mismo `PORTAL_TOKEN` en el env-file de las réplicas (`mapper-runtime.env`) y en la unidad del portal (`portal.yml` lo toma de `portal_token`), aprovechando este despliegue. Para repetir la comparación sin mostrar los valores:
 
 ```sh
 # en el server
