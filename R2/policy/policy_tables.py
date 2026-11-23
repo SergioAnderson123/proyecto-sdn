@@ -115,12 +115,35 @@ def tabla_cuarentena(politica: dict) -> Optional[int]:
 
 
 def servicios_permitidos(politica: dict, rol_matriz: str) -> Dict[str, bool]:
-    """{servicio: permitido} para un rol de la matriz; lo que no figura queda denegado."""
+    """{servicio: permitido} para un rol de la matriz; lo que no figura queda denegado.
+
+    Si la matriz trae reglas contradictorias para el mismo (rol, servicio), PREVALECE LA QUE DENIEGA, sin importar el orden en el archivo
+    (antes ganaba la última: invertir dos líneas de policy.yaml podía abrir un recurso sin que nadie lo notara)."""
     res: Dict[str, bool] = {}
     for r in politica["rules"]:
         if r["src"] == rol_matriz:
-            res[r["dst"]] = bool(r["allow"])
+            res[r["dst"]] = res.get(r["dst"], True) and bool(r["allow"])
     return res
+
+
+def evaluar_acceso(politica: dict, rol: str, recurso: str) -> Dict[str, str]:
+    """Decisión de acceso de un rol a un recurso: {decision: PERMIT|DENY, rol, recurso, motivo}.
+
+    `rol` puede ser el del LDAP (docente, alumno, soporte, invitado) o el de la matriz (professor, student, administrator, guest). Todo rol
+    o recurso que no figure en la política o en el catálogo `services` se deniega (cierra por defecto): un servicio sin host no se instala."""
+    por_ldap = politica.get("roles", {}).get(rol)
+    matriz = por_ldap["matriz"] if por_ldap else rol
+    base = {"rol": str(rol), "recurso": str(recurso)}
+    if matriz not in {i["matriz"] for i in politica.get("roles", {}).values()}:
+        return {**base, "decision": "DENY", "motivo": "rol no registrado (denegado por defecto)"}
+    if recurso not in politica.get("services", {}):
+        return {**base, "decision": "DENY", "motivo": "recurso fuera del inventario (denegado por defecto)"}
+    ok = servicios_permitidos(politica, matriz).get(recurso)
+    if ok is None:
+        return {**base, "decision": "DENY", "motivo": "sin regla para este rol y recurso (denegado por defecto)"}
+    if not ok:
+        return {**base, "decision": "DENY", "motivo": "el rol no tiene permiso sobre este recurso"}
+    return {**base, "decision": "PERMIT", "motivo": "permitido por la matriz rol-recurso"}
 
 
 def _base(dpid: str, tabla: int, prioridad: int, criterios: list, instrucciones: list) -> dict:
