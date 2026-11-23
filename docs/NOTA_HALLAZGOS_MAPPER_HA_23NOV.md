@@ -81,10 +81,91 @@ la sesión. Sin embargo, ctrl-3 registró reinstalación seguida de
 la recuperación de la regla pasó, pero la confirmación del webhook no.
 El éxito EAP no basta para certificar la respuesta del mapper.
 
-Se prepara una corrección que consulta de nuevo tras instalar, con intervalos
+El commit 6726bc4 añade una corrección que consulta de nuevo tras instalar, con intervalos
 de 200 ms y un presupuesto total de 3 s (incluye las consultas), en lugar de
 una sola lectura inmediata. Mantiene 503 si no se confirma la regla exacta.
 La espera también limita la ocupación adicional de la transacción HA;
 no constituye una solución a las demoras generales de etcd o de ONOS.
-Pendiente: desplegar esta corrección y repetir la prueba, exigiendo tanto
-ADDED como el mensaje de verificación y respuesta satisfactoria del webhook.
+La corrección se desplegó y volvió a probarse; el resultado y los pendientes
+actuales se detallan a continuación.
+
+
+## Traspaso a Dani: resultado de 6726bc4 (23-nov-2026)
+
+Evidencia: salidas de terminal del VNRT aportadas por Mariana. No se presenta
+como una nueva medición ejecutada desde el Mac.
+
+### Despliegue y estado confirmado
+
+- Paquete 6726bc4 desplegado secuencialmente en ctrl-3, ctrl-2 y ctrl-1.
+  El actualizador comparó SHA-256 de los módulos Python dentro de cada
+  contenedor contra el paquete, verificó salud, sesiones y acceso al gateway.
+- Las dos sesiones se conservaron e igualaron en las tres réplicas.
+  Se guardaron respaldos del directorio de código en cada controlador.
+- Solo se reiniciaron los mappers; ONOS y etcd no se reiniciaron en este despliegue.
+- Pruebas locales del mapper y HA: 102 aprobadas y 10 omitidas. Esto no sustituye
+  la validación operativa del webhook.
+
+### Prueba operativa: recuperación parcial, NO cierre del hallazgo
+
+Se retiró exclusivamente el flujo de h1-profesor después de guardar su cuerpo
+REST y comprobar la sesión. La prueba confirmó ausencia en ONOS, una nueva
+sesión EAP-TLS y retorno del flujo correcto a ADDED en 9,5 s, conservando la
+misma sesión del mapper. Ese tiempo incluye EAP y consultas; no mide por sí
+solo la latencia de instalación de ONOS.
+
+Identificadores de la prueba:
+
+- MAC: fa:16:3e:b6:96:08; DPID: of:0000e6925d87354b; puerto: 1.
+- Flujo: 50665496667556007; prioridad: 40001; tabla: 0; VLAN: 10;
+  siguiente tabla: 10.
+- Respaldo de prueba: /tmp/h1-flow-backup-20261123-191332.json.
+- Script de prueba en h1: /tmp/prueba-reparacion-h1.py.
+  Estos archivos temporales pueden desaparecer; no son artefactos versionados.
+
+Logs de ctrl-2 (UTC):
+
+- 19:20:09.988: detecta flujo ausente e inicia reinstalación.
+- 19:20:10.386: registra inyección de la regla y regla EAPOL.
+- 19:20:13.088: «No se confirma login ... flujo no verificado (RuntimeError)».
+- 19:20:13.113: transaction wait_ms=25.20 hold_ms=3220.61.
+- 19:20:13.114: POST /webhook devuelve 503.
+- Después aparecen esperas de transacción de 1324.17 y 4309.97 ms;
+  no se ha demostrado que toda esa espera sea causada por este login.
+
+Una consulta posterior desde el contenedor de ctrl-2 encontró en los tres
+ONOS la regla exacta ADDED, en 25–50 ms. Esto confirma su estado posterior,
+no lo que devolvía cada lectura durante los tres segundos de verificación.
+No se capturaron los estados intermedios (p. ej. PENDING_ADD) ni la respuesta
+exacta de cada sondeo. La causa precisa de la demora sigue sin demostrarse.
+
+### Trabajo pendiente recomendado
+
+1. Instrumentar las lecturas de confirmación con duración, nodo consultado,
+   estado observado y motivo de discrepancia, sin credenciales. Reproducir
+   para distinguir propagación tardía, estado pendiente y timeout de consulta.
+2. Separar la espera de confirmación del bloqueo compartido. Actualmente
+   ha_runtime.shared_sessions envuelve la petición en ha_store.transaction;
+   _confirmar_flujo_sesion espera dentro de esa transacción. No basta con
+   aumentar el timeout ni con quitar el bloqueo: conservar las escrituras
+   protegidas y volver a validar generación/session_id, ubicación, rol/VLAN,
+   revocación y vigencia antes de confirmar. No reutilizar una referencia
+   mutable del almacén compartido mientras otras peticiones lo refrescan.
+3. Comprobar los timeouts efectivos de REST en RADIUS, gateway y ONOS y
+   coordinar el presupuesto total. El archivo de ejemplo del repositorio
+   menciona 4 s como valor por defecto de REST; no es evidencia del valor
+   efectivo del contenedor desplegado. Investigar también por qué EAP acaba
+   en SUCCESS aunque el webhook devuelva 503: no asumir que RADIUS aplica
+   el rechazo del mapper hasta verificar la política post-auth real.
+4. Probar revocación concurrente, pérdida de quórum, consulta ONOS atascada,
+   flujo que nunca llega a ADDED y reparación tardía antes de desplegar.
+   Actualizar una réplica por vez, conservando respaldo y verificando sesiones.
+5. Repetir la prueba operativa con recuperación preparada. Criterio de cierre:
+   ausencia confirmada, nueva autenticación, regla exacta ADDED, log de
+   verificación y POST /webhook 200 correlacionados con esa prueba; sesiones
+   coherentes y sin autorizaciones resucitadas tras revocación. Registrar
+   wait_ms/hold_ms y comprobar acceso real de h1 y continuidad de h2.
+
+No declarar resuelto el caso únicamente por EAP SUCCESS o por el retorno del
+flujo. No modificar el gateway ni reiniciar ONOS para esta corrección. La
+causa original de la desaparición del flujo tampoco queda explicada por ella.
