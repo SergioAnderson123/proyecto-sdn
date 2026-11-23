@@ -120,7 +120,7 @@ arquitectura pendientes.
 | 3. Quórum, latencia y 503 | Quórum y respuestas HTTP del mapper completo probados con etcd real en una red aislada; métricas de espera/retención disponibles. | No se interrumpió el quórum de producción. La medición EAP de 2384 ms es una muestra; faltan muestras para p50/p95. |
 | 4. Gateway y R2 MAB | Gateway único aceptado por decisión del grupo. R2 MAB HA está preparado como overlay opcional, con importador no destructivo de sesiones. | R2 sigue desplegado solo en ctrl-1; migrar su snapshot y desplegar ctrl-2/3 requiere acceso al VNRT y ventana coordinada. La unicidad del gateway requiere decisión/topología, no un cambio local al mapper. |
 | 5. Presencia y cierre de sesiones | Resuelto y probado con ctrl-1 mapper detenido: presencia llegó a otra réplica y cerró h2. | Ninguna conocida para ese escenario probado. |
-| 6. DHCP, portal y vigilante | La regresión automatizada cubre contratos de presencia, logout, revocación, ascenso y políticas; el despliegue preservó sesiones/eventos. | Falta una prueba conjunta en vivo de esos consumidores tras failover, sin generar tráfico de descubrimiento adicional. |
+| 6. DHCP, portal y vigilante | EAP/DHCP pasó; vigilante de capa 3 permaneció activo en una caída controlada del mapper ctrl-1. | Portal no estaba accesible ni antes de la caída; recuperar el servicio y repetir su comprobación durante failover. |
 
 El acceso desde la Mac se realiza por SSH a `10.20.11.14`, puertos
 `5801`, `5802` y `5803`; las consultas a `192.168.201.x` se hacen desde dentro
@@ -193,6 +193,26 @@ gateway de gestión `.254` se dejó intacto, según decisión del grupo.
 
 Con esto, la redundancia del mapper, la persistencia de sesiones/eventos, el
 failover de R2 y el flujo EAP/DHCP tienen evidencia operativa. Permanecen como
-límite aceptado el gateway único y falta comprobar en vivo que portal y
-vigilante sigan operativos durante una caída del mapper. No se apagaron esos
-servicios en esta actualización.
+límite aceptado el gateway único. La validación del portal y vigilante durante
+failover se registra en la sección siguiente.
+
+## Prueba en vivo de vigilante y portal durante failover (23-nov-2026)
+
+Se tomó estado de referencia y se detuvo solo `mapper-ha-prod` en ctrl-1 por
+unos segundos. No se tocaron ONOS, etcd, R2 MAB, switches, flujos ni gateway.
+
+- Antes: los tres mappers devolvieron HTTP 200 y cada uno reportó 2 sesiones.
+- Durante la caída: ctrl-1 dejó de responder; ctrl-2 y ctrl-3 siguieron en
+  HTTP 200 con las mismas 2 sesiones. El endpoint de salud del vigilante
+  (`ctrl-3:8098/salud`) devolvió HTTP 200, `activo=true` y `estado="sin cambios"`.
+- Después: `mapper-ha-prod` en ctrl-1 se inició de nuevo; los tres mappers
+  volvieron a HTTP 200 en salud, sesiones y eventos; cada uno reportó las 2
+  sesiones y 4 eventos.
+- El portal `https://10.0.0.10:8443/`, consultado desde h1-profesor, no aceptó
+  la conexión antes ni durante la caída (HTTP `000`). Por tanto, esta prueba no
+  demuestra continuidad del portal. La API autenticada de ONOS devolvió HTTP
+  200 para `/links` y `/devices` en los tres controladores.
+
+Resultado: **vigilante aprobado para este failover**. La comprobación del portal
+queda bloqueada por su indisponibilidad previa a la prueba; revisar el host
+`server` y confirmar que el servicio escucha en TCP 8443 antes de repetirla.
