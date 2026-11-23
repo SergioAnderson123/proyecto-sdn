@@ -149,12 +149,16 @@ def metricas():
     add(linea("r5_bloqueo_paquetes_total", sum(f.get("packets", 0) for _, _, f in bloq), sensor=SENSOR))
 
     add("# TYPE r5_espejo_paquetes_total counter")
+    espejo_por_switch = {}      # (switch, direccion) -> paquetes sumados: puede haber varias reglas (una por prefijo/entrada)
     for dev in CORE_DEVICES:
         for f in onos(f"/flows/{dev}").get("flows", []):
             if f["priority"] == P_ESPEJO and f.get("appId") in APP_ESPEJO:
                 cr = {c["type"]: c.get("ip") or c.get("port") for c in f["selector"]["criteria"]}
                 d = "entrante" if "IN_PORT" in cr else ("interno" if cr.get("IPV4_DST") == cr.get("IPV4_SRC") else "saliente")
-                add(linea("r5_espejo_paquetes_total", f.get("packets", 0), switch=SWITCH.get(dev, dev), direccion=d))
+                k = (SWITCH.get(dev, dev), d)
+                espejo_por_switch[k] = espejo_por_switch.get(k, 0) + f.get("packets", 0)
+    for (sw, d), paquetes in espejo_por_switch.items():
+        add(linea("r5_espejo_paquetes_total", paquetes, switch=sw, direccion=d))
     add("# TYPE r5_flujos_switch gauge")
     devs = onos("/devices").get("devices", [])
     for dev in devs:
