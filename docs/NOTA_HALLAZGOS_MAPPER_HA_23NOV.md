@@ -71,3 +71,20 @@ PLAYBOOK=diagnostico_mapper_ha.yml ./lanzar.sh
 ```
 
 Los cambios de software y las pruebas locales no se consideran despliegue en producción. Antes de usar esta reparación en la autenticación real, empaquetar con `R1/mapper-ha/build_bundle.py`, desplegar una réplica a la vez y verificar sesiones, flujos, login y rollback en cada paso.
+
+## Prueba VNRT posterior al despliegue 71bdff5
+
+La prueba controlada de h1 confirmó ausencia del flujo 50665496667556007,
+nuevo EAP-TLS y retorno de la regla correcta a ADDED en 7,0 s, conservando
+la sesión. Sin embargo, ctrl-3 registró reinstalación seguida de
+`flujo no verificado (RuntimeError)` y `POST /webhook` 503. Por tanto,
+la recuperación de la regla pasó, pero la confirmación del webhook no.
+El éxito EAP no basta para certificar la respuesta del mapper.
+
+Se prepara una corrección que consulta de nuevo tras instalar, con intervalos
+de 200 ms y un presupuesto total de 3 s (incluye las consultas), en lugar de
+una sola lectura inmediata. Mantiene 503 si no se confirma la regla exacta.
+La espera también limita la ocupación adicional de la transacción HA;
+no constituye una solución a las demoras generales de etcd o de ONOS.
+Pendiente: desplegar esta corrección y repetir la prueba, exigiendo tanto
+ADDED como el mensaje de verificación y respuesta satisfactoria del webhook.

@@ -125,3 +125,45 @@ def test_no_autoriza_si_ons_no_muestra_el_flujo_reinstalado(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(pm._confirmar_flujo_sesion(sesion))
     assert exc.value.status_code == 503
+
+
+def test_reparacion_espera_pending_add_hasta_added(monkeypatch):
+    import asyncio
+    sesion = _session()
+    respuestas = [[], [_flow(state="PENDING_ADD")], [_flow()]]
+    monkeypatch.setattr(pm, "HaAsyncClient", lambda: _Client(respuestas))
+    instalaciones = []
+
+    async def instalar(*args):
+        instalaciones.append(args)
+        return sesion.flow_id
+
+    monkeypatch.setattr(pm, "inyectar_flujo_tabla_0", instalar)
+    asyncio.run(pm._confirmar_flujo_sesion(sesion))
+    assert len(instalaciones) == 1
+    assert not respuestas
+
+
+def test_espera_acotada_si_onos_no_publica_flujo(monkeypatch):
+    import asyncio
+
+    async def ausente(sesion):
+        return False
+
+    monkeypatch.setattr(pm, "_flujo_sesion_presente", ausente)
+    assert not asyncio.run(pm._esperar_flujo_sesion(_session(), timeout=0.02))
+
+
+def test_espera_cancela_consulta_onos_atascada(monkeypatch):
+    import asyncio
+    cancelada = []
+
+    async def atascada(sesion):
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cancelada.append(True)
+
+    monkeypatch.setattr(pm, "_flujo_sesion_presente", atascada)
+    assert not asyncio.run(pm._esperar_flujo_sesion(_session(), timeout=0.02))
+    assert cancelada == [True]

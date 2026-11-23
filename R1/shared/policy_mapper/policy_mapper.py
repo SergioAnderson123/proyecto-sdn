@@ -779,6 +779,20 @@ async def _flujo_sesion_presente(sesion: ActiveSession) -> bool:
         return any(_flujo_cubre_sesion(f, sesion) for f in response.json().get("flows", []))
 
 
+async def _esperar_flujo_sesion(sesion: ActiveSession, timeout: float = 3.0) -> bool:
+    """Allow asynchronous ONOS installation, with a total bounded read budget."""
+    async def consultar():
+        while True:
+            if await _flujo_sesion_presente(sesion):
+                return True
+            await asyncio.sleep(0.2)
+
+    try:
+        return await asyncio.wait_for(consultar(), timeout=timeout)
+    except asyncio.TimeoutError:
+        return False
+
+
 async def _confirmar_flujo_sesion(sesion: ActiveSession) -> None:
     """Fail closed if a repeated EAP login finds durable session state but no ONOS rule."""
     try:
@@ -791,7 +805,7 @@ async def _confirmar_flujo_sesion(sesion: ActiveSession) -> None:
         if str(sesion.flow_id) != str(nuevo_id):
             sesion.flow_id = nuevo_id
             session_store.save()
-        if not await _flujo_sesion_presente(sesion):
+        if not await _esperar_flujo_sesion(sesion):
             raise RuntimeError("ONOS todavía no muestra el flujo reinstalado")
         if sesion.mac.lower() in getattr(session_store, "intents", {}):
             session_store.clear_intent(sesion.mac.lower())
