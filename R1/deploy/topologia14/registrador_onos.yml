@@ -4,6 +4,8 @@
 #   PLAYBOOK=registrador_onos.yml ./lanzar.sh -e accion=quitar  # para y quita el servicio (el registro en /var/log/registrador-onos se conserva)
 #   PLAYBOOK=registrador_onos.yml ./lanzar.sh -e intervalo=10 -e umbral_ms=500   # mas fino
 # Ver lo registrado, en cada controlador:  tail -f /var/log/registrador-onos/medidas.log     y solo lo lento:  grep LENTO /var/log/registrador-onos/medidas.log
+# Detector de VISTAS DESIGUALES: si los nodos no coinciden en si un switch esta disponible durante mas de `gracia_s`, escribe `VISTA_DESIGUAL sw=... ven=... no_ven=...` (y `VISTA_IGUAL` al curarse) y las
+# lineas de ronda acaban en `DESIGUAL`:  grep -E 'VISTA_|DESIGUAL' /var/log/registrador-onos/medidas.log     Arreglo manual: dar el mando de ese switch a otro nodo y devolverlo (consulta_cli_onos.yml).
 # Nunca escribe en ONOS. Carga: 6 peticiones REST cada 20 s por controlador. Archivo con rotacion (5 MB x 5). Limite de memoria 64 MB y prioridad baja.
 - name: Registrador de latencia de ONOS (solo lectura) en los tres controladores
   hosts: ctrl
@@ -14,6 +16,7 @@
     intervalo: 20                    # segundos entre rondas
     timeout_s: 20                    # espera maxima por respuesta (ONOS se rinde a los 15 s)
     umbral_ms: 1000                  # a partir de cuantos ms una peticion se marca LENTO
+    gracia_s: 60                     # segundos que debe durar una VISTA_DESIGUAL (nodos que no coinciden en si un switch esta disponible) antes de avisar
     destino: /opt/registrador-onos
     carpeta_log: /var/log/registrador-onos
     nodos_onos: "{{ onos_nodos | map('regex_replace', '^', 'http://') | map('regex_replace', '$', ':8181') | join(',') }}"
@@ -74,7 +77,7 @@
 
               [Service]
               EnvironmentFile=/etc/registrador-onos.env
-              ExecStart=/usr/bin/python3 {{ destino }}/registrador_onos.py --salida {{ carpeta_log }}/medidas.log --intervalo {{ intervalo }} --timeout {{ timeout_s }} --umbral-ms {{ umbral_ms }} --local {{ inventory_hostname }}
+              ExecStart=/usr/bin/python3 {{ destino }}/registrador_onos.py --salida {{ carpeta_log }}/medidas.log --intervalo {{ intervalo }} --timeout {{ timeout_s }} --umbral-ms {{ umbral_ms }} --gracia-s {{ gracia_s }} --local {{ inventory_hostname }}
               Restart=always
               RestartSec=5
               Nice=10

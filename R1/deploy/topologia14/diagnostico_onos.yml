@@ -34,6 +34,8 @@
           docker exec atomix sh -c 'grep -h "Writing client protocol" /opt/atomix/log/atomix.log' 2>/dev/null | cut -c1-4 | sort | uniq -c | tail -8
           echo "## registrador: ultimas lineas LENTO"
           grep LENTO /var/log/registrador-onos/medidas.log 2>/dev/null | tail -8 | cut -c1-260 || true
+          echo "## registrador: vistas desiguales (VISTA_DESIGUAL / VISTA_IGUAL)"
+          grep -E 'VISTA_(DESIGUAL|IGUAL)' /var/log/registrador-onos/medidas.log 2>/dev/null | tail -10 | cut -c1-260 || true
       register: datos
       changed_when: false
       failed_when: false
