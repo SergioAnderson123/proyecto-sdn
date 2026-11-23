@@ -33,7 +33,7 @@ Principio: **no compartir destino con lo que vigila.** Lo que más se quiere ver
 |---|---|---|
 | Un `node-ctrl-N` | 6 GB y 20 GB de disco, ya con ONOS, Atomix, etcd y el mapper (ctrl-1 además con el disco más lento; ctrl-2 con Grafana/Prometheus de R5) | **No.** Comparte destino con ONOS y le añade carga justo donde el 23-nov hubo atascos. |
 | `switch-borde` | **Medido 23-nov:** 961 MB de RAM (407 disponibles, sin swap), 1 vCPU, 6,8 GB de disco con 2,4 GB libres; ya hace de nodo de Ansible y de gateway del mapper | **No.** Un fallo por memoria ahí afectaría al switch de borde. |
-| VM `server` (`192.168.201.23`) | De diseño: 2 vCPU, 2 GB de RAM, 10 GB de disco; fuera del camino de ONOS/Atomix; es donde la fase E sitúa el portal (`10.0.0.10:8443`) | **Candidata preferida, con condiciones:** (1) escuchar **solo en la interfaz de gestión** (`ens3`), no en la de servicios (`10.0.0.10`), con cortafuegos; (2) es un elemento de las pruebas de autorización (`nc 10.0.0.10 8101`) y puede reiniciarse o reconfigurarse; (3) si el portal vive ahí, panel y portal comparten destino. **Medir antes** sus recursos reales (`./lanzar.sh --tags recursos`). |
+| VM `server` (`192.168.201.23`) | De diseño: 2 vCPU, 2 GB de RAM, 10 GB de disco; fuera del camino de ONOS/Atomix; es donde la fase E sitúa el portal (`10.0.0.10:8443`) | **Candidata preferida, con condiciones:** (1) **acceso solo para el rol `superadmin`** (decisión del 23-nov, `DISENO_EXCEPCIONES_POR_SESION.md` 4.7): como el equipo dedicado está en la red de datos, el panel escucha en la IP de servicios (`10.0.0.10`, puerto propio) y R2 lo restringe a ese rol; la interfaz de gestión (`ens3`) solo la usa el panel para hablar con ONOS y el mapper, así que hace de **puente entre las dos redes**; (2) es un elemento de las pruebas de autorización (`nc 10.0.0.10 8101`) y puede reiniciarse o reconfigurarse; (3) si el portal vive ahí, panel y portal comparten destino. **Medir antes** sus recursos reales (`./lanzar.sh --tags recursos`). |
 | Una VM nueva | No hay: la slice son 14 VM fijas | Es lo ideal en una red real (plano de gestión aparte). |
 
 Si el `server` no sirve, la alternativa es un ctrl con límite de memoria y prioridad baja (como el registrador), sabiendo que comparte destino.
@@ -87,8 +87,8 @@ La reparación **automática** no se hace ahora. Si se hace, que sea desde el vi
 
 La página mostraría usuarios, MAC e IP de las sesiones: **datos personales de los estudiantes**.
 
-- **Login** contra el LDAP del proyecto, con un grupo de administradores; permisos separados para **ver** y para **reparar**.
-- **TLS** y escuchar **solo en la red de gestión** (`192.168.201.0/24`); si hace falta acceso externo, entrando por `switch-borde` como proxy, nunca expuesto a la red de datos.
+- **Acceso solo para el rol `superadmin`** (rol nuevo): un equipo dedicado que se autentica por 802.1X y no entra por el portal. El panel no pide contraseña: consulta al mapper por la IP de origen de la conexión y deja pasar solo si esa sesión tiene el rol `superadmin`; R2 además abre su puerto únicamente a ese rol. Sin rol de solo lectura en la v1. Se audita con la identidad del equipo, su IP y su MAC.
+- **TLS**, y el puerto del panel abierto en la red de datos **solo al rol `superadmin`** (R2). El acceso desde la gestión (`192.168.201.0/24`, por ejemplo vía `switch-borde`) queda para operación y emergencia.
 - Las acciones llevan token anti-CSRF y quedan en un registro de auditoría que el propio panel no puede borrar.
 - Credenciales (ONOS, mapper, LDAP) en un archivo `0600` solo de root, como `registrador-onos.env`. Las contraseñas de laboratorio del repo hay que cambiarlas antes de usarlo fuera del laboratorio.
 
@@ -116,7 +116,7 @@ La página mostraría usuarios, MAC e IP de las sesiones: **datos personales de 
 2. **Quién mantiene qué:** el panel toca R1 (mapper, LDAP), R2 (vigilante, reglas) y R5 (Grafana, espejo).
 3. **Historial de eventos del mapper:** en el panel o compartido en etcd.
 4. **¿REST o Karaf** para la reparación manual?
-5. **Alcance de permisos:** quién puede reparar y quién solo ver.
+5. **Alcance de permisos:** *resuelta el 23-nov* — solo el rol `superadmin`; sin rol de solo lectura en la v1.
 6. **Fuente única de la política:** hoy cada réplica del mapper lee su propio `policy.yaml` (sección 12); ¿repo, etcd u otra?
 7. **¿Permisos por usuario?** Hoy el permiso lo da el rol; una excepción por usuario es trabajo nuevo de R1+R2 (sección 13).
 
@@ -146,7 +146,7 @@ Que el panel muestre, y más adelante permita cambiar con cuidado, los archivos 
 
 | Opción | Qué hay que tocar | Cuándo conviene |
 |---|---|---|
-| **A. Un rol nuevo** (grupo LDAP + VLAN/tabla) | LDAP (grupo y miembro), RADIUS (grupo → VLAN, R1), `policy.yaml` (`roles` con una tabla libre —no la 30 de IoT/MAB, ni la 60/61/62 del reenvío, ni la 99—, y todas las filas de `rules` del rol nuevo), reiniciar el mapper y sincronizar. Cada rol crea una tabla en cada switch de acceso. | Una categoría que se repetirá (por ejemplo, «docentes investigadores»). Para una sola persona es pesado y escala mal: un rol por excepción. |
+| **A. Un rol nuevo** (grupo LDAP + VLAN/tabla) | LDAP (grupo y miembro), RADIUS (grupo → VLAN, R1), `policy.yaml` (`roles` con una tabla libre **menor que 60** —no la 30 de IoT/MAB—, y todas las filas de `rules` del rol nuevo), **una rama nueva en el webhook del mapper** (el mapeo rol → VLAN está escrito en el código y un rol desconocido se rechaza), reiniciar el mapper y sincronizar. Cada rol crea una tabla en cada switch de acceso. | Una categoría que se repetirá (por ejemplo, «docentes investigadores»). Para una sola persona es pesado y escala mal: un rol por excepción. |
 | **B. Pasar al usuario a otro rol existente** | solo LDAP | **No recomendado:** da todos los permisos de ese rol (viola el mínimo privilegio). |
 | **C. Excepción por sesión** *(no existe)* | Mapper (R1) y generador de tablas (R2) | Un permiso puntual a una persona, a veces temporal. |
 

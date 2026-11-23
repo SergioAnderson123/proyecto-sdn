@@ -18,10 +18,12 @@
 | **P8** | **Mapper HA estable y vistas de ONOS iguales** | Las excepciones se instalan por ONOS y se reconcilian con él | **Hecho** (el mapper con la reposición del flujo 40001, `6726bc4`, está desplegado según la nota de R1; las tres vistas de ONOS en 5 de 5 el 23-nov) | R1 + R2 | El registrador sin `VISTA_DESIGUAL`; `/health/ha` en `ready` |
 | **P9** | **Equipos y cuentas de la prueba** | El ascenso necesita un equipo con sesión 802.1X de alumno y una cuenta de profesor en LDAP | **Por confirmar** | R1 | h2 con `72 -e arrancar=true -e objetivo_host=h2-alumno` y sesión Alumno en `/sessions`; `profesor01` en el grupo `profesor` |
 | **P10** | **La misma política en las tres réplicas** | Cada réplica del mapper lee su propio `policy.yaml`; con una lista de excepciones, una réplica distinta daría resultados distintos según quién atienda | **Por comprobar** | R1 | `sha256sum` del `policy.yaml` (y del archivo de excepciones) idéntico en las tres réplicas |
+| **P11** | **El rol `superadmin` y su equipo dedicado** (sección 4.7): grupo y equipo en LDAP, rama en el `post-auth` de RADIUS, rol y servicio `admin_panel` en `policy.yaml` y, además, **el webhook del mapper**, donde el mapeo rol → VLAN está escrito en el código y un rol nuevo se rechaza | Es quien entra al panel. **No hace falta antes de la fase 6**: hasta que exista el panel, las excepciones se dan de alta editando el archivo por el repositorio | **Por hacer** | R1 (LDAP, RADIUS, mapper) + R2 (`policy.yaml`) | El equipo dedicado autentica y `/sessions` lo muestra con el rol `superadmin` en la tabla elegida; un equipo de otro rol no alcanza el puerto del panel |
 
 **Cuándo se puede pasar a cada fase:**
 - **Fase 1:** ya. **Fase 2:** P6 hecho y decisiones 1 a 3 tomadas. **Fase 3:** fase 2 terminada. **Fase 4 (despliegue):** P3, P8 y P10, y la fase 3.
 - **Fase 5 (validación en vivo):** P1, P2, P3, P4, P5, P7, P9 y P10.
+- **Fase 6 (panel):** P11 y las decisiones 14 a 17.
 
 ## 1. Decisiones de alcance (acordadas el 23-nov)
 
@@ -31,10 +33,11 @@
 | **Profesores** (cuenta del portal, por **ascenso** de un equipo ya autenticado) | Única identidad de persona que se usa para decidir permisos | **Sí: es el alcance de este diseño** |
 | **Invitados** (cuenta del portal, login directo) | Acceso mínimo, 30 min | No |
 | **Soporte TI** (administrador) | **Se le da un equipo y se autentica por 802.1X**, como hoy (rol `soporte`, tabla 40). No entra por el portal | No. (Que soporte use el portal por ascenso queda **aparcado**: es una opción válida, pero no se necesita.) |
+| **Superadmin** (rol nuevo) | **Un equipo dedicado** que se autentica por 802.1X; **no entra por el portal**. Es el único que entra al panel y da de alta y de baja las excepciones (decisión 6, sección 4.7) | No: administra las excepciones, no las recibe |
 
 ## 2. El problema
 
-La política se decide por **rol**. El grupo del usuario llega por RADIUS como una VLAN; el flujo de sesión (tabla 0, prioridad 40001, `in_port` + `eth_src`) hace `push_vlan` con ese id y salta a la **tabla de su rol** (docente 10, alumno 20, soporte 40, invitado 50). Esa tabla solo compara **VLAN, IP y puerto TCP del destino** (`flujos_tabla_rol`): no mira quién es la persona, y `policy.yaml` no tiene ninguna sección de excepciones. Un permiso individual obliga hoy a crear un rol nuevo (grupo LDAP + RADIUS + VLAN/tabla + todas las filas de `rules`), que no escala: un rol por excepción, y cada rol es una tabla en cada switch de acceso.
+La política se decide por **rol**. El grupo del usuario llega por RADIUS como una VLAN; el flujo de sesión (tabla 0, prioridad 40001, `in_port` + `eth_src`) hace `push_vlan` con ese id y salta a la **tabla de su rol** (docente 10, alumno 20, soporte 40, invitado 50). Esa tabla solo compara **VLAN, IP y puerto TCP del destino** (`flujos_tabla_rol`): no mira quién es la persona, y `policy.yaml` no tiene ninguna sección de excepciones. Un permiso individual obliga hoy a crear un rol nuevo (grupo LDAP + RADIUS + VLAN/tabla + todas las filas de `rules` **+ una rama nueva en el webhook del mapper**, donde el mapeo rol → VLAN está escrito en el código), que no escala: un rol por excepción, y cada rol es una tabla en cada switch de acceso.
 
 ## 3. Qué se quiere
 
@@ -113,6 +116,34 @@ La purga de huérfanos existente (`purgar_sesiones_huerfanas`) solo conoce los f
 - **Eventos nuevos** en la bitácora del mapper (`eventos.TIPOS`): `excepcion_aplicada` y `excepcion_retirada`, con usuario, MAC, servicio y motivo del retiro.
 - **Panel:** lista de excepciones definidas y de las **activas** (quién, qué servicio, desde cuándo, sesión y switch), alta con motivo y caducidad, baja manual, y el efecto por switch antes de confirmar.
 
+### 4.7 El rol `superadmin` y quién puede usar el panel (decisión del 23-nov)
+
+**Decisión:** solo el rol **superadmin** (rol nuevo) entra al panel y da de alta y de baja las excepciones. Ese rol lo tiene **un equipo dedicado** que se autentica por 802.1X y **no entra por el portal**. En la v1 no hay un rol de solo lectura.
+
+**La identidad es el equipo, no una cuenta.** En LDAP el equipo dedicado es una entrada como las demás (con MAC, switch y puerto fijos, que RADIUS compara) y pertenece al grupo `superadmin`; la persona queda identificada por la asignación de ese equipo. Por eso la auditoría registrará la identidad del equipo, su IP y su MAC.
+
+**Crear el rol toca cuatro sitios, no tres:**
+
+| # | Dónde | Qué |
+|---|---|---|
+| 1 | LDAP (`R1/shared/ldap/ldif/custom/estructura.ldif`) | Grupo `superadmin` y la entrada del equipo dedicado. El LDIF solo se carga con la carpeta vacía: en vivo, `ldapadd` y la replicación ctrl-1/ctrl-2 |
+| 2 | RADIUS (`R1/radius/raddb/sites-available/default`, `post-auth`) | Una rama `elsif (LDAP-Group == "superadmin")` con `Tunnel-Private-Group-Id = "superadmin"` |
+| 3 | `R2/policy/policy.yaml` (y `policy.local.yaml` en la slice) | `roles: superadmin: {matriz: superadmin, tabla: 45}`, el servicio `admin_panel` (IP y puerto) y las filas de `rules` del rol nuevo |
+| 4 | **El webhook del mapper** (`policy_mapper.py`, asignación de política y rol) | Hoy es `if "docente" in rol: 10 / "alumno": 20 / "soporte": 40 / else: rechazo`. Un rol que no esté ahí se rechaza con «Rol sin acceso autorizado», aunque esté en los otros tres sitios. **Recomendación:** que la tabla salga de `POLITICA["roles"][rol]["tabla"]` con coincidencia **exacta** del nombre (no por subcadena): es un cambio de R1 con pruebas que sirve a cualquier rol futuro |
+
+**La tabla del rol** debe ser **menor que 60** (las tablas de rol terminan en `goto` a la tabla 60 con el reenvío proactivo, y un `goto` solo puede ir hacia una tabla mayor), distinta de la 30 (IoT/MAB) y de la 99. Propongo la **45**.
+
+**Los permisos**: una fila `matriz: superadmin` propia, **no** compartir la de `administrator` (los administradores heredarían el acceso al panel). Qué más puede alcanzar ese equipo es la decisión 15.
+
+**Cómo entra al panel, sin contraseña.** El panel pregunta al mapper por la **IP de origen** de la conexión (el mismo `GET /portal/estado?ip=` con token que habilita el parche del portal) y deja pasar solo si la sesión 802.1X de ese equipo tiene el rol `superadmin`. Segunda capa independiente: R2 abre el puerto del panel únicamente al rol `superadmin` (tabla 45); cualquier otro rol lo descarta en el switch.
+
+**Consecuencia para el diseño del panel.** El equipo dedicado está en la **red de datos**, así que el panel **no puede escuchar solo en la interfaz de gestión** como se había escrito: escucha en la IP de servicios del `server` (`10.0.0.10`, con un puerto propio, por ejemplo 8444) y la restricción por rol la hace R2. El panel sigue hablando con ONOS y el mapper por la red de gestión (`ens3`): **hace de puente entre las dos redes**, así que comprometer el panel daría acceso a la gestión. Mitigaciones: el panel solo lee y ejecuta las acciones acotadas del diseño, cada cambio pide confirmación explícita, y todo queda auditado.
+
+**Riesgos de esta decisión:**
+- **Un solo equipo.** Si se pierde o se compromete, hay acceso total al panel (certificado revocable, ubicación fija verificada en LDAP, y una sesión 802.1X que no vence: el panel debe tener su propio tiempo de inactividad). Si falla, nadie edita por el panel: queda el procedimiento de emergencia de editar el archivo por el repositorio.
+- **Sin rol de solo lectura**, quien solo necesite mirar no puede; se puede añadir más adelante como otro rol.
+- **El panel confía en lo que le dice el mapper**: depende de P1 y P3 (parche del portal y token).
+
 ## 5. Seguridad
 
 - La cuenta es la del portal: usuario y contraseña de LDAP por HTTPS con el certificado fijado. **Comprobar o añadir un límite de intentos fallidos**: en `R2/portal_cautivo/server.py` no se ve ninguno, y esta función hace más valiosa una cuenta de profesor.
@@ -169,7 +200,7 @@ La purga de huérfanos existente (`purgar_sesiones_huerfanas`) solo conoce los f
 
 ## 9. Decisiones abiertas
 
-Cada una con la opción que recomiendo, quién decide y qué bloquea. Hasta que se tomen **1 a 3**, no empieza la fase 2; las demás pueden decidirse mientras avanza.
+Cada una con la opción que recomiendo, quién decide y qué bloquea. **Decididas el 23-nov: 1 a 5 y 7 a 13, como se recomienda; la 6 se cambió (solo el rol `superadmin`).** Quedan abiertas la **14 a 18**, que nacen de esa decisión y bloquean la fase 6.
 
 | # | Decisión | Opciones | Recomendación | Decide | Bloquea |
 |---|---|---|---|---|---|
@@ -178,7 +209,7 @@ Cada una con la opción que recomiendo, quién decide y qué bloquea. Hasta que 
 | **3** | **appId de las excepciones** | el de R2 · uno propio | **Propio** (`org.campus.excepciones`), por el contador de `dispositivos_incompletos` (4.2) | R2 | Fase 1 |
 | **4** | **Caducidad `hasta`** además de la duración de la sesión | no · opcional · obligatoria | **Opcional con tope máximo** (por ejemplo 90 días), para que una excepción olvidada no sea permanente | R2 | Fase 1 |
 | **5** | **Límites** | sin límite · por usuario y total | **3 servicios por usuario y 10 usuarios con excepción** en la v1; subirlos si hace falta | R2 | Fase 1 |
-| **6** | **Quién da de alta y de baja** (panel) | cualquier administrador · rol propio | **Rol propio de edición**, separado del de solo ver, con confirmación y registro de quién y cuándo | equipo del panel | Fase 6 |
+| **6** | **Quién entra al panel y da de alta y de baja** | cualquier administrador · rol propio de edición · **rol `superadmin`** | **Decidida: solo el rol `superadmin` (rol nuevo), con un equipo dedicado por 802.1X que no entra por el portal.** Sin rol de solo lectura en la v1 (sección 4.7) | equipo (decidida) | Fase 6 |
 | **7** | **Orden de la refactorización** (P6) | antes · junto con la función | **Antes y en su propio cambio**: se puede revisar y desplegar sin riesgo de la función nueva | R1 | Fase 2 |
 | **8** | **Límite de intentos fallidos** del portal (P5) | portal · mapper · ambos | **Portal** (por IP y por cuenta, por ejemplo 5 fallos en 10 min y espera creciente) **y** un evento `rechazado` en la bitácora, que el mapper ya tiene | R2 | P5, fase 5 |
 | **9** | **Qué pasa al cambiar una excepción con sesión abierta** | al siguiente login · inmediato | **Bajas inmediatas** (la reconciliación de «sobra una», unos 15 s) y **altas al siguiente ascenso**; que la excepción no aparezca a mitad de una sesión sin que la persona haya vuelto a autenticar | R1 + R2 | Fase 3 |
@@ -186,6 +217,11 @@ Cada una con la opción que recomiendo, quién decide y qué bloquea. Hasta que 
 | **11** | **Dónde queda el registro permanente** | solo la bitácora en memoria del mapper · un registro duradero | **Duradero** (etcd o un registro estructurado): la bitácora de `/events` está en memoria y por réplica y se pierde; ligado al pendiente de R1 del historial compartido | R1 | Fase 6 |
 | **12** | **¿Mostrar al profesor sus permisos adicionales** en la página del portal? | no · sí | **Sí, en una versión posterior**: `/portal/estado` devolvería los servicios y la fecha; da transparencia y facilita detectar errores | R2 | no bloquea |
 | **13** | **Fuente única de la política entre réplicas** (P10) | cada una su archivo · repo y despliegue ordenado · etcd | **Repo y despliegue ordenado** ahora, con la comprobación por `sha256sum`; etcd si el número de excepciones crece | R1 | Fase 4 |
+| **14** | **Nombre y tabla del rol** nuevo | `superadmin` en la tabla 45 · otra | **`superadmin`, tabla 45**: menor que 60 (los `goto` solo van hacia delante), distinta de la 30 y de la 99 | R2 | P11 |
+| **15** | **Qué puede alcanzar el equipo `superadmin`** además del panel | solo el panel · el panel y lo del administrador · todo | **El panel y los servicios del administrador**, para no necesitar otro equipo; si se prefiere el mínimo, solo el panel y un equipo de soporte aparte | equipo | P11 |
+| **16** | **Cómo se autentica la persona en el panel** | solo la sesión 802.1X del equipo · además un login personal | **Solo la sesión 802.1X** (el panel la consulta al mapper por la IP de origen); sumar un login personal si el equipo llega a compartirse, porque la auditoría solo sabría quién es el equipo | equipo | Fase 6 |
+| **17** | **Interfaz y puerto del panel** | IP de servicios del `server` con restricción por rol · solo gestión | **IP de servicios (`10.0.0.10`, puerto propio) restringida por R2 al rol `superadmin`**: el equipo dedicado está en la red de datos; la gestión (`ens3`) solo sirve para que el panel hable con ONOS y el mapper | R2 | Fase 6 |
+| **18** | **Suplente y emergencia** | un solo equipo · un segundo equipo | **Documentar el procedimiento de emergencia (editar el archivo por el repositorio)** y decidir si se guarda un segundo equipo apagado con su certificado | equipo | Fase 6 |
 
 ## 10. Fuera de este diseño
 
