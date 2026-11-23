@@ -1,28 +1,38 @@
-# Ejecuta UN comando del CLI de Karaf de ONOS (el de `ssh -p 8101`) en los tres nodos, sin teclear la contraseña de Karaf a mano. Solo lectura mientras el comando lo sea.
+# Ejecuta comandos del CLI de Karaf de ONOS (el de `ssh -p 8101`) en los tres nodos, sin teclear la contraseña de Karaf a mano. Solo lectura mientras el comando lo sea.
 #   PLAYBOOK=consulta_cli_onos.yml ./lanzar.sh -e 'comando=maps'
 #   PLAYBOOK=consulta_cli_onos.yml ./lanzar.sh -e 'comando=masters'
-#   PLAYBOOK=consulta_cli_onos.yml ./lanzar.sh -e 'comando="devices"' -e 'solo=192.168.201.1'     # un solo nodo
-# Usa sshpass con onos_user/onos_pass de group_vars (los mismos que ya usan los demas playbooks para el REST). `comando` va entero entre comillas al CLI: no ejecuta nada en el SO.
-- name: Comando del CLI de ONOS en los tres nodos
+# OJO: un valor con espacios en -e hay que pasarlo como JSON (Ansible parte `clave=valor con espacios` por los espacios y se queda solo con la primera palabra):
+#   PLAYBOOK=consulta_cli_onos.yml ./lanzar.sh -e '{"comando": "device-role of:000076f83813d34e 192.168.201.1 master", "solo": "192.168.201.2"}'   # un solo nodo
+# Varios comandos seguidos, con una pausa entre cada uno (por ejemplo, para mover el mando de un switch y devolverlo):
+#   PLAYBOOK=consulta_cli_onos.yml ./lanzar.sh -e '{"solo": "192.168.201.2", "espera": 20, "comandos": ["device-role of:X 192.168.201.1 master", "device-role of:X 192.168.201.2 master"]}'
+# Usa sshpass con onos_user/onos_pass de group_vars (los mismos que ya usan los demas playbooks para el REST). El comando va entero, entre comillas, al CLI: no ejecuta nada en el SO.
+- name: Comandos del CLI de ONOS
   hosts: borde
   gather_facts: false
   vars:
     comando: help
+    comandos: []                     # si no esta vacia, se ejecutan estos en orden (y `comando` se ignora)
+    espera: 0                        # segundos de pausa entre un comando y el siguiente
     solo: ""
+    nodos: "{{ [solo] if solo else onos_nodos }}"
+    lista: "{{ comandos if (comandos | length) > 0 else [comando] }}"
   tasks:
     - name: Ejecutar en cada nodo
       ansible.builtin.shell:
         cmd: >-
           sshpass -p {{ onos_pass | quote }} ssh -p 8101 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
-          {{ onos_user }}@{{ item }} {{ comando | quote }} 2>&1 | head -n 120
-      loop: "{{ [solo] if solo else onos_nodos }}"
+          {{ onos_user }}@{{ item.0 }} {{ item.1 | quote }} 2>&1 | head -n 120
+      loop: "{{ nodos | product(lista) | list }}"
+      loop_control:
+        pause: "{{ espera | int }}"
+        label: "{{ item.0 }}: {{ item.1 }}"
       register: salida
       changed_when: false
       failed_when: false
 
     - name: Mostrar
       ansible.builtin.debug:
-        msg: "{{ ['=== ' ~ item.item ~ ' | ' ~ comando ~ ' ==='] + item.stdout_lines }}"
+        msg: "{{ ['=== ' ~ item.item.0 ~ ' | ' ~ item.item.1 ~ ' ==='] + item.stdout_lines }}"
       loop: "{{ salida.results }}"
       loop_control:
-        label: "{{ item.item }}"
+        label: "{{ item.item.0 }}: {{ item.item.1 }}"
