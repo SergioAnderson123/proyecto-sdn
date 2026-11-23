@@ -49,7 +49,7 @@ class EtcdV3:
             )
             try:
                 with urllib.request.urlopen(request, context=self.context, timeout=2) as response:
-                    result = json.loads(response.read() or b"{}")
+                    result = json.loads(response.readline() or b"{}")
                 if result.get("error") or result.get("code"):
                     raise StateUnavailable("etcd rejected request")
                 self.preferred = index

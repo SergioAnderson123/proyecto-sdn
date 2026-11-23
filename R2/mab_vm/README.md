@@ -65,21 +65,23 @@ dc() { docker compose --env-file "$R2_ENV" -p r2-mab-vnrt \
   -f R1/deploy/controller/compose.mab-vnrt.yml \
   -f R2/mab_vm/compose.ha.example.yml "$@"; }
 dc stop r2_mab_vm
-install -m 600 /dev/null "$HOME/r2-sessions-pre-ha.json"
-docker cp r2-mab-vm:/state/sessions.json "$HOME/r2-sessions-pre-ha.json"
+R2_BACKUP=$(mktemp -d "$HOME/r2-pre-ha.XXXXXX")
+chmod 700 "$R2_BACKUP"
+docker cp r2-mab-vm:/state/sessions.json "$R2_BACKUP/sessions.json"
+chmod 600 "$R2_BACKUP/sessions.json"
 dc run --rm --build \
-  -v "$HOME/r2-sessions-pre-ha.json:/tmp/r2-sessions.json:ro" \
+  -v "$R2_BACKUP/sessions.json:/tmp/r2-sessions.json:ro" \
   r2_mab_vm python /r2/migrate_state.py /tmp/r2-sessions.json
 # Revisar el conteo anterior; solo entonces repetir con --apply.
 dc run --rm --build \
-  -v "$HOME/r2-sessions-pre-ha.json:/tmp/r2-sessions.json:ro" \
+  -v "$R2_BACKUP/sessions.json:/tmp/r2-sessions.json:ro" \
   r2_mab_vm python /r2/migrate_state.py /tmp/r2-sessions.json --apply
 dc up -d --build --no-deps r2_mab_vm
 curl -fsS http://127.0.0.1:5001/sessions
 ```
 
 Si falla la validación o el importador dice que etcd ya tiene estado, detenerse:
-el volumen original y el archivo `r2-sessions-pre-ha.json` quedan intactos. No
+el volumen original y el archivo `$R2_BACKUP/sessions.json` quedan intactos. No
 iniciar ctrl-2/3 hasta verificar el snapshot compartido en ctrl-1.
 
 En ctrl-2 y ctrl-3 usar el mismo prefijo, endpoints y certificados cliente

@@ -108,3 +108,14 @@ login EAP real. La prueba de apagar un mapper sí se repitió: con ctrl-1 deteni
 el gateway respondió desde ctrl-3 y mantuvo las 2 sesiones y 4 eventos. No se
 detuvo ningún ONOS ni se quitó quórum etcd en producción para no interrumpir el
 slice; esas pruebas siguen requiriendo una ventana controlada.
+
+## Prueba HTTP real sobre quórum aislado (22-nov-2026)
+
+Se ejecutó el mapper completo con tres etcd temporales en una red Docker interna
+de ctrl-3, sin publicar puertos ni conectar el ensayo a producción. Con un
+miembro caído continuó HTTP 200; con dos caídos devolvió 503 en sesiones,
+eventos, salud y el POST de presencia. Al recuperar quórum, sesiones y eventos
+sintéticos se conservaron. Las dos sesiones productivas permanecieron iguales.
+La evidencia está en `docs/evidencias/mapper-http-quorum-20261122.json`.
+Esta prueba sustituye la pendiente validación HTTP simulada por una integración
+real aislada; no implica haber detenido el etcd productivo.

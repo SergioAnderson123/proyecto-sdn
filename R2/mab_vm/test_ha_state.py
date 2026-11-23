@@ -122,5 +122,22 @@ class SharedStateTests(unittest.TestCase):
         self.assertIsNone(self.fake.state)
 
 
+class StreamingLeaseTests(unittest.TestCase):
+    def test_keepalive_reads_one_message_without_waiting_for_stream_eof(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self):
+                raise TimeoutError("keepalive stream remains open")
+            def readline(self):
+                return b'{"result":{"TTL":"30"}}\n'
+        client = object.__new__(ha_state.EtcdV3)
+        client.endpoints = ["http://isolated-etcd:2379"]
+        client.preferred = 0
+        client.context = None
+        with patch("ha_state.urllib.request.urlopen", return_value=Response()):
+            client.renew("test-lease")
+
+
 if __name__ == "__main__":
     unittest.main()

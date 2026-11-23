@@ -117,14 +117,46 @@ arquitectura pendientes.
 |---|---|---|
 | 1. Copia duplicada del mapper | Resuelto en el repo: `R1/shared/policy_mapper/` es la fuente oficial; `app/` enlaza a ella. | Ninguna acción de producción. |
 | 2. Eventos locales por réplica | Resuelto y desplegado: últimos 200 en etcd; `/events` no cae a memoria local y devuelve 503 si no hay quórum. | Los eventos anteriores a la actualización no se recuperan solos. |
-| 3. Quórum, latencia y 503 | Quórum probado en un clúster etcd aislado; métricas de espera/retención y 503 tienen pruebas automatizadas. | No se ha inducido pérdida de quórum contra el mapper desplegado. La medición EAP de 2384 ms es una muestra; faltan muestras para p50/p95. |
+| 3. Quórum, latencia y 503 | Quórum y respuestas HTTP del mapper completo probados con etcd real en una red aislada; métricas de espera/retención disponibles. | No se interrumpió el quórum de producción. La medición EAP de 2384 ms es una muestra; faltan muestras para p50/p95. |
 | 4. Gateway y R2 MAB | Gateway único aceptado por decisión del grupo. R2 MAB HA está preparado como overlay opcional, con importador no destructivo de sesiones. | R2 sigue desplegado solo en ctrl-1; migrar su snapshot y desplegar ctrl-2/3 requiere acceso al VNRT y ventana coordinada. La unicidad del gateway requiere decisión/topología, no un cambio local al mapper. |
 | 5. Presencia y cierre de sesiones | Resuelto y probado con ctrl-1 mapper detenido: presencia llegó a otra réplica y cerró h2. | Ninguna conocida para ese escenario probado. |
 | 6. DHCP, portal y vigilante | La regresión automatizada cubre contratos de presencia, logout, revocación, ascenso y políticas; el despliegue preservó sesiones/eventos. | Falta una prueba conjunta en vivo de esos consumidores tras failover, sin generar tráfico de descubrimiento adicional. |
 
-La Mac desde la que se actualizó esta nota no tiene ruta de red al rango privado
-`192.168.201.0/24` del VNRT; las consultas de solo lectura a las tres réplicas y
-al gateway expiraron. Por ello no se afirma que R2 HA se haya desplegado ni que
-se hayan completado las pruebas operativas pendientes. El importador nuevo en
-`R2/mab_vm/migrate_state.py` valida primero y se niega a sobrescribir cualquier
-estado etcd ya existente; conserva el archivo local como respaldo.
+El acceso desde la Mac se realiza por SSH a `10.20.11.14`, puertos
+`5801`, `5802` y `5803`; las consultas a `192.168.201.x` se hacen desde dentro
+del slice. Los timeouts anteriores al intentar llegar directamente a esas IP
+no demostraban una falla de VPN. Se verificó el acceso a los tres controladores:
+las tres réplicas estaban `ready`, en la misma revisión y con las mismas dos
+sesiones.
+
+## Validación HTTP integrada y reparación de R2 (22-nov-2026)
+
+Se ejecutó una copia del **mapper completo desplegado** en ctrl-3, con tres
+contenedores etcd 3.6.6 temporales, en una red Docker `internal`, sin puertos
+publicados, sin credenciales productivas y con mantenimiento ONOS deshabilitado.
+El estado fue sintético y usó un prefijo `/sdn/mapper/test/...`. No se conectó
+el ensayo a switches ni al etcd de producción.
+
+- Tres miembros y un miembro detenido: `/sessions` y `/events` devolvieron 200.
+- Dos miembros detenidos: `/sessions`, `/events`, `/health/ha` y un POST a
+  `/sessions/ausente` devolvieron 503, aproximadamente en 2,01–2,07 segundos.
+- Al recuperar un miembro: se recuperó HTTP 200 con la misma sesión y evento
+  sintéticos. La comparación de las sesiones productivas antes y después
+  confirmó que las dos permanecieron intactas.
+- Se retiraron exclusivamente los cuatro contenedores y la red temporales.
+
+Evidencia: [resultado JSON](evidencias/mapper-http-quorum-20261122.json).
+Esto cierra la prueba integrada del comportamiento HTTP ante pérdida de quórum;
+no representa una caída provocada del etcd productivo ni mide latencia EAP.
+
+También se detectó y corrigió la configuración del contenedor R2 existente:
+las variables estaban concatenadas dentro de `R1_URL` con caracteres literales
+`\n`. Se recreó únicamente ese contenedor con variables independientes y su
+mismo volumen. Se guardaron el contenedor anterior y un respaldo protegido en
+el servidor. El estado conservó cero hijos y dos marcas de revocación. Una
+solicitud usando la MAC del padre autenticado devolvió `403 CHILD_MAC_IS_PARENT`,
+confirmando que R2 reconoce al padre; esta comprobación no instala un flujo de
+VM. Esto **no equivale a desplegar R2 HA**, que sigue pendiente.
+
+La regresión local se repitió: 401 pruebas aprobaron en el sandbox y la única
+prueba que abre un servidor HTTP local aprobó fuera de él (402 en total).

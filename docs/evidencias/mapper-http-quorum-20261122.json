@@ -1,0 +1,156 @@
+{
+  "test": "real_mapper_http_quorum_isolated",
+  "network": "ha-http-check-e3f27811",
+  "production_before_sessions": 2,
+  "stages": {
+    "healthy": [
+      {
+        "path": "/sessions",
+        "method": "GET",
+        "status": 200,
+        "ms": 11.21,
+        "body": {
+          "total_sessions": 1,
+          "sessions": {
+            "02:00:00:fe:00:01": {
+              "username": "synthetic",
+              "mac": "02:00:00:fe:00:01",
+              "dpid": "isolated-switch",
+              "port": "9999",
+              "vlan": 20,
+              "rol": "Alumno",
+              "flow_id": null
+            }
+          }
+        }
+      },
+      {
+        "path": "/events",
+        "method": "GET",
+        "status": 200,
+        "ms": 10.38,
+        "body": {
+          "events": [
+            {
+              "tipo": "admitido",
+              "usuario": "synthetic"
+            }
+          ]
+        }
+      }
+    ],
+    "one_etcd_down": [
+      {
+        "path": "/sessions",
+        "method": "GET",
+        "status": 200,
+        "ms": 11.88,
+        "body": {
+          "total_sessions": 1,
+          "sessions": {
+            "02:00:00:fe:00:01": {
+              "username": "synthetic",
+              "mac": "02:00:00:fe:00:01",
+              "dpid": "isolated-switch",
+              "port": "9999",
+              "vlan": 20,
+              "rol": "Alumno",
+              "flow_id": null
+            }
+          }
+        }
+      },
+      {
+        "path": "/events",
+        "method": "GET",
+        "status": 200,
+        "ms": 11.07,
+        "body": {
+          "events": [
+            {
+              "tipo": "admitido",
+              "usuario": "synthetic"
+            }
+          ]
+        }
+      }
+    ],
+    "quorum_lost": [
+      {
+        "path": "/sessions",
+        "method": "GET",
+        "status": 503,
+        "ms": 2015.45,
+        "body": {
+          "detail": "Session quorum unavailable"
+        }
+      },
+      {
+        "path": "/events",
+        "method": "GET",
+        "status": 503,
+        "ms": 2067.09,
+        "body": {
+          "detail": "Event quorum unavailable"
+        }
+      },
+      {
+        "path": "/health/ha",
+        "method": "GET",
+        "status": 503,
+        "ms": 2024.65,
+        "body": {
+          "status": "unavailable"
+        }
+      },
+      {
+        "path": "/sessions/ausente",
+        "method": "POST",
+        "status": 503,
+        "ms": 2014.95,
+        "body": {
+          "detail": "Session quorum unavailable or operation in progress"
+        }
+      }
+    ],
+    "recovered": [
+      {
+        "path": "/sessions",
+        "method": "GET",
+        "status": 200,
+        "ms": 13.12,
+        "body": {
+          "total_sessions": 1,
+          "sessions": {
+            "02:00:00:fe:00:01": {
+              "username": "synthetic",
+              "mac": "02:00:00:fe:00:01",
+              "dpid": "isolated-switch",
+              "port": "9999",
+              "vlan": 20,
+              "rol": "Alumno",
+              "flow_id": null
+            }
+          }
+        }
+      },
+      {
+        "path": "/events",
+        "method": "GET",
+        "status": 200,
+        "ms": 9.72,
+        "body": {
+          "events": [
+            {
+              "tipo": "admitido",
+              "usuario": "synthetic"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "production_sessions_unchanged": true,
+  "result": "PASS",
+  "temporary_containers_removed": true
+}

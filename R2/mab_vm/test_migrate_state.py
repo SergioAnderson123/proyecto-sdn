@@ -76,6 +76,21 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(store.writes, 0)
         self.assertEqual(store.revokes, 1)
 
+    def test_missing_fields_cannot_be_mistaken_for_empty_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sessions.json"
+            for malformed in ({}, {"children": []}, {"revoking": []}):
+                path.write_text(json.dumps(malformed))
+                with self.assertRaises(ValueError):
+                    read_snapshot(path)
+
+    def test_unknown_child_fields_cannot_break_restore(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sessions.json"
+            path.write_text(json.dumps({"children": [{**CHILD, "unknown": 1}], "revoking": []}))
+            with self.assertRaises(ValueError):
+                read_snapshot(path)
+
     def test_invalid_record_is_rejected_before_import(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "sessions.json"

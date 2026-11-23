@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 import ha_state
+from mab_vm import MabVM, Denied
 
 
 REQUIRED_CHILD_FIELDS = {"mac", "parent_id", "dpid", "port", "vlan", "flow_id", "state"}
@@ -16,24 +17,29 @@ REQUIRED_CHILD_FIELDS = {"mac", "parent_id", "dpid", "port", "vlan", "flow_id", 
 
 def read_snapshot(path):
     data = json.loads(Path(path).read_text())
-    if not isinstance(data, dict):
-        raise ValueError("snapshot root must be an object")
-    children = data.get("children", [])
-    revoking = data.get("revoking", [])
+    if not isinstance(data, dict) or set(data) != {"children", "revoking"}:
+        raise ValueError("snapshot must contain exactly children and revoking")
+    children = data["children"]
+    revoking = data["revoking"]
     if not isinstance(children, list) or not isinstance(revoking, list):
         raise ValueError("children and revoking must be lists")
 
     seen = set()
     for child in children:
-        if not isinstance(child, dict) or not REQUIRED_CHILD_FIELDS.issubset(child):
+        if not isinstance(child, dict) or set(child) != REQUIRED_CHILD_FIELDS:
             raise ValueError("invalid child record; snapshot was not imported")
         mac = child["mac"]
         if not isinstance(mac, str) or mac.lower() in seen:
             raise ValueError("invalid or duplicate child MAC; snapshot was not imported")
+        try:
+            if MabVM.normalize(mac) != mac:
+                raise ValueError("child MAC must be normalized")
+        except Denied as error:
+            raise ValueError("invalid child MAC") from error
         seen.add(mac.lower())
         if child["state"] not in {"ACTIVE", "REVOKING"}:
             raise ValueError("invalid child state; snapshot was not imported")
-        if not isinstance(child["vlan"], int) or not 1 <= child["vlan"] <= 4094:
+        if type(child["vlan"]) is not int or not 1 <= child["vlan"] <= 4094:
             raise ValueError("invalid child VLAN; snapshot was not imported")
         if not all(isinstance(child[key], str) and child[key] for key in
                    ("parent_id", "dpid", "port", "flow_id")):
