@@ -5,7 +5,10 @@ Corre en la IP del portal (policy.yaml -> portal.ip, 10.0.0.60) y escucha en dos
   * 8083  el destino desviado: el switch reescribe hacia aquí el HTTP de un usuario sin sesión hacia 10.0.0.40:8003, y este puerto
           responde con una redirección (302) al formulario. Con sesión el flujo de R2 gana y el tráfico nunca llega aquí.
 
-La MAC del cliente se lee de la tabla ARP del portal (mismo segmento L2), nunca de lo que envía el cliente.
+La MAC del cliente se lee de la tabla ARP del portal (mismo segmento L2), nunca de lo que envía el cliente. Con la capa 3 (clientes en otra subred, detrás del gateway)
+el portal no es vecino de capa 2 del cliente y su ARP no la tiene: entonces el portal NO adivina nada, manda al Policy Mapper la IP de ORIGEN DE LA CONEXIÓN (la del
+socket, no ninguna que declare el cliente) junto con la MAC si la tiene, y es el mapper quien la resuelve con los hosts de ONOS (los rellena la app DHCP). Así el portal no
+necesita credenciales de ONOS. Requiere un mapper que acepte `ip` en /portal/login, /portal/logout y /portal/estado (docs/NOTA_PORTAL_MAC_POR_IP.md); uno anterior ignora `ip`.
 Sin dependencias fuera de la biblioteca estándar. Diseño: Tabler (MIT).
 
 HTTPS: con PORTAL_TLS_CERT y PORTAL_TLS_KEY (rutas a un certificado y su clave en PEM) todos los puertos hablan TLS 1.2+; sin ellas, HTTP
@@ -183,8 +186,16 @@ class Manejador(BaseHTTPRequestHandler):
     def _redir(self, url):
         self._enviar(302, "", extra={"Location": url})
 
+    def _ip(self):
+        return self.client_address[0]
+
     def _mac(self):
-        return mac_de(self.client_address[0])
+        """La MAC del ARP del portal, solo si el cliente es vecino de capa 2; si no, None (el mapper la resolverá por la IP)."""
+        return mac_de(self._ip())
+
+    def _quien(self):
+        """Lo que se manda al mapper para identificar al equipo: la MAC del ARP (o vacía) y la IP de origen de la conexión."""
+        return {"mac": self._mac() or "", "ip": self._ip()}
 
     def do_GET(self):
         puerto = self.server.server_address[1]
@@ -199,33 +210,28 @@ class Manejador(BaseHTTPRequestHandler):
             original = f"http://{self.headers.get('Host', '10.0.0.40:8003')}{self.path}"
             return self._redir(f"{ESQUEMA}://{IP_PORTAL}:{PUERTO_PORTAL}/?" + urllib.parse.urlencode({"destino": original}))
         destino = destino_seguro(urllib.parse.parse_qs(consulta).get("destino", [""])[0])
-        mac = self._mac()
-        if mac:
-            _, r = llamar_mapper("/portal/estado?mac=" + urllib.parse.quote(mac))
-            if r.get("sesion"):
-                if ascenso_disponible(r["sesion"]):
-                    return self._enviar(200, pagina_ascenso(r["sesion"], destino))
-                return self._enviar(200, sesion_activa(r["sesion"], destino))
+        _, r = llamar_mapper("/portal/estado?" + urllib.parse.urlencode(self._quien()))
+        if r.get("sesion"):
+            if ascenso_disponible(r["sesion"]):
+                return self._enviar(200, pagina_ascenso(r["sesion"], destino))
+            return self._enviar(200, sesion_activa(r["sesion"], destino))
         self._enviar(200, formulario(destino))
 
     def do_POST(self):
         largo = int(self.headers.get("Content-Length") or 0)
         campos = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(min(largo, 4096)).decode()).items()}
-        mac = self._mac()
+        quien = self._quien()
         if self.path == "/logout":
-            if mac:
-                llamar_mapper("/portal/logout", {"mac": mac})
+            llamar_mapper("/portal/logout", quien)
             return self._redir("/")
         if self.path != "/login":
             return self._enviar(404, "no encontrado", "text/plain")
         destino = destino_seguro(campos.get("destino"))
-        if not mac:
-            return self._enviar(200, formulario(destino, "No se pudo identificar su equipo; reintente."))
-        codigo, r = llamar_mapper("/portal/login", {"usuario": campos.get("usuario", ""), "clave": campos.get("clave", ""), "mac": mac})
+        codigo, r = llamar_mapper("/portal/login", {"usuario": campos.get("usuario", ""), "clave": campos.get("clave", ""), **quien})
         if codigo == 200:
             return self._enviar(200, sesion_activa({"usuario": r["usuario"], "rol": r["rol"], "metodo": "Portal"}, destino))
         mensaje = (r.get("detail") if codigo else "El servicio de acceso no responde; intente más tarde.") or "No se pudo iniciar sesión."
-        _, estado = llamar_mapper("/portal/estado?mac=" + urllib.parse.quote(mac))
+        _, estado = llamar_mapper("/portal/estado?" + urllib.parse.urlencode(quien))
         if (estado.get("sesion") or {}).get("ascenso_a"):       # equipo con sesión 802.1X: se vuelve a ofrecer subir de rol
             return self._enviar(401 if codigo == 401 else 200, pagina_ascenso(estado["sesion"], destino, mensaje))
         self._enviar(401 if codigo == 401 else 200, formulario(destino, mensaje))

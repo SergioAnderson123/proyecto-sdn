@@ -32,6 +32,9 @@ Usuarios de prueba: `guest01` / `guest123` (invitado), y cualquiera de LDAP (`pr
 ## Duración de la sesión
 Las sesiones del portal vencen: `portal.duracion_s` en `policy.yaml` fija los segundos por rol (invitado 30 min; el resto 8 h). Un lazo del Policy Mapper revisa cada 10 s, borra el flujo 40001 y registra «sesión vencida por tiempo»; el equipo vuelve a quedar solo con acceso al portal. Las sesiones de 802.1X no vencen: terminan con el Accounting-Stop. El panel muestra «vence en N min».
 
+## Clientes de otra subred (capa 3)
+El portal identifica al cliente por su MAC, que lee de **su tabla ARP**. Con subredes por switch de acceso el cliente (10.0.1.x, 10.0.2.x) está detrás del gateway y esa tabla no lo tiene (solo vería la MAC del gateway o nada), así que el portal no podía saber quién entraba ni mostrar su sesión 802.1X. Ahora el portal manda al Policy Mapper, junto a la MAC (vacía si el ARP no la tiene), la **IP de origen de la conexión** (la del socket, no la que declare el cliente) en `/portal/login`, `/portal/logout` y `/portal/estado`; el mapper resuelve la MAC con los hosts de ONOS (`portal_auth.mac_de_ip`: los rellena la app DHCP con IP, MAC y ubicación) y, si varios hosts tienen esa IP, no adivina. El portal no necesita credenciales de ONOS. Requiere el mapper de `docs/NOTA_PORTAL_MAC_POR_IP.md`; uno anterior ignora `ip` (en capa 2 todo sigue igual). En la slice de 14 VM se actualiza con `R1/deploy/topologia14/portal_actualizar.yml`.
+
 ## Seguridad
 - La **MAC** la lee el portal de su tabla ARP (mismo segmento), nunca del cliente; el Policy Mapper exige `X-Portal-Token` si `PORTAL_TOKEN` está definido (definirlo fuera del laboratorio).
 - LDAP caído ⇒ se rechaza. Un bind sin contraseña (anónimo) se rechaza explícitamente.

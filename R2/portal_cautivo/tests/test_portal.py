@@ -1,5 +1,12 @@
+import json
 import os
 import sys
+import threading
+import urllib.parse
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "R1", "shared", "policy_mapper"))
@@ -110,3 +117,129 @@ def test_sin_certificado_el_portal_sigue_en_http_como_en_el_laboratorio():
     srv = server.crear_servidor("127.0.0.1", 0)
     assert type(srv).__name__ == "ThreadingHTTPServer"
     srv.server_close()
+
+
+# ---- clientes de otra subred (capa 3): el portal manda al mapper la IP de origen de la conexion, y la MAC solo si su ARP la tiene
+class _MapperFalso:
+    """Un Policy Mapper de mentira: apunta lo que recibe y contesta lo que se le diga."""
+    def __init__(self):
+        self.estado_pedidos, self.logins, self.logouts, self.tokens = [], [], [], []
+        self.sesion = None                       # lo que devuelve /portal/estado
+        self.login = (200, {"status": "ok", "usuario": "guest01", "rol": "Invitado", "tabla": 50})
+        mapper = self
+
+        class H(BaseHTTPRequestHandler):
+            def _j(self, codigo, cuerpo):
+                b = json.dumps(cuerpo).encode()
+                self.send_response(codigo)
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+
+            def do_GET(self):
+                mapper.estado_pedidos.append(dict(urllib.parse.parse_qsl(urllib.parse.urlparse(self.path).query, keep_blank_values=True)))
+                self._j(200, {"sesion": mapper.sesion})
+
+            def do_POST(self):
+                cuerpo = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                mapper.tokens.append(self.headers.get("X-Portal-Token"))
+                if self.path == "/portal/login":
+                    mapper.logins.append(cuerpo)
+                    return self._j(*mapper.login)
+                mapper.logouts.append(cuerpo)
+                self._j(200, {"status": "cerrada"})
+
+            def log_message(self, *a):
+                pass
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
+
+
+@pytest.fixture
+def portal(monkeypatch):
+    """El portal REAL en un puerto libre de 127.0.0.1 (el cliente es 127.0.0.1) frente a un mapper de mentira; sin ARP por defecto."""
+    mapper = _MapperFalso()
+    srv = server.crear_servidor("127.0.0.1", 0)
+    puerto = srv.server_address[1]
+    monkeypatch.setattr(server, "MAPPER", mapper.url)
+    monkeypatch.setattr(server, "TOKEN", "t0ken")
+    monkeypatch.setattr(server, "PUERTO_PORTAL", puerto)
+    monkeypatch.setattr(server, "mac_de", lambda ip: None)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{puerto}"
+
+    def pedir(ruta, datos=None):
+        peticion = urllib.request.Request(base + ruta, data=None if datos is None else urllib.parse.urlencode(datos).encode(), method="GET" if datos is None else "POST")
+        try:
+            with urllib.request.urlopen(peticion, timeout=5) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+    yield mapper, pedir
+    srv.shutdown()
+    mapper.srv.shutdown()
+
+
+def test_sin_arp_el_portal_pregunta_al_mapper_por_la_ip_con_la_mac_vacia_y_muestra_la_sesion(portal):
+    mapper, pedir = portal
+    mapper.sesion = {"usuario": "profesor01", "rol": "Docente", "metodo": "802.1X", "ascenso_a": [], "base": None}
+    codigo, pagina = pedir("/")
+    assert codigo == 200 and "profesor01" in pagina and 'action="/logout"' in pagina
+    assert mapper.estado_pedidos == [{"mac": "", "ip": "127.0.0.1"}]
+
+
+def test_sin_sesion_se_muestra_el_formulario(portal):
+    mapper, pedir = portal
+    codigo, pagina = pedir("/")
+    assert codigo == 200 and 'action="/login"' in pagina and "profesor01" not in pagina
+
+
+def test_el_login_manda_la_ip_y_el_token_y_la_mac_vacia_si_el_arp_no_la_tiene(portal):
+    mapper, pedir = portal
+    codigo, pagina = pedir("/login", {"usuario": "guest01", "clave": "guest123", "destino": ""})
+    assert codigo == 200 and "guest01" in pagina
+    assert mapper.logins == [{"usuario": "guest01", "clave": "guest123", "mac": "", "ip": "127.0.0.1"}] and mapper.tokens == ["t0ken"]
+
+
+def test_si_el_arp_tiene_la_mac_se_manda_junto_a_la_ip(portal, monkeypatch):
+    mapper, pedir = portal
+    monkeypatch.setattr(server, "mac_de", lambda ip: "fa:16:3e:00:00:02")
+    pedir("/login", {"usuario": "guest01", "clave": "guest123", "destino": ""})
+    pedir("/")
+    assert mapper.logins[0]["mac"] == "fa:16:3e:00:00:02" and mapper.logins[0]["ip"] == "127.0.0.1"
+    assert mapper.estado_pedidos[-1] == {"mac": "fa:16:3e:00:00:02", "ip": "127.0.0.1"}
+
+
+def test_el_cierre_de_sesion_tambien_manda_la_ip(portal):
+    mapper, pedir = portal
+    pedir("/logout", {})
+    assert mapper.logouts == [{"mac": "", "ip": "127.0.0.1"}]
+
+
+def test_el_motivo_que_da_el_mapper_se_muestra_al_usuario(portal):
+    mapper, pedir = portal
+    mapper.login = (409, {"detail": "No se pudo identificar el equipo; reintente"})
+    codigo, pagina = pedir("/login", {"usuario": "guest01", "clave": "guest123", "destino": ""})
+    assert "No se pudo identificar el equipo; reintente" in pagina and 'action="/login"' in pagina
+
+
+def test_credenciales_malas_dan_401_y_el_formulario_con_el_motivo(portal):
+    mapper, pedir = portal
+    mapper.login = (401, {"detail": "Usuario o contraseña incorrectos"})
+    codigo, pagina = pedir("/login", {"usuario": "guest01", "clave": "mal", "destino": ""})
+    assert codigo == 401 and "Usuario o contrase" in pagina
+
+
+def test_un_equipo_con_sesion_8021x_que_admite_ascenso_ve_la_pagina_de_subir_de_rol_aunque_no_haya_arp(portal):
+    mapper, pedir = portal
+    mapper.sesion = {"usuario": "alumno01@example.org", "rol": "Alumno", "metodo": "802.1X", "ascenso_a": ["docente"], "base": None}
+    codigo, pagina = pedir("/")
+    assert "Subir de rol" in pagina
+
+
+def test_el_mapper_caido_no_tumba_el_portal(portal, monkeypatch):
+    mapper, pedir = portal
+    monkeypatch.setattr(server, "MAPPER", "http://127.0.0.1:1")                 # nadie escucha
+    codigo, pagina = pedir("/login", {"usuario": "guest01", "clave": "guest123", "destino": ""})
+    assert "no responde" in pagina

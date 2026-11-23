@@ -1,0 +1,71 @@
+# Actualiza el servidor del portal cautivo del `server` (R2/portal_cautivo/server.py). La version nueva manda al Policy Mapper la IP de origen de la conexion del cliente (y la MAC solo si su tabla ARP la
+# tiene) para que el mapper identifique a los clientes de OTRA subred (capa 3), que el portal ya no ve por ARP. NO toca la IP del server, el TLS ni el token del portal, y no necesita credenciales de ONOS.
+# ORDEN: desplegar PRIMERO el mapper que acepta `ip` (docs/NOTA_PORTAL_MAC_POR_IP.md, de R1); con el mapper anterior el portal nuevo funciona igual que el viejo en capa 2 y en capa 3 sigue sin identificar al cliente.
+#   PLAYBOOK=portal_actualizar.yml ./lanzar.sh                       # copia el servidor nuevo (con copia de seguridad del anterior) y reinicia r1-portal
+#   PLAYBOOK=portal_actualizar.yml ./lanzar.sh -e accion=revertir    # vuelve al servidor anterior
+- name: Actualizar el portal cautivo en el server
+  hosts: server
+  become: true
+  gather_facts: false
+  vars:
+    accion: actualizar               # actualizar | revertir
+    origen: "{{ playbook_dir }}/../../../R2/portal_cautivo"
+    destino: /opt/portal
+    ip_portal: 10.0.0.10
+    puerto_portal: 8443
+  tasks:
+    - name: Volver al servidor anterior
+      when: accion == 'revertir'
+      block:
+        - name: Restaurar server.py desde la copia de seguridad
+          ansible.builtin.copy:
+            src: "{{ destino }}/server.py.bak"
+            dest: "{{ destino }}/server.py"
+            remote_src: true
+            mode: "0644"
+        - name: Reiniciar el portal
+          ansible.builtin.systemd:
+            name: r1-portal
+            state: restarted
+
+    - name: Instalar el servidor nuevo
+      when: accion != 'revertir'
+      block:
+        - name: Copiar el servidor nuevo como server.py.nuevo
+          ansible.builtin.copy:
+            src: "{{ origen }}/server.py"
+            dest: "{{ destino }}/server.py.nuevo"
+            mode: "0644"
+
+        - name: Comprobar que es Python valido antes de usarlo
+          ansible.builtin.command: python3 -c "import ast; ast.parse(open('{{ destino }}/server.py.nuevo', encoding='utf-8').read())"
+          changed_when: false
+
+        - name: Copia de seguridad del servidor actual (solo la primera vez)
+          ansible.builtin.command: cp -pn {{ destino }}/server.py {{ destino }}/server.py.bak
+          changed_when: false
+
+        - name: Poner el servidor nuevo
+          ansible.builtin.command: mv {{ destino }}/server.py.nuevo {{ destino }}/server.py
+          changed_when: true
+
+        - name: Reiniciar el portal
+          ansible.builtin.systemd:
+            name: r1-portal
+            state: restarted
+
+    - name: Esperar y comprobar que el portal contesta
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          sleep 3
+          echo "servicio: $(systemctl is-active r1-portal)"
+          echo "https://{{ ip_portal }}:{{ puerto_portal }}/ -> $(curl -sk -m 6 -o /dev/null -w '%{http_code}' https://{{ ip_portal }}:{{ puerto_portal }}/)"
+          journalctl -u r1-portal -n 3 --no-pager | cut -c1-200
+      register: comprobacion
+      changed_when: false
+      failed_when: "'servicio: active' not in comprobacion.stdout"
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ comprobacion.stdout_lines }}"
