@@ -751,6 +751,58 @@ async def eliminar_flujo_onos(dpid: str, flow_id: str) -> None:
             print(f"  [TCAM ERROR] Fallo al eliminar flujo {flow_id}: {e}")
 
 
+def _flujo_cubre_sesion(flujo: dict, sesion: ActiveSession) -> bool:
+    """Only accept the exact live 40001 rule required by this stored session."""
+    estado = str(flujo.get("state", "")).upper()
+    if (str(flujo.get("priority")) != "40001" or str(flujo.get("tableId")) != "0"
+            or estado not in ("", "ADDED")):
+        return False
+    criterios = {c.get("type"): c for c in flujo.get("selector", {}).get("criteria", [])}
+    if (criterios.get("ETH_SRC", {}).get("mac", "").lower() != sesion.mac.lower()
+            or str(criterios.get("IN_PORT", {}).get("port")) != str(sesion.port)):
+        return False
+    instrucciones = flujo.get("treatment", {}).get("instructions", [])
+    return (
+        any(i.get("type") == "L2MODIFICATION" and i.get("subtype") == "VLAN_PUSH" for i in instrucciones)
+        and any(i.get("type") == "L2MODIFICATION" and i.get("subtype") == "VLAN_ID"
+                and int(i.get("vlanId", -1)) == int(sesion.vlan) for i in instrucciones)
+        and any(i.get("type") == "TABLE" and int(i.get("tableId", -1)) == int(sesion.vlan)
+                for i in instrucciones)
+    )
+
+
+async def _flujo_sesion_presente(sesion: ActiveSession) -> bool:
+    """Read the switch master's flow table through the HA-aware ONOS transport."""
+    async with HaAsyncClient() as client:
+        response = await client.get(f"{ONOS_BASE_URL}/flows/{sesion.dpid}", auth=ONOS_AUTH, timeout=3.0)
+        response.raise_for_status()
+        return any(_flujo_cubre_sesion(f, sesion) for f in response.json().get("flows", []))
+
+
+async def _confirmar_flujo_sesion(sesion: ActiveSession) -> None:
+    """Fail closed if a repeated EAP login finds durable session state but no ONOS rule."""
+    try:
+        if await _flujo_sesion_presente(sesion):
+            return
+        print(f"  [HA] Falta flujo 40001 de {sesion.mac}; se reinstala antes de confirmar el login", flush=True)
+        nuevo_id = await inyectar_flujo_tabla_0(sesion.dpid, sesion.port, sesion.mac, sesion.vlan)
+        if not nuevo_id:
+            raise RuntimeError("ONOS no confirmó la reinstalación")
+        if str(sesion.flow_id) != str(nuevo_id):
+            sesion.flow_id = nuevo_id
+            session_store.save()
+        if not await _flujo_sesion_presente(sesion):
+            raise RuntimeError("ONOS todavía no muestra el flujo reinstalado")
+        if sesion.mac.lower() in getattr(session_store, "intents", {}):
+            session_store.clear_intent(sesion.mac.lower())
+        print(f"  [HA] Flujo 40001 de {sesion.mac} verificado en ONOS", flush=True)
+    except HTTPException:
+        raise
+    except Exception as error:
+        print(f"  [HA] No se confirma login de {sesion.mac}: flujo no verificado ({type(error).__name__})", flush=True)
+        raise HTTPException(status_code=503, detail="No se pudo verificar el flujo de sesión en ONOS") from error
+
+
 # -----------------------------------------------------------------------------
 # WEBHOOK PRINCIPAL (EAP-TLS - R1 y R2)
 # -----------------------------------------------------------------------------
@@ -869,6 +921,8 @@ async def _procesar_webhook(identidad_ldap: str, mac_esperada: str, mac_fisica: 
                 and sesion_activa.username.lower() == identidad_ldap.lower()):
             # Es la MISMA sesión que ya está instalada (reintento o segunda llamada de la misma negociación que
             # ya ganó la resolución de ambigüedad), no un conflicto nuevo: se confirma sin volver a bloquear nada.
+            if ha_store.ENABLED:
+                await _confirmar_flujo_sesion(sesion_activa)
             print(f"  [=] {identidad_ldap} ya tiene esta misma sesión activa en {dpid}:{port}; se confirma sin reprocesar")
             return {
                 "Tunnel-Type": "VLAN",

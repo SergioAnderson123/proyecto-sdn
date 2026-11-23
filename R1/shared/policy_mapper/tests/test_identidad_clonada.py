@@ -185,6 +185,41 @@ def test_una_segunda_llamada_del_mismo_ganador_no_vuelve_a_bloquear_nada(monkeyp
     assert bloqueados == []                                    # no se vuelve a bloquear el puerto legítimo
 
 
+def test_en_ha_confirma_una_sesion_repetida_solo_tras_comprobar_el_flujo(monkeypatch, cliente):
+    cli, bloqueados = cliente
+    _onos_con([_entrada(f"{DPID}/1", estado="UNAUTHORIZED_STATE")], monkeypatch)
+    primera = cli.post("/webhook", json=_cuerpo(), headers=HEADERS)
+    assert primera.status_code == 200
+    comprobadas = []
+
+    async def comprobar(sesion):
+        comprobadas.append((sesion.mac, sesion.flow_id))
+
+    monkeypatch.setattr(pm.ha_store, "ENABLED", True)
+    monkeypatch.setattr(pm, "_confirmar_flujo_sesion", comprobar)
+    segunda = cli.post("/webhook", json=_cuerpo(), headers=HEADERS)
+    assert segunda.status_code == 200
+    assert comprobadas == [(MAC, "flow-falso")]
+    assert bloqueados == []
+
+
+def test_si_ha_no_puede_verificar_el_flujo_no_confirma_el_login(monkeypatch, cliente):
+    from fastapi import HTTPException
+
+    cli, _ = cliente
+    _onos_con([_entrada(f"{DPID}/1", estado="UNAUTHORIZED_STATE")], monkeypatch)
+    assert cli.post("/webhook", json=_cuerpo(), headers=HEADERS).status_code == 200
+
+    async def flujo_no_verificado(sesion):
+        raise HTTPException(status_code=503, detail="flow not verified")
+
+    monkeypatch.setattr(pm.ha_store, "ENABLED", True)
+    monkeypatch.setattr(pm, "_confirmar_flujo_sesion", flujo_no_verificado)
+    segunda = cli.post("/webhook", json=_cuerpo(), headers=HEADERS)
+    assert segunda.status_code == 503
+    assert session_store.get_by_mac(MAC) is not None
+
+
 def test_una_mac_distinta_en_otro_puerto_sigue_siendo_conflicto_real(monkeypatch, cliente):
     """Si ya hay sesión en el puerto correcto y aparece otra en una ubicación distinta, sigue siendo CASO A."""
     cli, bloqueados = cliente

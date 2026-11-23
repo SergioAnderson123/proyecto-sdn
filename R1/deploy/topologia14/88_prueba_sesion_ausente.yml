@@ -10,13 +10,14 @@
   vars:
     modo: api
     confirmar: false
+    mapper_gateway: "http://{{ mapper_gateway_ip | default('192.168.201.254') }}:5000"
     mac: "fa:16:3e:b6:96:08"
     sw: sw-acc-1
     puerto: 1
     espera: 30
     env_archivo: "{{ repo_dir }}/R1/deploy/.env"
     ver_sesion: >-
-      curl -s http://127.0.0.1:5000/sessions | python3 -c 'import sys, json; s = json.load(sys.stdin)["sessions"].get("{{ mac }}"); print("sesion: %s (%s, %s) flujo %s" % (s["username"], s["rol"], s["metodo"], s["flow_id"]) if s else "sesion: (no hay)")'
+      curl -fsS {{ mapper_gateway }}/sessions | python3 -c 'import sys, json; s = json.load(sys.stdin)["sessions"].get("{{ mac }}"); print("sesion: %s (%s, %s) flujo %s" % (s["username"], s["rol"], s["metodo"], s["flow_id"]) if s else "sesion: (no hay)")'
   tasks:
     - name: Hace falta -e confirmar=true (h1 pierde su sesion unos segundos)
       ansible.builtin.assert:
@@ -59,7 +60,7 @@
 
     - name: POST /sessions/ausente
       ansible.builtin.shell:
-        cmd: "curl -s -X POST -H 'Content-Type: application/json' -H \"X-Presencia-Token: $CLAVE\" -d '{\"mac\":\"{{ mac }}\",\"motivo\":\"prueba 88\"}' http://127.0.0.1:5000/sessions/ausente"
+        cmd: "curl -fsS -X POST -H 'Content-Type: application/json' -H \"X-Presencia-Token: $CLAVE\" -d '{\"mac\":\"{{ mac }}\",\"motivo\":\"prueba 88\"}' {{ mapper_gateway }}/sessions/ausente"
       environment:
         CLAVE: "{{ clave.stdout | trim }}"
       register: respuesta

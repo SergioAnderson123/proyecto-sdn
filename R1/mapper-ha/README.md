@@ -8,6 +8,7 @@ Esta carpeta guarda el código y la configuración sin secretos del despliegue H
 - `gateway/proxy.py`: frontend HTTP del gateway `192.168.201.254:5000`, chequea `/health/ha` y deriva entre `192.168.201.1-3:15002`. Arranque persistente mediante `cron @reboot` y `flock`.
 - etcd 3.6.6 en los tres controladores, red host, TLS mutuo, puerto cliente 12379 y peer 12380. Cada nodo conserva datos en el volumen `mapper-etcd-prod-data`; el prefijo compartido es `/sdn/mapper/prod`.
 - Las tres réplicas `mapper-ha-prod` usan `HA_MAINTENANCE=1`, alias Docker local `policy_mapper`, puerto de gestión 15002 y reinicio `unless-stopped`.
+- En HA, las operaciones de flujo consultan el mastership del DPID y priorizan el ONOS maestro. La caché predeterminada dura 5 s (`ONOS_MASTER_CACHE_TTL_S`) y la consulta de mastership espera 1 s (`ONOS_MASTER_TIMEOUT_S`); si no se conoce el maestro, se conserva el failover ordinario.
 - RADIUS, DHCP, SADIS y fallback MAB consultan el endpoint estable del gateway. Los overrides de RADIUS están en `deploy/`.
 - En el slice VNRT, las tres réplicas consultan el LDAP central de ctrl-1 por `192.168.201.1:1389` (`LDAP_HOST`/`LDAP_PORT`). En un despliegue Docker local se conservan los valores por defecto `ldap:389`.
 
@@ -94,6 +95,13 @@ y liberación. Son medidas del mapper, no la duración completa de EAP/RADIUS.
 Para medir un login real, correlacionar esos logs con la petición y registrar
 el tiempo total del cliente, incluyendo errores y percentiles bajo concurrencia.
 Las transacciones que no consiguen adquirir el cerrojo pueden responder 503.
+
+Para recopilar, sin modificar producción, advertencias recientes de etcd y del
+mapper en los tres controladores, ejecutar desde `switch-borde`:
+
+```sh
+PLAYBOOK=diagnostico_mapper_ha.yml ./lanzar.sh
+```
 
 El gateway de gestión `.254:5000` se conserva como punto único por la decisión
 del grupo recogida en `docs/NOTA_VALIDACION_MAPPER_HA.md`; no es el gateway virtual

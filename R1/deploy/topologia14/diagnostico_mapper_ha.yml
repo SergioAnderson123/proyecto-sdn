@@ -1,0 +1,50 @@
+# Diagnóstico estrictamente de lectura para las señales etcd/maintenance de la nota HA.
+# No reinicia contenedores, no cambia el quórum y no muestra archivos de entorno ni credenciales.
+#   PLAYBOOK=diagnostico_mapper_ha.yml ./lanzar.sh
+- name: Leer señales recientes de etcd y del mapper HA en los tres controladores
+  hosts: ctrl
+  become: true
+  gather_facts: false
+  vars:
+    ventana: 2h
+  tasks:
+    - name: Leer solo advertencias de latencia/raft de etcd
+      ansible.builtin.shell:
+        cmd: >-
+          docker logs --since {{ ventana | quote }} mapper-etcd-prod 2>&1
+          | grep -Ei 'apply request took too long|took too long|slow fdatasync|leader changed|failed to send.*heartbeat|unhealthy cluster'
+          | tail -n 80 || true
+      register: etcd_senales
+      changed_when: false
+      failed_when: false
+
+    - name: Leer bloqueos y tiempos de transacción del mapper
+      ansible.builtin.shell:
+        cmd: >-
+          docker logs --since {{ ventana | quote }} mapper-ha-prod 2>&1
+          | grep -E '\[HA\] maintenance deferred|transaction wait_ms='
+          | tail -n 100 || true
+      register: mapper_senales
+      changed_when: false
+      failed_when: false
+
+    - name: Leer estado y reinicios sin inspeccionar configuración privada
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - --format
+          - "{{ '{{' }}.Name{{ '}}' }} status={{ '{{' }}.State.Status{{ '}}' }} restarts={{ '{{' }}.RestartCount{{ '}}' }}"
+          - mapper-etcd-prod
+          - mapper-ha-prod
+      register: contenedores
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar evidencia acotada al nodo
+      ansible.builtin.debug:
+        msg:
+          - "Nodo: {{ inventory_hostname }}"
+          - "Contenedores: {{ contenedores.stdout_lines | default([]) }}"
+          - "Etcd: {{ etcd_senales.stdout_lines | default([]) }}"
+          - "Mapper: {{ mapper_senales.stdout_lines | default([]) }}"

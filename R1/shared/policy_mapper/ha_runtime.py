@@ -59,6 +59,15 @@ async def ports(mapper):
     close,mapper._puerto_caido_veces=mapper.macs_con_puerto_caido(sessions,states,mapper._puerto_caido_veces,mapper.PUERTO_CAIDO_VECES)
     for mac in close: await mapper._cerrar_por_ausencia(mac,'puerto sin enlace')
 
+
+def _detalle_error_seguro(error):
+    detalle=' '.join(str(error).split())
+    for variable in ('ONOS_PASSWORD','LDAP_ADMIN_PASSWORD','AGENTE_TOKEN','PRESENCIA_TOKEN','PORTAL_TOKEN'):
+        secreto=os.getenv(variable)
+        if secreto:
+            detalle=detalle.replace(secreto,'<redacted>')
+    return detalle[:240]
+
 async def maintenance(mapper):
     while True:
         await asyncio.sleep(5)
@@ -80,7 +89,7 @@ async def maintenance(mapper):
                 _,rev=mapper.session_store.client.get('maintenance')
                 mapper.session_store.client.cas('maintenance',{'at':time.time(),'down':mapper._puerto_caido_veces,'sync_at':sync_at},rev,ha_store.owner())
         except Exception as e:
-            print('[HA] maintenance deferred:',type(e).__name__,flush=True)
+            print('[HA] maintenance deferred:',type(e).__name__,_detalle_error_seguro(e),flush=True)
 
 def install(mapper):
     @mapper.app.middleware('http')
