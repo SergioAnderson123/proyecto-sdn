@@ -343,6 +343,8 @@ def main(argv=None):
     def log(texto):
         print(time.strftime("%H:%M:%S"), texto, flush=True)
 
+    onos.log = log                                              # avisos de vista mala de un nodo de ONOS (onos_multi)
+
     if arg.generar_acceso:
         acc = generar_acceso(onos, arg.enlaces, arg.generar_acceso)
         log(f"Puertos de acceso guardados en {arg.generar_acceso}: { {_nombre(d): p for d, p in acc.items()} }")
