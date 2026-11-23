@@ -117,3 +117,39 @@ La página mostraría usuarios, MAC e IP de las sesiones: **datos personales de 
 3. **Historial de eventos del mapper:** en el panel o compartido en etcd.
 4. **¿REST o Karaf** para la reparación manual?
 5. **Alcance de permisos:** quién puede reparar y quién solo ver.
+6. **Fuente única de la política:** hoy cada réplica del mapper lee su propio `policy.yaml` (sección 12); ¿repo, etcd u otra?
+7. **¿Permisos por usuario?** Hoy el permiso lo da el rol; una excepción por usuario es trabajo nuevo de R1+R2 (sección 13).
+
+## 12. Configuración estática y políticas (idea del equipo, 23-nov)
+
+Que el panel muestre, y más adelante permita cambiar con cuidado, los archivos que gobiernan la red. Lo que hay hoy y cómo se recarga cada cosa:
+
+| Archivo | Qué gobierna | Quién lo lee | Cómo se recarga hoy |
+|---|---|---|---|
+| `R2/policy/policy.yaml` | `roles` (grupo → tabla/VLAN), `rules` (matriz rol → servicio), `services` (IP y puerto de cada servicio), `portal`, `ascenso`, `cuarentena`, `trusted`, `sin_usuarios` | el Policy Mapper (`policy_tables.cargar_politica`) al arrancar | **reiniciar el mapper** (cada réplica); `POST /policy/sync` solo reinstala las tablas en los switches |
+| `R2/policy/policy.local.yaml` (no versionado) | lo propio de la slice (MAC del portal, IP del server, puertos de confianza, reenvío); se fusiona sobre `policy.yaml` | el mapper | lo genera `generar_politica_local.py` (fase E, `70_fase_e.yml`); reiniciar el mapper |
+| `R2/policy/planes/vnrt_topologia14.json` | plan de subredes: gateways, ámbitos DHCP y su concesión, switches de cada subred | el vigilante (`--subredes`) y los generadores de la app DHCP y de `gateway-arp` | `68` (vigilante), `82` (DHCP), `76` (gateway ARP) |
+| `R2/policy/planes/hosts_fijos_capa3.json` | hosts con IP fija (el `server`) y su ubicación | el vigilante | `68` (copia el archivo y reinicia el servicio) |
+| Configuración JSON de las apps de ONOS (DHCP, gateway-arp, medidores) | ámbitos, gateways, tasas | las propias apps | `POST /onos/v1/network/configuration/apps/<app>` (los playbooks 76, 82, 90) |
+| Parámetros del vigilante (`estable`, `intervalo`, `olvidar_host`…) | tiempos de recálculo y olvido | la unidad `vigilante-capa3` | `68` |
+| LDAP (usuarios y grupos) y RADIUS | quién es cada persona y su grupo | R1 | semilla LDIF y despliegue de R1 |
+
+**Qué haría el panel:**
+- **v1 (solo lectura):** cada archivo con su contenido vigente, qué significa cada sección y **qué hay de distinto entre lo desplegado y lo que está en el repo** (la divergencia entre réplicas es un riesgo real: cada una lee su `policy.yaml`).
+- **Validar antes de aplicar:** reutilizar el código que ya existe (`cargar_politica`, `flujos_tabla_rol`, los generadores y la vista previa) para mostrar **qué reglas de OpenFlow se añadirían o quitarían en cada switch** al añadir o cambiar una política, sin instalar nada.
+- **Editar (fase posterior):** flujo editar → validar → simular el cambio por switch → confirmar → aplicar réplica a réplica comprobando sesiones y acceso → auditar y poder volver atrás. Es lo más delicado del panel: un `policy.yaml` mal editado puede dejar a todos sin acceso o abrir lo que no debe, y no hay recarga en caliente. Por eso conviene que el cambio pase por el repositorio (rama o revisión) y el panel lo valide y lo despliegue, en vez de escribir directamente en las VM.
+- **Añadir una política** (por ejemplo permitir un servicio a un rol): una fila en `rules` (y en `services` si el servicio es nuevo); el panel enseñaría el diff de reglas por switch y, tras confirmar, reiniciaría las réplicas y ejecutaría `POST /policy/sync`.
+
+## 13. Permisos para un usuario concreto (pregunta del equipo)
+
+**Estado actual.** La política se decide por **rol**: el grupo LDAP del usuario llega por RADIUS como una VLAN, el flujo de sesión (tabla 0, prioridad 40001, `in_port` + `eth_src`) pone esa VLAN y salta a la **tabla de su rol**, y esa tabla solo mira **destino** (`VLAN_VID` + IP y puerto TCP del servicio). No mira quién es la persona, y `policy.yaml` no tiene ninguna sección de excepciones por usuario. Hoy un permiso individual obliga a elegir una de estas vías:
+
+| Opción | Qué hay que tocar | Cuándo conviene |
+|---|---|---|
+| **A. Un rol nuevo** (grupo LDAP + VLAN/tabla) | LDAP (grupo y miembro), RADIUS (grupo → VLAN, R1), `policy.yaml` (`roles` con una tabla libre —no la 30 de IoT/MAB, ni la 60/61/62 del reenvío, ni la 99—, y todas las filas de `rules` del rol nuevo), reiniciar el mapper y sincronizar. Cada rol crea una tabla en cada switch de acceso. | Una categoría que se repetirá (por ejemplo, «docentes investigadores»). Para una sola persona es pesado y escala mal: un rol por excepción. |
+| **B. Pasar al usuario a otro rol existente** | solo LDAP | **No recomendado:** da todos los permisos de ese rol (viola el mínimo privilegio). |
+| **C. Excepción por sesión** *(no existe)* | Mapper (R1) y generador de tablas (R2) | Un permiso puntual a una persona, a veces temporal. |
+
+**Propuesta para la opción C.** Una sección `excepciones` (en `policy.yaml` o en su propio archivo) con `usuario`, `servicio`, vigencia y motivo. Al admitir la sesión de ese usuario, el mapper instala **en la tabla de su rol** reglas adicionales de prioridad mayor que las del rol, con `eth_src` = la MAC de su equipo, que permiten solo ese servicio; las borra al cerrar sesión, al vencer o al ausentarse el equipo, igual que el flujo 40001. Ventajas: ni roles ni VLAN nuevas, es temporal y auditable. Costes y riesgos: está **atada al equipo con el que se autentica** (si entra desde otro, se aplica allí); hay que persistirla para el HA (etcd) y **reconciliarla** como ya se hace con el flujo 40001 (una sesión sin su flujo es el fallo que vimos el 23-nov); cuenta reglas extra por usuario; y toca R1 y R2 a la vez.
+
+**Recomendación:** para algo recurrente, la opción A hoy mismo; para permisos individuales, construir la C. El panel sería el sitio natural para gestionarlas (alta con motivo y caducidad, lista de excepciones activas, baja manual), siempre con el flujo de validar y simular de la sección 12.
