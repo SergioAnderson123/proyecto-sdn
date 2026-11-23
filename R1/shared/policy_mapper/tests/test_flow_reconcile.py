@@ -99,7 +99,8 @@ def test_login_repetido_no_reinstala_si_el_flujo_ya_esta(monkeypatch):
 
 def test_login_repetido_reinstala_y_verifica_el_flujo_ausente(monkeypatch):
     sesion = _session()
-    monkeypatch.setattr(pm, "HaAsyncClient", lambda: _Client([[], [_flow()]]))
+    respuestas = [[], [_flow()]]
+    monkeypatch.setattr(pm, "HaAsyncClient", lambda: _Client(respuestas))
     instalaciones = []
 
     async def instalar(*args):
