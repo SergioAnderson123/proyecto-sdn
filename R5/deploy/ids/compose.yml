@@ -49,6 +49,25 @@ services:
       - suricata
     restart: unless-stopped
 
+  # Métricas Prometheus de ESTE sensor (puerto 9108): solo lee ONOS, eve-alerts.json y state.json; no instala ni borra nada.
+  # Opcional (profile "monitoring"): docker compose --profile monitoring up -d exporter
+  # Lo scrapea el Prometheus central (ver R5/deploy/monitoring/), que apunta a la IP de este sensor en topologia.yaml.
+  exporter:
+    image: r5-integrador:local
+    container_name: r5-exporter
+    profiles: ["monitoring"]
+    command: ["python3", "-u", "/opt/r5/codigo/exporter.py"]
+    environment: *r5-env
+    volumes:
+      - suricata-log:/var/log/suricata:ro
+      - integrador-state:/var/lib/integrador:ro
+      - ${TOPOLOGIA_ARCHIVO:?lo define up.sh}:/opt/r5/topologia.yaml:ro
+    ports:
+      - "9108:9108"
+    depends_on:
+      - integrador
+    restart: unless-stopped
+
   # Instalador del espejo selectivo en los cores (una vez; es permanente e idempotente: instalarlo desde los dos sensores es inocuo).
   # Se ejecuta con: docker compose run --rm espejo     Ver switches y puertos de ONOS: docker compose run --rm espejo python3 /opt/r5/lab/espejo.py --descubrir
   espejo:

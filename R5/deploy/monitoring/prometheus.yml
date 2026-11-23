@@ -1,0 +1,14 @@
+# Scrapea el exporter.py de cada sensor del slice de 14 VM (R5/codigo/exporter.py, puerto 9108). No toca ONOS, OVS ni el
+# integrador: solo lee lo que ellos ya expusieron. Si cambian las IPs de los sensores (otro slice), ajustar aquí
+# (vienen de R5/deploy/topologia.yaml: sensores node-sec-1/2 = 192.168.201.31/32).
+global:
+  scrape_interval: 5s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: r5
+    static_configs:
+      - targets: ["192.168.201.31:9108"]
+        labels: { sensor: "node-sec-1" }
+      - targets: ["192.168.201.32:9108"]
+        labels: { sensor: "node-sec-2" }

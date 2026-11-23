@@ -1,0 +1,45 @@
+# Monitoreo de R5 para el slice de 14 VM: Prometheus + Grafana, central (pensado para node-ctrl-2; no compite por RAM con
+# ONOS/mapper-ha de node-ctrl-3 ni corre en los switches, que no tienen Docker). Solo LEE lo que exponen los exportadores
+# de los sensores (R5/deploy/ids/, profile "monitoring", puerto 9108 de node-sec-1 y node-sec-2): no toca ONOS, OVS ni el
+# integrador. Se puede apagar en cualquier momento sin afectar el bloqueo de R5.
+#
+# Uso (en node-ctrl-2, con este repo clonado):
+#   cd R5/deploy/monitoring && docker compose up -d
+#   Grafana:    http://192.168.201.2:3000   (admin/admin; también entra como anónimo, solo lectura)
+#   Prometheus: http://192.168.201.2:9090
+#
+# Antes, en cada sensor (node-sec-1 y node-sec-2), levantar el exportador junto al resto de R5:
+#   cd R5/deploy/ids && docker compose --profile monitoring up -d exporter
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: r5-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: r5-grafana
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASS:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: 5s
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/r5-perimetral.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_PLUGINS_PLUGIN_ADMIN_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    restart: unless-stopped

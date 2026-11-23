@@ -141,6 +141,37 @@ docker compose down                                                       # apag
 
 `r5ctl bloquear IP` bloquea en ambos cores por defecto (`--dispositivo` para uno solo).
 
+## 7.1 Monitoreo (Prometheus + Grafana, opcional)
+
+No es parte de R5 en sí (si está apagado, el bloqueo sigue funcionando igual): expone en un tablero lo que ya hacen `r5ctl estado`
+y `r5ctl alertas`, sin tener que entrar por SSH a cada sensor. Solo LEE: ONOS por REST, `eve-alerts.json` y `state.json` del
+integrador; no instala ni borra flujos.
+
+**En cada sensor** (`nodo-sec-1` y `nodo-sec-2`), junto al resto de R5:
+
+```bash
+cd ids && docker compose --profile monitoring up -d exporter    # puerto 9108
+```
+
+**En un nodo central** (`node-ctrl-2`; se eligió por tener el disco menos usado de los tres `node-ctrl-*` en la medición del
+23/11 — `node-ctrl-3` ya acumula varias réplicas de prueba del `mapper-ha` de R2. El informe previo del Lab 6 lo había anotado
+para `node-ctrl-3`: si se prefiere mantener esa VM, el único cambio es correr este `compose.yml` ahí en vez de en `ctrl-2`,
+nada del código cambia):
+
+```bash
+cd R5/deploy/monitoring && docker compose up -d
+#   Grafana:    http://192.168.201.2:3000   (admin/admin; también entra como anónimo, solo lectura)
+#   Prometheus: http://192.168.201.2:9090
+```
+
+`R5/deploy/monitoring/prometheus.yml` apunta por defecto a `192.168.201.31:9108` y `192.168.201.32:9108` (`node-sec-1/2` en
+`topologia.slice14.yaml`); si cambian las IPs de los sensores en otro slice, ajustar ahí. El tablero (`r5-perimetral.json`) es
+el mismo del laboratorio de Docker ([`R5/lab/docker/monitoring/`](../lab/docker/monitoring/)), con una etiqueta `sensor` nueva en
+cada métrica para distinguir `nodo-sec-1` de `nodo-sec-2` en los paneles.
+
+No confundir con la "red de monitoreo" de `docs/PLAN_DIRECCIONAMIENTO.md` y `docs/DISENO_FASE_E.md`: ese término es la red del
+**espejo** hacia los sensores (los puertos `core-1/1`, `core-2/1`, `borde/4-5`), no tiene nada que ver con este Grafana.
+
 ## 8. Lo que asume y lo que falta validar
 
 Todo esto se probó con **pruebas unitarias y `docker compose config`**; **no se ha ejecutado en las VM del slice**:
