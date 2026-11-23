@@ -153,3 +153,36 @@ Que el panel muestre, y más adelante permita cambiar con cuidado, los archivos 
 **Propuesta para la opción C.** Una sección `excepciones` (en `policy.yaml` o en su propio archivo) con `usuario`, `servicio`, vigencia y motivo. Al admitir la sesión de ese usuario, el mapper instala **en la tabla de su rol** reglas adicionales de prioridad mayor que las del rol, con `eth_src` = la MAC de su equipo, que permiten solo ese servicio; las borra al cerrar sesión, al vencer o al ausentarse el equipo, igual que el flujo 40001. Ventajas: ni roles ni VLAN nuevas, es temporal y auditable. Costes y riesgos: está **atada al equipo con el que se autentica** (si entra desde otro, se aplica allí); hay que persistirla para el HA (etcd) y **reconciliarla** como ya se hace con el flujo 40001 (una sesión sin su flujo es el fallo que vimos el 23-nov); cuenta reglas extra por usuario; y toca R1 y R2 a la vez.
 
 **Recomendación:** para algo recurrente, la opción A hoy mismo; para permisos individuales, construir la C. El panel sería el sitio natural para gestionarlas (alta con motivo y caducidad, lista de excepciones activas, baja manual), siempre con el flujo de validar y simular de la sección 12.
+
+### 13.1 Refinamiento (23-nov): la excepción se define por CUENTA del portal, no por MAC
+
+El modelo real del proyecto: los **equipos** son estáticos y entran por 802.1X con el certificado del equipo, y todos tienen por defecto el rol **alumno**; en LDAP el «alumno» es una computadora, no una persona. **Las personas solo existen como cuentas del portal** (invitado, ascenso a docente y, si se decide, soporte). Por eso una excepción «para un usuario» solo tiene sentido para una **cuenta del portal**:
+
+- **Se define por cuenta** (`usuario` tal como lo escribe la persona en el portal, el mismo que registra el mapper en la sesión), en la configuración. No depende de ninguna MAC.
+- **Se aplica a la sesión de portal de esa cuenta.** El interruptor solo ve cabeceras de red, no cuentas: el único asa que existe para que una regla alcance a una persona es la MAC del equipo desde el que entró, y el mapper ya la usa para el flujo 40001. Que la regla dependa de que el equipo esté conectado **no es un defecto**: una excepción no debe sobrevivir a la sesión. Si el equipo se apaga, cambia de puerto o la sesión vence, el mapper ya cierra la sesión; las reglas de excepción se borran en el mismo paso, y al volver a entrar por el portal se reinstalan.
+- **Hereda las protecciones del ascenso.** Solo se instalan después de que el ascenso o el login hayan pasado sus comprobaciones (misma MAC que la sesión 802.1X, misma ubicación en ONOS AAA), así que un tercero no puede reclamarlas con otra MAC.
+- **Excepciones por equipo** (opcional): para un equipo estático concreto, la misma tabla con `sujeto: equipo` y la identidad del certificado, sin portal. Mismo mecanismo, otra clave.
+
+**Soporte (administrador) por el portal.** Hoy `policy.yaml` deja fuera a `soporteTI` del portal a propósito: el administrador entra por 802.1X con el certificado de un equipo registrado. Si se decide que soporte use el portal, lo prudente es **tratarlo como el docente: por ascenso**, no por login directo desde un equipo sin sesión. Cambios pequeños en `policy.yaml`:
+
+```yaml
+portal:
+  grupos: {profesor: docente, soporteTI: soporte, invitado: invitado}
+  login_directo: [invitado]            # soporte NO entra directo: sube un equipo ya autenticado
+  duracion_s: {invitado: 1800, soporte: 3600, default: 28800}
+ascenso:
+  alumno: [docente, soporte]
+```
+
+Así un administrador queda atado a un equipo con certificado, ubicado y con la misma MAC, y su sesión dura una hora. Hay que revisar antes que el portal **limite los intentos fallidos** de contraseña (no lo he visto en `server.py`): una cuenta de administrador detrás de un formulario web es lo que más se ataca.
+
+**Dos formas de guardar las excepciones** (decisión abierta):
+
+| | Qué es | Pros | Contras |
+|---|---|---|---|
+| **Lista en configuración** | `excepciones: [{usuario, servicio, hasta, motivo}]` en `policy.yaml` (o en su archivo) | Simple; encaja con el flujo repo + validar + simular del panel | Un cambio de política (reiniciar réplicas) por cada alta o baja |
+| **Grupos de permiso en LDAP** | `permisos: {perm_notas: {servicios: [grade_system]}}` en `policy.yaml`, y la excepción es pertenecer al grupo LDAP `perm_notas` | **Sin crear roles ni VLAN**; el mapper ya recibe los grupos de la cuenta en el login; escala a muchas personas y la fuente de verdad de las personas sigue siendo LDAP | El panel necesitaría escribir en LDAP (cuenta con permiso de escritura, riesgo); más trabajo en R1 |
+
+Recomendación: empezar por la lista en configuración (pocas excepciones, panel de solo lectura más el flujo del repositorio), y dejar el formato listo para pasar a grupos de permiso. En ambos casos el panel tendría: alta con motivo y caducidad, lista de excepciones activas (quién, qué servicio, desde cuándo, sesión asociada), baja manual y el efecto por switch antes de confirmar.
+
+**Lo que hay que construir** (R1 + R2): leer las excepciones al arrancar; al admitir una sesión de portal (login o ascenso) instalar las reglas en la tabla del rol con prioridad mayor y `eth_src` = la MAC, guardando sus ids en la sesión; borrarlas en todos los caminos que cierran una sesión (logout, vencimiento, ausencia, puerto sin enlace, restauración al rol base); incluirlas en la reconciliación (una sesión sin su flujo ya nos dejó a un equipo sin servicio el 23-nov); persistirlas en el estado compartido del HA; y pruebas sin red para cada camino de cierre.
