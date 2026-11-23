@@ -1,0 +1,28 @@
+# Ejecuta UN comando del CLI de Karaf de ONOS (el de `ssh -p 8101`) en los tres nodos, sin teclear la contraseña de Karaf a mano. Solo lectura mientras el comando lo sea.
+#   PLAYBOOK=consulta_cli_onos.yml ./lanzar.sh -e 'comando=maps'
+#   PLAYBOOK=consulta_cli_onos.yml ./lanzar.sh -e 'comando=masters'
+#   PLAYBOOK=consulta_cli_onos.yml ./lanzar.sh -e 'comando="devices"' -e 'solo=192.168.201.1'     # un solo nodo
+# Usa sshpass con onos_user/onos_pass de group_vars (los mismos que ya usan los demas playbooks para el REST). `comando` va entero entre comillas al CLI: no ejecuta nada en el SO.
+- name: Comando del CLI de ONOS en los tres nodos
+  hosts: borde
+  gather_facts: false
+  vars:
+    comando: help
+    solo: ""
+  tasks:
+    - name: Ejecutar en cada nodo
+      ansible.builtin.shell:
+        cmd: >-
+          sshpass -p {{ onos_pass | quote }} ssh -p 8101 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
+          {{ onos_user }}@{{ item }} {{ comando | quote }} 2>&1 | head -n 120
+      loop: "{{ [solo] if solo else onos_nodos }}"
+      register: salida
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar
+      ansible.builtin.debug:
+        msg: "{{ ['=== ' ~ item.item ~ ' | ' ~ comando ~ ' ==='] + item.stdout_lines }}"
+      loop: "{{ salida.results }}"
+      loop_control:
+        label: "{{ item.item }}"
