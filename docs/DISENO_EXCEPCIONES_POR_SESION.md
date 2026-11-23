@@ -23,7 +23,7 @@
 **Cuándo se puede pasar a cada fase:**
 - **Fase 1:** ya. **Fase 2:** P6 hecho y decisiones 1 a 3 tomadas. **Fase 3:** fase 2 terminada. **Fase 4 (despliegue):** P3, P8 y P10, y la fase 3.
 - **Fase 5 (validación en vivo):** P1, P2, P3, P4, P5, P7, P9 y P10.
-- **Fase 6 (panel):** P11 y las decisiones 14 a 17.
+- **Fase 6 (panel):** P11 (las decisiones 14 a 18 están tomadas).
 
 ## 1. Decisiones de alcance (acordadas el 23-nov)
 
@@ -139,6 +139,19 @@ La purga de huérfanos existente (`purgar_sesiones_huerfanas`) solo conoce los f
 
 **Consecuencia para el diseño del panel.** El equipo dedicado está en la **red de datos**, así que el panel **no puede escuchar solo en la interfaz de gestión** como se había escrito: escucha en la IP de servicios del `server` (`10.0.0.10`, con un puerto propio, por ejemplo 8444) y la restricción por rol la hace R2. El panel sigue hablando con ONOS y el mapper por la red de gestión (`ens3`): **hace de puente entre las dos redes**, así que comprometer el panel daría acceso a la gestión. Mitigaciones: el panel solo lee y ejecuta las acciones acotadas del diseño, cada cambio pide confirmación explícita, y todo queda auditado.
 
+**¿Hace falta un rol, o basta con la MAC del equipo?** (pregunta del 23-nov). Con el rol, la MAC **ya queda atada**: la entrada del equipo en LDAP fija su MAC, switch y puerto y el mapper rechaza cualquier otra ubicación («Puerto físico no asignado»), y el flujo de sesión (`in_port` + `eth_src`) ancla todo lo que viene después a esa MAC y puerto. Lo que cambia es **dónde vive la autorización**:
+
+| | Rol `superadmin` (elegido) | Solo una regla por MAC |
+|---|---|---|
+| Cómo | El equipo está en el grupo LDAP `superadmin` → rol → tabla 45; solo ese rol alcanza el panel | El equipo entra como `soporte` y una regla estática de R2 con `eth_src` = su MAC abre el panel |
+| Coste | Cuatro sitios, incluido el webhook de R1 | Una función nueva en R2 (regla de rol restringida a MAC) y la MAC escrita en la política |
+| Revocar o cambiar de equipo | Quitar del grupo LDAP o revocar el certificado | Editar la política y desplegarla en las tres réplicas (P10) |
+| Segundo equipo (suplente) | Añadirlo al grupo | Otra MAC en la política |
+| Qué ve el panel y la bitácora | El rol `superadmin` | `soporte` y una lista de MAC |
+| Separación de funciones | Un administrador (`soporte`) no hereda el panel | Comparte rol con los demás administradores; solo la lista de MAC los distingue |
+
+A nivel de red las dos son igual de seguras: un equipo sin sesión 802.1X solo llega a la cuarentena (ARP y portal), y la regla por MAC solo se alcanza a través del flujo de sesión. El rol gana en operación, revocación y claridad, y su coste extra (hacer el webhook dirigido por política) es un arreglo que hace falta de todos modos para cualquier rol futuro. **La regla por MAC es válida como solución provisional** si el rol se retrasa, y se migraría después.
+
 **Riesgos de esta decisión:**
 - **Un solo equipo.** Si se pierde o se compromete, hay acceso total al panel (certificado revocable, ubicación fija verificada en LDAP, y una sesión 802.1X que no vence: el panel debe tener su propio tiempo de inactividad). Si falla, nadie edita por el panel: queda el procedimiento de emergencia de editar el archivo por el repositorio.
 - **Sin rol de solo lectura**, quien solo necesite mirar no puede; se puede añadir más adelante como otro rol.
@@ -200,7 +213,7 @@ La purga de huérfanos existente (`purgar_sesiones_huerfanas`) solo conoce los f
 
 ## 9. Decisiones abiertas
 
-Cada una con la opción que recomiendo, quién decide y qué bloquea. **Decididas el 23-nov: 1 a 5 y 7 a 13, como se recomienda; la 6 se cambió (solo el rol `superadmin`).** Quedan abiertas la **14 a 18**, que nacen de esa decisión y bloquean la fase 6.
+Cada una con la opción que recomiendo, quién decide y qué bloquea. **Decididas el 23-nov: todas, como se recomienda, salvo la 6, que se cambió (solo el rol `superadmin`); la 14 a 18, que nacen de esa decisión, se aceptan como se recomiendan.** No queda ninguna decisión abierta: lo pendiente son los requisitos previos de la sección 0.
 
 | # | Decisión | Opciones | Recomendación | Decide | Bloquea |
 |---|---|---|---|---|---|
