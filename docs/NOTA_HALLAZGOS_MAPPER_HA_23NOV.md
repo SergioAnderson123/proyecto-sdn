@@ -40,7 +40,6 @@ Para quien mantiene `R1/mapper-ha/` y el agente 802.1X. Surgieron al preparar un
 2. Confirmar el cambio de `controller_ip` y revisar el portal.
 3. Mirar la lentitud de etcd y los `maintenance deferred`.
 4. Decidir si el mapper debe hablar con el maestro del switch igual que el vigilante.
-
 ## Para reproducir
 
 ```bash
