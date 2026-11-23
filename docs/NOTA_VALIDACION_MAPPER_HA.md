@@ -185,13 +185,14 @@ gateway de gestión `.254` se dejó intacto, según decisión del grupo.
   prueba terminó `PASS` en 682 ms. Tras vencer el TTL de 60 s del flujo
   sintético, las tres réplicas informaron cero hijos. No se desconectaron hosts
   ni se hizo flooding; el ensayo no cambió las sesiones reales.
-- **EAP/DHCP:** sigue pendiente una medición conjunta nueva en h1-profesor. El
-  script `/home/ubuntu/sdn-ha-eap-check.py` está preparado para reautenticar y
-  renovar la concesión DHCP actual; requiere ejecutarlo allí con `sudo`. La
-  medición EAP-TLS previa de 2384 ms no sustituye esa comprobación de failover.
+- **EAP/DHCP:** validado en h1-profesor con tres reautenticaciones EAP-TLS:
+  334,8 ms de mediana y 337,1 ms máximo. La renovación DHCP terminó con código
+  0, la concesión se confirmó y el supplicant quedó autenticado. Es una muestra
+  breve; no mide percentiles ni demuestra por sí sola el failover durante la
+  reautenticación.
 
-Con esto, la redundancia del mapper, la persistencia de sesiones/eventos y el
-failover de R2 tienen evidencia operativa. Permanecen como límites aceptados el
-gateway único y, hasta completar la medición anterior, la verificación conjunta
-en vivo de los consumidores DHCP/portal/vigilante durante failover. No se afirma
-que esos servicios se hayan apagado y probado en esta actualización.
+Con esto, la redundancia del mapper, la persistencia de sesiones/eventos, el
+failover de R2 y el flujo EAP/DHCP tienen evidencia operativa. Permanecen como
+límite aceptado el gateway único y falta comprobar en vivo que portal y
+vigilante sigan operativos durante una caída del mapper. No se apagaron esos
+servicios en esta actualización.
