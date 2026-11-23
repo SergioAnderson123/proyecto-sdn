@@ -2,6 +2,27 @@
 
 **Estado: solo diseño. Nada de esto está implementado.** Toca R1 (Policy Mapper, estado HA) y R2 (`policy_tables`, generación de flujos), por eso conviene que lo revisen las dos partes antes de escribir código. Nace de una pregunta del equipo («¿se puede dar un permiso a un usuario concreto o hay que crear un grupo/VLAN?») y de lo que se vio operando la slice el 23-nov. Relacionado: `docs/DISENO_PANEL_ADMIN.md` (sección 13: el panel sería el sitio donde se dan de alta y de baja).
 
+## 0. Antes de empezar: requisitos previos
+
+**Nada de las fases 2 a 5 debe empezar hasta que estos requisitos estén cumplidos o decididos.** La fase 1 (funciones puras de R2, sin red) **sí puede empezar ya**: no depende de nada en vivo.
+
+| # | Requisito | Por qué | Estado (23-nov) | Responsable | Cómo se comprueba |
+|---|---|---|---|---|---|
+| **P1** | **Parche del mapper del portal** aplicado y desplegado (`docs/NOTA_PORTAL_MAC_POR_IP.md`, `docs/parche_mapper_portal_ip.diff`) | Sin él el portal no identifica a los clientes de capa 3: no hay login ni **ascenso** por el portal, y las excepciones nacen en el ascenso | **Pendiente.** Marianajo3 ya está avisada (23-nov); la nota y el parche están en el repo | R1 | Guion de la nota (§7): h1 ve su sesión en el portal y el `POST /login` de h2 deja de decir «No se pudo identificar su equipo» |
+| **P2** | **Portal nuevo** en el `server` (manda la IP de origen) | Es la mitad del arreglo de P1 | **Hecho** (23-nov 21:47 UTC, `portal_actualizar.yml`) | R2 | Evento `rechazado` de `x` con la MAC vacía, ya visto |
+| **P3** | **`PORTAL_TOKEN` definido** (el mismo) en el mapper HA y en el portal | Hoy está **vacío** en los dos: `_verificar_portal` está desactivada y `/portal/estado?ip=` quedaría abierto | **Pendiente**; conviene hacerlo en el mismo despliegue que P1 | R1 + R2 | La misma huella en el `server` y en `mapper-ha-prod`, distinta de `e3b0c44298fc` (comando en la nota, §6) |
+| **P4** | **Ascenso probado en vivo** en la slice | Nunca se ha ejecutado aquí, y es el punto exacto donde se instalarían las excepciones | **Pendiente**, tras P1 | R2 + R1 | h2 con sesión 802.1X de alumno → `profesor01` en el portal → rol docente (tabla 10) → cerrar sesión → vuelve a alumno. Además: ascenso rechazado desde otro puerto, y que `ONOS AAA` tenga a h2 autorizado (`ascenso_exigir_ubicacion: true`) |
+| **P5** | **Límite de intentos fallidos** de contraseña en el portal | Con esta función la cuenta de un profesor abre más; hoy `server.py` no limita | **Pendiente** (decisión 8) | R2 | Tras N fallos seguidos desde una IP o contra una cuenta: bloqueo temporal, mensaje neutro y un evento en la bitácora |
+| **P6** | **Refactorización previa:** una sola función `_borrar_flujos_de_sesion` para los siete caminos de cierre (4.3), en su propio cambio | Evita que un camino olvidado deje una regla abierta | **Pendiente** | R1 | Una prueba por camino; la suite del mapper en verde |
+| **P7** | **Servicio de prueba en el catálogo de la slice** (por ejemplo `student_records`, puerto 8102) y denegado hoy al docente | Es lo que se abrirá en la validación (fase 5) | **Por comprobar** | R2 | `nc -zv -w 2 -s <IP de h2> 10.0.0.10 8102` da `timed out` antes de la excepción; el servicio figura en `services` del `policy.yaml`/`policy.local.yaml` |
+| **P8** | **Mapper HA estable y vistas de ONOS iguales** | Las excepciones se instalan por ONOS y se reconcilian con él | **Hecho** (el mapper con la reposición del flujo 40001, `6726bc4`, está desplegado según la nota de R1; las tres vistas de ONOS en 5 de 5 el 23-nov) | R1 + R2 | El registrador sin `VISTA_DESIGUAL`; `/health/ha` en `ready` |
+| **P9** | **Equipos y cuentas de la prueba** | El ascenso necesita un equipo con sesión 802.1X de alumno y una cuenta de profesor en LDAP | **Por confirmar** | R1 | h2 con `72 -e arrancar=true -e objetivo_host=h2-alumno` y sesión Alumno en `/sessions`; `profesor01` en el grupo `profesor` |
+| **P10** | **La misma política en las tres réplicas** | Cada réplica del mapper lee su propio `policy.yaml`; con una lista de excepciones, una réplica distinta daría resultados distintos según quién atienda | **Por comprobar** | R1 | `sha256sum` del `policy.yaml` (y del archivo de excepciones) idéntico en las tres réplicas |
+
+**Cuándo se puede pasar a cada fase:**
+- **Fase 1:** ya. **Fase 2:** P6 hecho y decisiones 1 a 3 tomadas. **Fase 3:** fase 2 terminada. **Fase 4 (despliegue):** P3, P8 y P10, y la fase 3.
+- **Fase 5 (validación en vivo):** P1, P2, P3, P4, P5, P7, P9 y P10.
+
 ## 1. Decisiones de alcance (acordadas el 23-nov)
 
 | Quién | Qué pasa | Excepciones |
@@ -103,10 +124,7 @@ La purga de huérfanos existente (`purgar_sesiones_huerfanas`) solo conoce los f
 
 ## 6. Proceso para construirla
 
-**Fase 0 — prerrequisitos.** Sin esto no se puede ni validar:
-1. El **parche del mapper del portal** (`docs/NOTA_PORTAL_MAC_POR_IP.md`): sin él, el login y el ascenso por el portal no funcionan para los clientes de capa 3.
-2. El **ascenso probado en vivo** (equipo de alumno → `profesor01` → rol docente → vuelta al rol base), que hoy no se ha ejecutado en la slice.
-3. Decisiones: dónde vive la lista (4.1), ids guardados o consultados (4.4) y el appId (4.2).
+**Fase 0 — requisitos previos.** Ver la sección 0: P1 a P10. La fase 1 no depende de ellos; el resto, sí.
 
 **Fase 1 — R2, funciones puras y pruebas (sin red).** En `policy_tables`: leer y validar `excepciones`, `excepciones_de(politica, usuario, ahora)` y `flujos_excepcion(politica, dpid, tabla, mac, servicios)`. Pruebas con el simulador de la tubería completa (tabla 0 → tabla de rol → tabla 60): la excepción abre **solo** ese servicio, **solo** para esa MAC; otro host del mismo rol no pasa; el alumno no; el servicio no excepcionable no se abre; `hasta` vencido no instala; con capa 3 y reenvío proactivo el tratamiento es el correcto. Entregable: los flujos que se instalarían por switch, visibles en la vista previa.
 
@@ -151,13 +169,23 @@ La purga de huérfanos existente (`purgar_sesiones_huerfanas`) solo conoce los f
 
 ## 9. Decisiones abiertas
 
-1. ¿Dónde vive la lista: en `policy.yaml` o en su propio archivo?
-2. ¿Ids guardados en la sesión (A) o consulta a ONOS (B)?
-3. ¿appId propio (recomendado) o el de R2?
-4. ¿Se permite `hasta` además de la duración de la sesión?
-5. Límite de excepciones por usuario y de usuarios con excepción.
-6. ¿Quién (y con qué permiso en el panel) puede dar de alta y de baja?
-7. ¿Se hace la refactorización de los siete caminos antes o junto con la función nueva? (Recomendado: antes, en su propio cambio.)
+Cada una con la opción que recomiendo, quién decide y qué bloquea. Hasta que se tomen **1 a 3**, no empieza la fase 2; las demás pueden decidirse mientras avanza.
+
+| # | Decisión | Opciones | Recomendación | Decide | Bloquea |
+|---|---|---|---|---|---|
+| **1** | **Dónde vive la lista de excepciones** | `policy.yaml` · archivo propio | **Archivo propio** (`R2/policy/excepciones.yaml`), cargado y validado por `cargar_politica` como la fusión que ya hace con `policy.local.yaml`: el panel lo edita sin tocar la matriz de roles y se despliega y revisa aparte | R2 | Fase 1 (formato) |
+| **2** | **Cómo saber qué borrar** | ids guardados en la sesión (A) · consulta a ONOS (B) | **A**, con el campo **omitido cuando está vacío** y el despliegue en dos tiempos de 4.4; y **B solo en la reconciliación** (leída del maestro) como red de seguridad. Borrar por id es directo y reintentable por el outbox; depender de una lectura de ONOS para cerrar una sesión es lo que falló el 23-nov | R1 | Fase 2 |
+| **3** | **appId de las excepciones** | el de R2 · uno propio | **Propio** (`org.campus.excepciones`), por el contador de `dispositivos_incompletos` (4.2) | R2 | Fase 1 |
+| **4** | **Caducidad `hasta`** además de la duración de la sesión | no · opcional · obligatoria | **Opcional con tope máximo** (por ejemplo 90 días), para que una excepción olvidada no sea permanente | R2 | Fase 1 |
+| **5** | **Límites** | sin límite · por usuario y total | **3 servicios por usuario y 10 usuarios con excepción** en la v1; subirlos si hace falta | R2 | Fase 1 |
+| **6** | **Quién da de alta y de baja** (panel) | cualquier administrador · rol propio | **Rol propio de edición**, separado del de solo ver, con confirmación y registro de quién y cuándo | equipo del panel | Fase 6 |
+| **7** | **Orden de la refactorización** (P6) | antes · junto con la función | **Antes y en su propio cambio**: se puede revisar y desplegar sin riesgo de la función nueva | R1 | Fase 2 |
+| **8** | **Límite de intentos fallidos** del portal (P5) | portal · mapper · ambos | **Portal** (por IP y por cuenta, por ejemplo 5 fallos en 10 min y espera creciente) **y** un evento `rechazado` en la bitácora, que el mapper ya tiene | R2 | P5, fase 5 |
+| **9** | **Qué pasa al cambiar una excepción con sesión abierta** | al siguiente login · inmediato | **Bajas inmediatas** (la reconciliación de «sobra una», unos 15 s) y **altas al siguiente ascenso**; que la excepción no aparezca a mitad de una sesión sin que la persona haya vuelto a autenticar | R1 + R2 | Fase 3 |
+| **10** | **Servicios no excepcionables** (lista inicial) | ninguno · una lista | `[network_management]`, y revisar `student_records` y `research_database` con quien administre los datos | R2 + quien decida la política | Fase 1 |
+| **11** | **Dónde queda el registro permanente** | solo la bitácora en memoria del mapper · un registro duradero | **Duradero** (etcd o un registro estructurado): la bitácora de `/events` está en memoria y por réplica y se pierde; ligado al pendiente de R1 del historial compartido | R1 | Fase 6 |
+| **12** | **¿Mostrar al profesor sus permisos adicionales** en la página del portal? | no · sí | **Sí, en una versión posterior**: `/portal/estado` devolvería los servicios y la fecha; da transparencia y facilita detectar errores | R2 | no bloquea |
+| **13** | **Fuente única de la política entre réplicas** (P10) | cada una su archivo · repo y despliegue ordenado · etcd | **Repo y despliegue ordenado** ahora, con la comprobación por `sha256sum`; etcd si el número de excepciones crece | R1 | Fase 4 |
 
 ## 10. Fuera de este diseño
 
