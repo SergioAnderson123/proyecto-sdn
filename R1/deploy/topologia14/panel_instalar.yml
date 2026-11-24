@@ -1,0 +1,166 @@
+# Panel de administracion de la red (v1, SOLO LECTURA) en la VM `server` (R2/panel, docs/DISENO_PANEL_ADMIN.md). Un recolector lee cada 10 s ONOS (/devices de cada nodo), el Policy Mapper (por el gateway)
+# y el /salud de los dos vigilantes; la pagina muestra resumen con avisos, sesiones, eventos con filtros y las vistas de ONOS por nodo. NO escribe nada en la red ni en ONOS.
+#   PLAYBOOK=panel_instalar.yml ./lanzar.sh                       # instala y arranca (servicio `panel-red`)
+#   PLAYBOOK=panel_instalar.yml ./lanzar.sh -e accion=quitar      # para y quita el servicio y el programa (el historial en /var/lib/panel-red se conserva)
+# ACCESO (decision del equipo, 23-nov): SOLO el rol `superadmin` entra y edita, sin contrasena ni token: el panel mira de que IP llega la conexion, busca ese equipo en ONOS y su sesion 802.1X en el mapper,
+# y deja pasar solo si su rol es el de administracion. Ese rol AUN NO EXISTE en la red (docs/DISENO_EXCEPCIONES_POR_SESION.md 4.7, requisito P11), asi que hoy el panel solo escucha en 127.0.0.1 del server y
+# la unica via es de EMERGENCIA y de SOLO LECTURA: un tunel SSH por el reenvio del borde (editar exigira siempre el rol, tambien por el tunel). Desde tu PC:
+#   ssh -L 8480:127.0.0.1:8480 -p 5823 ubuntu@10.20.11.14     y luego abrir  http://localhost:8480
+# Cuando exista el rol y R2 abra el puerto solo a el:  -e escuchar=10.0.0.10   (la IP de servicios del server). La pagina muestra usuarios, MAC e IP (datos personales).
+# Antes de instalar comprueba que al server le queden `memoria_minima_mb` de RAM disponible (si no, para; -e forzar=true lo salta). Limites del servicio: 128 MB de RAM, 25 % de CPU, prioridad baja,
+# usuario dinamico sin privilegios, sistema de archivos de solo lectura salvo /var/lib/panel-red (el historial de eventos en SQLite).
+- name: Panel de administracion de la red (solo lectura) en el server
+  hosts: server
+  become: true
+  gather_facts: false
+  vars:
+    accion: instalar                 # instalar | quitar
+    forzar: false                    # true = no comprobar la memoria libre
+    memoria_minima_mb: 300
+    escuchar: 127.0.0.1
+    puerto: 8480
+    roles_admin: superadmin          # rol o roles (separados por comas) que entran; el nombre debe coincidir con el `rol` de la sesion en el mapper (no distingue mayusculas)
+    intervalo: 10                    # segundos entre rondas del recolector
+    destino: /opt/panel-red
+    mapper_url: "http://192.168.201.254:5000"          # el gateway del mapper HA (switch-borde)
+    vigilantes: "ctrl3=http://192.168.201.3:8098,ctrl2=http://192.168.201.2:8098"
+    nodos_onos: "{{ onos_nodos | map('regex_replace', '^(.*)$', 'http://\\1:8181') | list }}"
+    origen: "{{ playbook_dir }}/../../../R2/panel"
+  tasks:
+    - name: Parar y quitar el servicio
+      when: accion == 'quitar'
+      block:
+        - name: Parar y deshabilitar
+          ansible.builtin.systemd:
+            name: panel-red
+            state: stopped
+            enabled: false
+          failed_when: false
+        - name: Quitar la unidad, el programa y la configuracion (el historial se conserva)
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop: ["/etc/systemd/system/panel-red.service", "/etc/panel-red.env", "{{ destino }}"]
+        - name: Recargar systemd
+          ansible.builtin.systemd:
+            daemon_reload: true
+
+    - name: Instalar y arrancar el servicio
+      when: accion != 'quitar'
+      block:
+        - name: Memoria y disco del server (antes de instalar)
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              echo "MemAvailable_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)"
+              echo "MemTotal_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
+              echo "swap_mb=$(awk '/SwapTotal/ {print int($2/1024)}' /proc/meminfo)"
+              echo "disco_libre_mb=$(df -Pm /var/lib | awk 'NR==2 {print $4}')"
+              echo "cpus=$(nproc)"
+              echo "python=$(python3 -V 2>&1)"
+              echo "servicios_grandes: $(systemctl list-units --type=service --state=running --no-legend | awk '{print $1}' | grep -E 'portal|docker|ldap|radius' | tr '\n' ' ')"
+          register: recursos
+          changed_when: false
+
+        - name: Recursos medidos
+          ansible.builtin.debug:
+            msg: "{{ recursos.stdout_lines }}"
+
+        - name: Parar si queda poca memoria libre
+          when: not (forzar | bool)
+          ansible.builtin.assert:
+            that: (recursos.stdout_lines | select('match', '^MemAvailable_mb=') | first | regex_replace('^MemAvailable_mb=', '') | int) >= (memoria_minima_mb | int)
+            fail_msg: "Al server le quedan menos de {{ memoria_minima_mb }} MB de RAM disponible. Para instalar igual: -e forzar=true."
+
+        - name: Carpetas
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0755"
+          loop: ["{{ destino }}", "{{ destino }}/static"]
+
+        - name: Copiar el programa y la pagina
+          ansible.builtin.copy:
+            src: "{{ item.src }}"
+            dest: "{{ destino }}/{{ item.dest }}"
+            mode: "0644"
+          loop:
+            - {src: "{{ origen }}/panel.py", dest: panel.py}
+            - {src: "{{ origen }}/datos.py", dest: datos.py}
+            - {src: "{{ origen }}/static/index.html", dest: static/index.html}
+            - {src: "{{ origen }}/static/app.js", dest: static/app.js}
+            - {src: "{{ origen }}/static/style.css", dest: static/style.css}
+          register: programa
+
+        - name: Comprobar que el programa es Python valido
+          ansible.builtin.command: python3 -c "import ast; [ast.parse(open('{{ destino }}/' + f, encoding='utf-8').read()) for f in ('panel.py', 'datos.py')]"
+          changed_when: false
+
+        - name: Configuracion (credenciales de ONOS; solo la lee root)
+          ansible.builtin.copy:
+            dest: /etc/panel-red.env
+            mode: "0600"
+            content: |
+              PANEL_ONOS_USUARIO={{ onos_user }}
+              PANEL_ONOS_CLAVE={{ onos_pass }}
+          register: entorno
+
+        - name: Unidad de systemd
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/panel-red.service
+            mode: "0644"
+            content: |
+              [Unit]
+              Description=Panel de administracion de la red (solo lectura)
+              After=network-online.target
+
+              [Service]
+              EnvironmentFile=/etc/panel-red.env
+              ExecStart=/usr/bin/python3 {{ destino }}/panel.py --escuchar {{ escuchar }} --puerto {{ puerto }} --onos {{ ['ctrl' ~ 1, 'ctrl' ~ 2, 'ctrl' ~ 3] | zip(nodos_onos) | map('join', '=') | join(',') }} --mapper {{ mapper_url }} --vigilantes {{ vigilantes }} --roles-admin {{ roles_admin }} --db /var/lib/panel-red/panel.sqlite --intervalo {{ intervalo }}
+              Restart=always
+              RestartSec=5
+              DynamicUser=yes
+              StateDirectory=panel-red
+              NoNewPrivileges=yes
+              ProtectSystem=strict
+              ProtectHome=yes
+              PrivateTmp=yes
+              MemoryMax=128M
+              CPUQuota=25%
+              Nice=10
+
+              [Install]
+              WantedBy=multi-user.target
+          register: unidad
+
+        - name: Arrancar (se reinicia solo si cambio algo)
+          ansible.builtin.systemd:
+            name: panel-red
+            state: "{{ 'restarted' if (programa.changed or entorno.changed or unidad.changed) else 'started' }}"
+            enabled: true
+            daemon_reload: true
+
+        - name: Esperar a la primera ronda y comprobar
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              sleep {{ (intervalo | int) + 6 }}
+              echo "servicio: $(systemctl is-active panel-red)"
+              echo "escucha: $(ss -ltn | awk '$4 ~ /:{{ puerto }}$/ {print $4}' | tr '\n' ' ')"
+              echo "salud: $(curl -s -m 5 http://127.0.0.1:{{ puerto }}/salud)"
+              echo "tunel local (emergencia, lectura) -> /api/resumen: HTTP $(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:{{ puerto }}/api/resumen)"
+              echo "avisos: $(curl -s -m 5 http://127.0.0.1:{{ puerto }}/api/resumen | python3 -c "import sys,json; d=json.load(sys.stdin); r=d['resumen'] or {}; print(len(r.get('avisos',[])), 'avisos;', 'caidas:', d['caidas'])" 2>&1 | cut -c1-300)"
+              echo "memoria del servicio: $(systemctl show panel-red -p MemoryCurrent --value 2>/dev/null)"
+              journalctl -u panel-red -n 6 --no-pager | cut -c1-220
+          register: comprobacion
+          changed_when: false
+
+        - name: Resultado
+          ansible.builtin.debug:
+            msg: "{{ comprobacion.stdout_lines }}"
+
+        - name: El servicio debe estar activo
+          ansible.builtin.command: systemctl is-active panel-red
+          register: activo
+          changed_when: false
+          failed_when: activo.stdout.strip() != 'active'

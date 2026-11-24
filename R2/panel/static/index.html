@@ -18,13 +18,10 @@
   <div id="estado" class="estado">cargando…</div>
 </header>
 
-<section id="entrar" hidden>
-  <h2>Acceso</h2>
-  <form id="f-entrar">
-    <label>Token <input type="password" id="token" autocomplete="off" required></label>
-    <button type="submit">Entrar</button>
-    <p id="e-entrar" class="error"></p>
-  </form>
+<section id="sinacceso" hidden>
+  <h2>Sin acceso</h2>
+  <p>Este panel es solo para el rol <strong>superadmin</strong>: se entra desde el equipo dedicado, autenticado por 802.1X. No hay contraseña ni token.</p>
+  <p class="error" id="motivo-sinacceso"></p>
 </section>
 
 <main>

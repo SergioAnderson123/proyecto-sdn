@@ -21,11 +21,46 @@ def normalizar_sesiones(resp: Optional[dict], ahora: float) -> List[dict]:
     for mac, s in ses.items():
         exp = s.get("expira")
         salida.append({
-            "mac": str(mac).lower(), "usuario": s.get("username"), "rol": s.get("rol"), "vlan": s.get("vlan"), "dpid": s.get("dpid"), "puerto": s.get("port"),
+            "mac": str(mac).lower().replace("-", ":"), "usuario": s.get("username"), "rol": s.get("rol"), "vlan": s.get("vlan"), "dpid": s.get("dpid"), "puerto": s.get("port"),
             "metodo": s.get("metodo"), "expira_en_s": round(exp - ahora) if isinstance(exp, (int, float)) else None, "base": s.get("base"), "flujo": s.get("flow_id"),
         })
     salida.sort(key=lambda x: (str(x["usuario"] or ""), x["mac"]))
     return salida
+
+
+# ---------- quién puede entrar ----------
+LOOPBACK = ("127.0.0.1", "::1")
+
+
+def identificar_por_ip(ip: str, hosts: Optional[dict], sesiones: List[dict]) -> Optional[dict]:
+    """La sesión del equipo que se conecta desde `ip`: IP -> MAC por `GET /hosts` de ONOS -> sesión del mapper con esa MAC. Si la IP no la tiene ningún host, o la tienen dos MAC distintas
+    (ambigua: no se adivina), no hay identidad. Es tan fiable como la protección contra suplantación de IP de la red de datos; por eso R2 además abre el puerto solo a ese rol."""
+    if not ip or not isinstance(hosts, dict):
+        return None
+    macs = {str(h.get("mac", "")).lower().replace("-", ":") for h in hosts.get("hosts", []) if ip in (h.get("ipAddresses") or [])}
+    if len(macs) != 1:
+        return None
+    mac = next(iter(macs))
+    return next((s for s in sesiones if s["mac"] == mac), None)
+
+
+def decidir_acceso(ip: str, accion: str, hosts: Optional[dict], sesiones: List[dict], roles_admin: Iterable[str]):
+    """(permitido, motivo). Solo el rol de administración (`roles_admin`, p. ej. «superadmin») entra, sin contraseña ni token: lo que cuenta es la sesión 802.1X del equipo.
+
+    - `leer`: el rol de administración; y, como vía de EMERGENCIA, una conexión local (túnel SSH al server, `127.0.0.1`).
+    - `editar`: SOLO el rol de administración. Un túnel local no basta: editar siempre deja rastro de quién fue.
+    Una sesión vencida, un equipo sin sesión o una IP ambigua se rechazan."""
+    roles = {r.strip().lower() for r in roles_admin if r and r.strip()}
+    if ip in LOOPBACK:
+        return (True, "conexión local (emergencia, solo lectura)") if accion == "leer" else (False, "editar exige el rol de administración; no basta la conexión local")
+    s = identificar_por_ip(ip, hosts, sesiones)
+    if s is None:
+        return False, "el equipo no tiene una sesión identificable"
+    if isinstance(s.get("expira_en_s"), (int, float)) and s["expira_en_s"] <= 0:
+        return False, "la sesión del equipo está vencida"
+    if (s.get("rol") or "").lower() not in roles:
+        return False, f"el rol {s.get('rol')} no tiene permiso"
+    return True, f"{s.get('usuario')} ({s.get('rol')})"
 
 
 # ---------- eventos ----------

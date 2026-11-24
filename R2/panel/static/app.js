@@ -3,6 +3,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 let vista = "resumen";
+let quien = "";
 let temporizador = null;
 
 function el(tag, texto, clase) {
@@ -36,11 +37,19 @@ function duracion(s) {
 }
 async function api(ruta) {
   const r = await fetch(ruta, { credentials: "same-origin", cache: "no-store" });
-  if (r.status === 401) { mostrarEntrada(); throw new Error("no autorizado"); }
+  if (r.status === 403) {
+    let motivo = "";
+    try { motivo = (await r.json()).motivo || ""; } catch (e) { /* sin cuerpo */ }
+    $("motivo-sinacceso").textContent = motivo ? "Motivo: " + motivo : "";
+    $("sinacceso").hidden = false;
+    document.querySelector("main").hidden = true;
+    throw new Error("sin acceso");
+  }
   if (!r.ok) throw new Error("HTTP " + r.status);
+  $("sinacceso").hidden = true;
+  document.querySelector("main").hidden = false;
   return r.json();
 }
-function mostrarEntrada() { $("entrar").hidden = false; document.querySelector("main").hidden = true; }
 
 // ---------- pantallas ----------
 function pintarResumen(d) {
@@ -118,11 +127,12 @@ function pintarVistas(d) {
 // ---------- ciclo ----------
 async function refrescar() {
   try {
-    if (vista === "resumen") pintarResumen(await api("/api/resumen"));
+    if (vista === "resumen") { const d = await api("/api/resumen"); quien = d.quien || ""; pintarResumen(d); }
     else if (vista === "sesiones") pintarSesiones(await api("/api/sesiones"));
     else if (vista === "vistas") pintarVistas(await api("/api/vistas"));
     else if (vista === "eventos") await pintarEventos();
     $("estado").textContent = "actualizado " + new Date().toLocaleTimeString();
+    if (vista === "resumen" && quien) $("estado").textContent += " · " + quien;
   } catch (e) {
     $("estado").textContent = "error: " + e.message;
   }
@@ -135,11 +145,5 @@ function cambiar(v) {
 }
 for (const b of document.querySelectorAll("#pestanas button")) b.addEventListener("click", () => cambiar(b.dataset.v));
 $("f-ev").addEventListener("submit", (ev) => { ev.preventDefault(); refrescar(); });
-$("f-entrar").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const r = await fetch("/entrar", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "token=" + encodeURIComponent($("token").value), credentials: "same-origin" });
-  if (r.ok) { $("entrar").hidden = true; document.querySelector("main").hidden = false; $("token").value = ""; $("e-entrar").textContent = ""; refrescar(); }
-  else $("e-entrar").textContent = "Token incorrecto";
-});
 refrescar();
 temporizador = setInterval(() => { if (vista !== "eventos") refrescar(); }, 5000);   // los eventos se actualizan al filtrar, para no perder lo que se está leyendo

@@ -29,6 +29,65 @@ def test_el_resumen_de_sesiones_cuenta_por_rol():
     assert d.sesiones_resumen(s) == {"total": 4, "por_rol": {"Alumno": 2, "Docente": 1, "?": 1}}
 
 
+# ---------- quién puede entrar ----------
+def _s(mac, rol, usuario="u@x", exp=None):
+    return {"mac": mac, "rol": rol, "usuario": usuario, "expira_en_s": exp}
+
+
+def _h(*pares):
+    return {"hosts": [{"mac": m.upper(), "ipAddresses": ips} for m, ips in pares]}
+
+
+ADMIN = ["superadmin"]
+
+
+def test_el_superadmin_entra_por_la_ip_de_su_equipo():
+    ok, quien = d.decidir_acceso("10.0.1.150", "leer", _h(("aa:aa:aa:aa:aa:01", ["10.0.1.150"])), [_s("aa:aa:aa:aa:aa:01", "Superadmin", "root@x")], ADMIN)
+    assert ok and quien == "root@x (Superadmin)"
+    assert d.decidir_acceso("10.0.1.150", "editar", _h(("aa:aa:aa:aa:aa:01", ["10.0.1.150"])), [_s("aa:aa:aa:aa:aa:01", "superadmin")], ADMIN)[0]    # sin distinguir mayúsculas
+
+
+def test_cualquier_otro_rol_se_rechaza_para_leer_y_para_editar():
+    hosts, ses = _h(("aa:aa:aa:aa:aa:02", ["10.0.1.201"])), [_s("aa:aa:aa:aa:aa:02", "Docente")]
+    for rol in ("Docente", "Alumno", "Soporte", "Invitado", "Cuarentena", "", None):
+        ses = [_s("aa:aa:aa:aa:aa:02", rol)]
+        for accion in ("leer", "editar"):
+            assert not d.decidir_acceso("10.0.1.201", accion, hosts, ses, ADMIN)[0], (rol, accion)
+
+
+def test_un_equipo_sin_sesion_una_ip_desconocida_o_ambigua_se_rechazan():
+    hosts = _h(("aa:aa:aa:aa:aa:01", ["10.0.1.150"]), ("aa:aa:aa:aa:aa:03", ["10.0.1.77"]), ("bb:bb:bb:bb:bb:01", ["10.0.1.88"]), ("bb:bb:bb:bb:bb:02", ["10.0.1.88"]))
+    ses = [_s("aa:aa:aa:aa:aa:01", "Superadmin"), _s("bb:bb:bb:bb:bb:01", "Superadmin"), _s("bb:bb:bb:bb:bb:02", "Superadmin")]
+    assert d.decidir_acceso("10.0.1.150", "leer", hosts, ses, ADMIN)[0]
+    assert not d.decidir_acceso("10.0.1.77", "leer", hosts, ses, ADMIN)[0]                  # tiene host pero no sesión
+    assert not d.decidir_acceso("10.9.9.9", "leer", hosts, ses, ADMIN)[0]                   # nadie con esa IP
+    assert not d.decidir_acceso("10.0.1.88", "leer", hosts, ses, ADMIN)[0]                  # dos MAC con la misma IP: no se adivina, aunque las dos sean superadmin
+
+
+def test_una_sesion_vencida_no_entra_y_una_que_vence_en_el_futuro_si():
+    hosts = _h(("aa:aa:aa:aa:aa:01", ["10.0.1.150"]))
+    assert not d.decidir_acceso("10.0.1.150", "leer", hosts, [_s("aa:aa:aa:aa:aa:01", "Superadmin", exp=0)], ADMIN)[0]
+    assert not d.decidir_acceso("10.0.1.150", "leer", hosts, [_s("aa:aa:aa:aa:aa:01", "Superadmin", exp=-5)], ADMIN)[0]
+    assert d.decidir_acceso("10.0.1.150", "leer", hosts, [_s("aa:aa:aa:aa:aa:01", "Superadmin", exp=60)], ADMIN)[0]
+
+
+def test_la_conexion_local_lee_pero_nunca_edita():
+    assert d.decidir_acceso("127.0.0.1", "leer", None, [], ADMIN)[0] and d.decidir_acceso("::1", "leer", None, [], ADMIN)[0]
+    assert not d.decidir_acceso("127.0.0.1", "editar", None, [], ADMIN)[0] and not d.decidir_acceso("::1", "editar", None, [], ADMIN)[0]
+
+
+def test_sin_hosts_ni_roles_nadie_entra_salvo_el_tunel_de_lectura():
+    assert not d.decidir_acceso("10.0.1.150", "leer", None, [_s("aa:aa:aa:aa:aa:01", "Superadmin")], ADMIN)[0]
+    assert not d.decidir_acceso("10.0.1.150", "leer", _h(("aa:aa:aa:aa:aa:01", ["10.0.1.150"])), [_s("aa:aa:aa:aa:aa:01", "Superadmin")], [])[0]
+    assert not d.decidir_acceso("10.0.1.150", "leer", _h(("aa:aa:aa:aa:aa:01", ["10.0.1.150"])), [_s("aa:aa:aa:aa:aa:01", "")], ["", " "])[0]
+
+
+def test_las_mac_con_guiones_o_mayusculas_se_reconocen_igual():
+    hosts = _h(("AA-AA-AA-AA-AA-01", ["10.0.1.150"]))
+    ses = d.normalizar_sesiones({"sessions": {"AA-AA-AA-AA-AA-01": {"username": "root", "rol": "Superadmin"}}}, AHORA)
+    assert d.decidir_acceso("10.0.1.150", "leer", hosts, ses, ADMIN)[0]
+
+
 # ---------- historial de eventos ----------
 def _ev(t, tipo="admitido", usuario="u@x", mac="aa:bb:cc:dd:ee:01", detalle="VLAN 20", **kw):
     return dict({"t": t, "tipo": tipo, "usuario": usuario, "mac": mac, "dpid": "of:1", "port": "1", "detalle": detalle, "rol": "Alumno", "vlan": 20}, **kw)
