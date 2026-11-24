@@ -595,6 +595,14 @@ def guardar_estado(st):
 
 
 # ---------------- Bucle principal ----------------
+def siguiente_espera(espera, fallo):
+    """Espera (en segundos) que corresponde a la próxima vuelta del bucle, según si ONOS acaba de fallar.
+
+    Con fallo se duplica la espera actual sin pasar de BACKOFF_MAX (1, 2, 4, 8, 16, 30, 30...): así un ONOS caído no se satura de
+    peticiones ni el integrador se queda dormido demasiado tiempo. Sin fallo vuelve a BACKOFF_MIN."""
+    return min(espera * 2, BACKOFF_MAX) if fallo else BACKOFF_MIN
+
+
 def main():
     """Bucle principal: sigue el EVE de Suricata, procesa cada alerta nueva y mantiene el estado.
 
@@ -632,9 +640,9 @@ def main():
 
             if fallo:
                 time.sleep(espera)
-                espera = min(espera * 2, BACKOFF_MAX)         # espera exponencial acotada
+                espera = siguiente_espera(espera, True)       # espera exponencial acotada
             else:
-                espera = BACKOFF_MIN
+                espera = siguiente_espera(espera, False)
                 time.sleep(POLL_SEC)
 
             if time.time() - ultimo_guardado >= SAVE_EVERY:

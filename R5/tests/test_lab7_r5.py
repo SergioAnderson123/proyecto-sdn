@@ -426,7 +426,7 @@ def test_R5_05_3_5_5b_al_caducar_el_bloqueo_la_ip_reincidente_se_vuelve_a_bloque
 
 
 # =====================================================================================================
-# R5-06 (3.6.x) Resiliencia ante fallas de ONOS: failover, reintento y errores permanentes.  Criterio: disponibilidad.
+# R5-06 (3.6.x) Resiliencia ante fallas de ONOS y del Policy Mapper: failover, reintento, errores permanentes.  Criterio: disponibilidad.
 # =====================================================================================================
 def _responder(monkeypatch, secuencia):
     """Sustituye requests.request: `secuencia` = lista de (código | excepción) por intento."""
@@ -456,6 +456,19 @@ def test_R5_06_3_6_2_nodo_con_5xx_cede_ante_el_siguiente(monkeypatch):
     assert integ.onos("POST", "/flows").status_code == 200 and len(llamadas) == 2
 
 
+@pytest.mark.parametrize("codigo", [500, 502, 503])
+def test_R5_06_3_6_2b_si_todos_los_nodos_responden_5xx_es_reintentable(monkeypatch, codigo):
+    llamadas = _responder(monkeypatch, [codigo] * 3)
+    with pytest.raises(integ.Reintentar):
+        integ.onos("GET", "/hosts")
+    assert len(llamadas) == 3                                     # probó los tres nodos antes de rendirse
+
+
+def test_R5_06_3_6_2c_un_timeout_se_trata_como_nodo_caido(monkeypatch):
+    llamadas = _responder(monkeypatch, [requests.Timeout("lento"), 200])
+    assert integ.onos("GET", "/hosts").status_code == 200 and len(llamadas) == 2
+
+
 @pytest.mark.parametrize("codigo", [401, 403, 408, 429])
 def test_R5_06_3_6_3_errores_transitorios_se_reintentan(monkeypatch, codigo):
     _responder(monkeypatch, [codigo])
@@ -474,3 +487,105 @@ def test_R5_06_3_6_5_todos_los_nodos_caidos_es_reintentable_y_no_pierde_la_alert
     _responder(monkeypatch, [requests.ConnectionError("x")] * 3)
     with pytest.raises(integ.Reintentar):
         integ.onos("GET", "/hosts")
+
+
+def test_R5_06_3_6_5b_sin_nodos_configurados_es_reintentable(monkeypatch):
+    monkeypatch.setattr(integ, "ONOS_URL", "")
+    with pytest.raises(integ.Reintentar):
+        integ.onos("GET", "/hosts")
+
+
+@pytest.mark.parametrize("espera,fallo,esperado", [(1, True, 2), (4, True, 8), (16, True, 30), (30, True, 30), (30, False, 1)])
+def test_R5_06_3_6_6_la_espera_crece_de_forma_exponencial_acotada_y_se_reinicia(espera, fallo, esperado):
+    assert integ.siguiente_espera(espera, fallo) == esperado      # BACKOFF_MIN = 1 s, BACKOFF_MAX = 30 s
+
+
+def _eve(tmp_path, monkeypatch, *lineas):
+    eve = tmp_path / "eve-alerts.json"
+    monkeypatch.setattr(integ, "EVE_PATH", str(eve))
+    with open(eve, "w", encoding="utf-8", newline="") as f:
+        f.write("".join(json.dumps(l) + "\n" for l in lineas))
+    return eve
+
+
+def test_R5_06_3_6_7_si_onos_cae_no_se_pierde_ninguna_alerta(tmp_path, monkeypatch):
+    eve = _eve(tmp_path, monkeypatch, alerta("203.0.113.7", "10.0.0.50"), alerta("203.0.113.8", "10.0.0.50"))
+
+    def cae(*a, **k):
+        raise integ.Reintentar("ONOS caído")
+    monkeypatch.setattr(integ, "onos", cae)
+    st = estado()
+    assert integ.consumir_eve(st) is True
+    assert st["offset"] == 0 and st["bloqueadas"] == {}            # ninguna se da por procesada: seguirán en el archivo
+    falso = OnosFalso()
+    monkeypatch.setattr(integ, "onos", falso)                      # ONOS vuelve
+    assert integ.consumir_eve(st) is False
+    assert sorted(st["bloqueadas"]) == ["203.0.113.7", "203.0.113.8"] and len(falso.posts()) == 2
+    assert st["offset"] == eve.stat().st_size
+
+
+def test_R5_06_3_6_7b_si_onos_cae_a_mitad_no_se_repite_lo_ya_procesado(tmp_path, monkeypatch):
+    l1 = alerta("203.0.113.7", "10.0.0.50")
+    eve = _eve(tmp_path, monkeypatch, l1, alerta("203.0.113.8", "10.0.0.50"))
+    falso, intentos = OnosFalso(), {"posts": 0}
+
+    def cae_en_el_segundo(metodo, ruta, **kw):
+        if metodo == "POST":
+            intentos["posts"] += 1
+            if intentos["posts"] == 2:
+                raise integ.Reintentar("ONOS caído")
+        return falso(metodo, ruta, **kw)
+    monkeypatch.setattr(integ, "onos", cae_en_el_segundo)
+    st = estado()
+    assert integ.consumir_eve(st) is True
+    assert list(st["bloqueadas"]) == ["203.0.113.7"] and st["offset"] == len((json.dumps(l1) + "\n").encode())
+    monkeypatch.setattr(integ, "onos", falso)
+    assert integ.consumir_eve(st) is False
+    assert sorted(st["bloqueadas"]) == ["203.0.113.7", "203.0.113.8"]
+    assert len(falso.posts()) == 2                                  # la 1.a no se reenvió
+
+
+def test_R5_06_3_6_8_un_error_permanente_no_bloquea_la_cola(tmp_path, monkeypatch):
+    eve = _eve(tmp_path, monkeypatch, alerta("203.0.113.9", "10.0.0.50"), alerta("203.0.113.10", "10.0.0.50"))
+    falso = OnosFalso()
+
+    def rechaza_la_primera(metodo, ruta, **kw):
+        if metodo == "POST" and "203.0.113.9/32" in json.dumps(kw["json"]):
+            raise integ.Descartar("HTTP 400: regla inválida")
+        return falso(metodo, ruta, **kw)
+    monkeypatch.setattr(integ, "onos", rechaza_la_primera)
+    st = estado()
+    assert integ.consumir_eve(st) is False
+    assert list(st["bloqueadas"]) == ["203.0.113.10"]               # la rechazada se descarta y la siguiente se procesa
+    assert st["offset"] == eve.stat().st_size
+
+
+HOST_BORDE = [{"ipAddresses": ["10.0.0.21"], "mac": "00:00:00:00:00:ab", "locations": [{"elementId": "of:00000000000000a1"}]}]
+
+
+def test_R5_06_3_6_9_un_policy_mapper_caido_no_impide_el_bloqueo(onos, monkeypatch):
+    def cae(*a, **k):
+        raise integ.requests.ConnectionError("mapper caído")
+    monkeypatch.setattr(integ, "MAPPER_URL", "http://m1:5000")
+    monkeypatch.setattr(integ.requests, "post", cae)
+    onos.hosts = HOST_BORDE
+    st = estado()
+    integ.procesar(alerta("10.0.0.21", "198.51.100.9"), st)
+    assert "10.0.0.21" in st["bloqueadas"] and st["bloqueadas"]["10.0.0.21"]["sesion"] is None
+
+
+def test_R5_06_3_6_9b_si_el_mapper_primario_cae_se_usa_la_replica(onos, monkeypatch):
+    urls = []
+
+    def post(url, json=None, timeout=None, **kw):
+        urls.append(url)
+        if "m1" in url:
+            raise integ.requests.ConnectionError("m1 caído")
+        return Resp({"status": "revocada"})
+    monkeypatch.setattr(integ, "MAPPER_URL", "http://m1:5000,http://m2:5000")
+    monkeypatch.setattr(integ.requests, "post", post)
+    onos.hosts = HOST_BORDE
+    st = estado()
+    integ.procesar(alerta("10.0.0.21", "198.51.100.9"), st)
+    assert st["bloqueadas"]["10.0.0.21"]["sesion"] == "revocada"
+    assert urls == ["http://m1:5000/sessions/revoke", "http://m2:5000/sessions/revoke"]

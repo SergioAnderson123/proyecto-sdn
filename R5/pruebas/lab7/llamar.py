@@ -6,12 +6,19 @@ Subcomandos (desde la raiz del repositorio):
   llamar.py parse LINEA                 parse_ids_alert(LINEA): imprime los campos extraidos o None
   llamar.py parse-sin-texto             parse_ids_alert(None): una entrada que ni siquiera es texto
   llamar.py procesar LINEA_JSON         parse_ids_alert y luego procesar(evento): no debe lanzar excepcion ni bloquear nada
-  llamar.py consumir ARCHIVO ESTADO     consumir_eve(estado) sobre ARCHIVO; el estado (offset e IPs bloqueadas) se guarda en ESTADO
+  llamar.py consumir ARCHIVO ESTADO [MODO]
+                                        consumir_eve(estado) sobre ARCHIVO; el estado (offset e IPs bloqueadas) se guarda en ESTADO.
+                                        MODO: caido (ONOS no responde) | a-medias (ONOS cae en el 2.o POST) | rechaza:IP (ONOS rechaza esa IP con 400)
+  llamar.py onos RESPUESTAS [N] [sin-nodos]
+                                        onos() contra un cluster de 3 nodos (n1, n2, n3). RESPUESTAS = lo que contesta cada INTENTO, separado por
+                                        comas: caido | timeout | un codigo HTTP (200, 503, 429...). N = cuantas llamadas seguidas se hacen
+  llamar.py backoff ESPERA si|no        siguiente_espera(ESPERA, fallo): la espera de la proxima vuelta del bucle
   llamar.py classify SEVERIDAD          classify_alert(alerta con esa severidad): bloquear | registrar | ignorar (MAX_SEVERITY del entorno, 2 por defecto)
   llamar.py decidir SRC DST [DIRECCION] decidir(evento): a quien se bloquea y donde (core | borde), o None
   llamar.py bloqueo SRC DST SEVERIDAD [DIRECCION] [IP=DEVICE ...]
                                         procesar(alerta) completo con un ONOS falso; IP=DEVICE indica donde ve ONOS a un host interno;
-                                        la palabra sin-flowid hace que ONOS responda sin flowId. Con DRY_RUN=1 no se contacta con ONOS.
+                                        la palabra sin-flowid hace que ONOS responda sin flowId; mapper-caido / mapper-replica simulan el Policy Mapper
+                                        (el primario caido, con o sin replica). Con DRY_RUN=1 no se contacta con ONOS.
   llamar.py secuencia PASO ...          varios pasos sobre el MISMO estado y un ONOS falso. Pasos: SRC>DST@SEV[#SID] (una alerta), reinicio (guarda y
                                         recarga el estado), vencer (pasan BLOCK_SEC s sin actividad), liberar:IP (r5ctl desbloquear + reconciliacion)
   llamar.py reconciliar BLOQUEADAS FLUJOS [onos-caido]
@@ -52,10 +59,19 @@ class Resp:
 class OnosFalso:
     """Doble de ONOS: registra las peticiones y responde lo minimo para que el integrador funcione."""
 
-    def __init__(self, hosts=None, flowid=True):
+    def __init__(self, hosts=None, flowid=True, modo=None):
         self.llamadas, self.hosts, self.flowid, self.flujos, self.activos = [], hosts or [], flowid, [], []
+        self.modo, self.n_posts = modo, 0
 
     def __call__(self, metodo, ruta, **kw):
+        if self.modo == "caido":
+            raise integ.Reintentar("ONOS caido")                     # ningun nodo responde
+        if metodo == "POST" and self.modo:
+            self.n_posts += 1
+            if self.modo == "a-medias" and self.n_posts == 2:
+                raise integ.Reintentar("ONOS cae en el 2.o POST")
+            if self.modo.startswith("rechaza:") and self.modo.split(":", 1)[1] + "/32" in json.dumps(kw["json"]):
+                raise integ.Descartar("HTTP 400: regla invalida")     # error permanente: reintentar no ayuda
         self.llamadas.append((metodo, ruta))
         if metodo == "GET" and ruta == "/hosts":
             return Resp({"hosts": self.hosts})
@@ -102,7 +118,7 @@ def cmd_procesar(linea):
     return 0
 
 
-def cmd_consumir(archivo, estado):
+def cmd_consumir(archivo, estado, modo=None):
     try:
         with open(estado, encoding="utf-8") as f:
             st = json.load(f)
@@ -112,13 +128,15 @@ def cmd_consumir(archivo, estado):
     st.setdefault("inode", None)
     st.setdefault("offset", 0)
     integ.EVE_PATH = archivo
-    integ.onos = OnosFalso()
+    onos = OnosFalso(modo=modo)
+    integ.onos = onos
     fallo = integ.consumir_eve(st)
     with open(estado, "w", encoding="utf-8") as f:
         json.dump(st, f)
     print(f"offset={st['offset']}")
     print(f"bloqueadas={','.join(sorted(st['bloqueadas'])) or '(ninguna)'}")
     print(f"fallo_onos={fallo}")
+    print(f"POST a ONOS={len(onos.posts())}")
     for ip, v in sorted(st["bloqueadas"].items()):
         print(f"registro: {ip} -> device={v['device']}, flow_id={v['flow_id']}, sid={v['sid']}, firma={v['firma']!r}")
     return 0
@@ -144,16 +162,29 @@ def cmd_bloqueo(src, dst, severidad, *resto):
     direccion = "to_server"
     hosts = []
     flowid = True
+    mapper = None
     for x in resto:
         if x == "sin-flowid":
             flowid = False
+        elif x in ("mapper-caido", "mapper-replica"):
+            mapper = x
         elif "=" in x:                                              # IP=DEVICE: ONOS conoce a ese host en ese switch de borde
             ip, dev = x.split("=", 1)
-            hosts.append({"ipAddresses": [ip], "locations": [{"elementId": dev}]})
+            hosts.append({"ipAddresses": [ip], "mac": "00:00:00:00:00:ab", "locations": [{"elementId": dev}]})
         else:
             direccion = x
     onos = OnosFalso(hosts, flowid)
     integ.onos = onos
+    urls_mapper = []
+    if mapper:
+        integ.MAPPER_URL = "http://m1:5000" if mapper == "mapper-caido" else "http://m1:5000,http://m2:5000"
+
+        def post(url, json=None, timeout=None, **kw):                # el primario (m1) esta caido; la replica (m2), si existe, responde
+            urls_mapper.append(url)
+            if "m1" in url:
+                raise integ.requests.ConnectionError("m1 caido")
+            return Resp({"status": "revocada"})
+        integ.requests.post = post
     st = {"bloqueadas": {}, "inode": None, "offset": 0}
     ev = evento(src, dst, int(severidad), direccion)
     accion = integ.classify_alert(integ.normalizar_alerta(ev))
@@ -164,6 +195,43 @@ def cmd_bloqueo(src, dst, severidad, *resto):
     print(f"flows_en_el_POST={len(onos.flujos)} dispositivos={','.join(f['deviceId'] for f in onos.flujos) or '(ninguno)'}")
     for ip, v in sorted(st["bloqueadas"].items()):
         print(f"registro: {ip} -> device={v['device']}, donde={v['donde']}, sid={v['sid']}, flow_id={v['flow_id']}")
+        if "sesion" in v:
+            print(f"sesion de {ip}: {v['sesion']}")
+    if mapper:
+        print(f"mapper_probados={' '.join(u.split('//')[1].split('/')[0] for u in urls_mapper)}")
+
+
+def cmd_onos(respuestas, llamadas="1", *flags):
+    secuencia = [x for x in respuestas.split(",") if x and x != "-"]
+    intentos = []
+
+    def falso(metodo, url, **kw):
+        intentos.append(url)
+        r = secuencia[len(intentos) - 1]
+        if r == "caido":
+            raise integ.requests.ConnectionError("nodo caido")
+        if r == "timeout":
+            raise integ.requests.Timeout("nodo lento")
+        return Resp({"ok": 1}, int(r))
+
+    integ.requests.request = falso
+    integ.ONOS_URL = "" if "sin-nodos" in flags else "http://n1:8181/a,http://n2:8181/a,http://n3:8181/a"
+    integ._nodo = 0
+    for i in range(int(llamadas)):
+        try:
+            res = f"HTTP {integ.onos('GET', '/hosts').status_code}"
+        except integ.Reintentar as e:
+            res = f"Reintentar: {e}"
+        except integ.Descartar as e:
+            res = f"Descartar: {e}"
+        print(f"llamada {i + 1}: {res}")
+    print(f"nodos_probados={' '.join(u.split('//')[1].split(':')[0] for u in intentos) or '(ninguno)'}")
+    return 0
+
+
+def cmd_backoff(espera, fallo):
+    print(f"espera_actual={espera}s fallo={fallo} -> siguiente_espera={integ.siguiente_espera(int(espera), fallo == 'si')}s")
+    return 0
 
 
 def lista(ips):
@@ -307,8 +375,12 @@ def main(argv):
             cmd_parse_sin_texto()
         elif cmd == "procesar" and len(args) == 1:
             return cmd_procesar(args[0])
-        elif cmd == "consumir" and len(args) == 2:
+        elif cmd == "consumir" and len(args) in (2, 3):
             return cmd_consumir(*args)
+        elif cmd == "onos" and len(args) >= 1:
+            return cmd_onos(*args)
+        elif cmd == "backoff" and len(args) == 2:
+            return cmd_backoff(*args)
         elif cmd == "classify" and len(args) == 1:
             cmd_classify(*args)
         elif cmd == "decidir" and len(args) in (2, 3):
