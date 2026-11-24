@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel de la red</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>Panel de la red <span class="solo">solo lectura</span></h1>
+  <nav id="pestanas">
+    <button data-v="resumen" class="activa">Resumen</button>
+    <button data-v="sesiones">Sesiones</button>
+    <button data-v="eventos">Eventos</button>
+    <button data-v="vistas">Vistas de ONOS</button>
+  </nav>
+  <div id="estado" class="estado">cargando…</div>
+</header>
+
+<section id="entrar" hidden>
+  <h2>Acceso</h2>
+  <form id="f-entrar">
+    <label>Token <input type="password" id="token" autocomplete="off" required></label>
+    <button type="submit">Entrar</button>
+    <p id="e-entrar" class="error"></p>
+  </form>
+</section>
+
+<main>
+  <section id="v-resumen">
+    <div id="tarjetas" class="tarjetas"></div>
+    <h2>Avisos</h2>
+    <ul id="avisos" class="avisos"></ul>
+    <h2>Nodos de ONOS</h2>
+    <table id="t-nodos"><thead><tr><th>Nodo</th><th>Responde</th><th>Switches disponibles</th></tr></thead><tbody></tbody></table>
+    <h2>Vigilante</h2>
+    <table id="t-vig"><thead><tr><th>Instancia</th><th>Rol</th><th>Estado</th><th>Último ciclo</th><th>Activo</th></tr></thead><tbody></tbody></table>
+    <h2>Lecturas que fallaron</h2>
+    <ul id="caidas"></ul>
+  </section>
+
+  <section id="v-sesiones" hidden>
+    <h2>Usuarios en sesión <span id="n-ses" class="cuenta"></span></h2>
+    <table id="t-ses"><thead><tr><th>Usuario</th><th>Rol</th><th>VLAN</th><th>MAC</th><th>Switch / puerto</th><th>Método</th><th>Vence en</th><th>Base 802.1X</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="v-eventos" hidden>
+    <h2>Eventos del mapper <span id="n-ev" class="cuenta"></span></h2>
+    <form id="f-ev" class="filtros">
+      <label>Tipo <select id="f-tipo"><option value="">todos</option></select></label>
+      <label>Usuario <input id="f-usuario" placeholder="contiene…"></label>
+      <label>MAC <input id="f-mac" placeholder="prefijo"></label>
+      <label>Texto <input id="f-texto" placeholder="en el detalle"></label>
+      <label>Cuántos <select id="f-limite"><option>50</option><option selected>100</option><option>300</option><option>1000</option></select></label>
+      <button type="submit">Filtrar</button>
+    </form>
+    <table id="t-ev"><thead><tr><th>Hora</th><th>Tipo</th><th>Usuario</th><th>MAC</th><th>Rol</th><th>Switch / puerto</th><th>Detalle</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="v-vistas" hidden>
+    <h2>Qué dice cada nodo de ONOS de cada switch</h2>
+    <p class="ayuda">Si los nodos discrepan, el switch aparece en rojo (vista desigual). Un nodo que no contesta no cuenta como «no lo ve».</p>
+    <table id="t-vistas"><thead></thead><tbody></tbody></table>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

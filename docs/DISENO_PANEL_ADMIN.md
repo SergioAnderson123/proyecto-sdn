@@ -1,6 +1,8 @@
 # Diseño: panel web de administración (borrador para revisar, 23-nov-2026)
 
-**Estado: solo diseño. Nada de esto está implementado.** Lo escribe quien mantiene la capa 3 y el vigilante (R2) a partir de lo que se vio operando la slice el 23-nov; las decisiones abiertas están marcadas para que las revise el equipo antes de tocar código.
+**Estado (23-nov): la v1 de solo lectura está construida y probada sin red, pero NO desplegada.** Código en `R2/panel/` (`datos.py` lógica pura, `panel.py` recolector y servidor, `static/` la página; 42 pruebas en `R2/panel/tests`). Lo que muestra: resumen con avisos, sesiones, eventos con filtros y las vistas de ONOS por nodo (el detector de vistas desiguales, en pantalla). Solo biblioteca estándar de Python; solo GET; escucha en `127.0.0.1` y, si se abre en otra IP, exige un token y se niega a arrancar sin él. **Falta:** el playbook de despliegue, medir los recursos del `server`, y las pantallas del vigilante (`/estado`), las reglas con filtros y la reparación manual (fases 2 y 3). Lo escribe quien mantiene la capa 3 y el vigilante (R2) a partir de lo que se vio operando la slice el 23-nov; las decisiones abiertas están marcadas para que las revise el equipo.
+
+**Corrección al leer el código del mapper (`eventos.py`):** en modo HA la bitácora **sí se guarda en etcd** (`events`, máximo 200), no por réplica como decía la sección 2. El panel igual guarda la suya en SQLite (se conserva lo que el mapper rota); falta comprobar en vivo que dos lecturas por réplicas distintas den lo mismo.
 
 ## 1. Qué se quiere
 
