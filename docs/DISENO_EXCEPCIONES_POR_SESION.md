@@ -11,12 +11,12 @@
 | **P1** | **Parche del mapper del portal** aplicado y desplegado (`docs/NOTA_PORTAL_MAC_POR_IP.md`, `docs/parche_mapper_portal_ip.diff`) | Sin él el portal no identifica a los clientes de capa 3: no hay login ni **ascenso** por el portal, y las excepciones nacen en el ascenso | **Pendiente.** Marianajo3 ya está avisada (23-nov); la nota y el parche están en el repo | R1 | Guion de la nota (§7): h1 ve su sesión en el portal y el `POST /login` de h2 deja de decir «No se pudo identificar su equipo» |
 | **P2** | **Portal nuevo** en el `server` (manda la IP de origen) | Es la mitad del arreglo de P1 | **Hecho** (23-nov 21:47 UTC, `portal_actualizar.yml`) | R2 | Evento `rechazado` de `x` con la MAC vacía, ya visto |
 | **P3** | **`PORTAL_TOKEN` definido** (el mismo) en el mapper HA y en el portal | Hoy está **vacío** en los dos: `_verificar_portal` está desactivada y `/portal/estado?ip=` quedaría abierto | **Pendiente**; conviene hacerlo en el mismo despliegue que P1 | R1 + R2 | La misma huella en el `server` y en `mapper-ha-prod`, distinta de `e3b0c44298fc` (comando en la nota, §6) |
-| **P4** | **Ascenso probado en vivo** en la slice | Nunca se ha ejecutado aquí, y es el punto exacto donde se instalarían las excepciones | **Pendiente**, tras P1 | R2 + R1 | h2 con sesión 802.1X de alumno → `profesor01` en el portal → rol docente (tabla 10) → cerrar sesión → vuelve a alumno. Además: ascenso rechazado desde otro puerto, y que `ONOS AAA` tenga a h2 autorizado (`ascenso_exigir_ubicacion: true`) |
+| **P4** | **Ascenso probado en vivo** en la slice | Nunca se ha ejecutado aquí, y es el punto exacto donde se instalarían las excepciones | **Pendiente**, tras P1 | R2 + R1 | h2 con sesión 802.1X de alumno → `profesor02` en el portal → rol docente (tabla 10) → cerrar sesión → vuelve a alumno. Además: ascenso rechazado desde otro puerto, y que `ONOS AAA` tenga a h2 autorizado (`ascenso_exigir_ubicacion: true`) |
 | **P5** | **Límite de intentos fallidos** de contraseña en el portal | Con esta función la cuenta de un profesor abre más; hoy `server.py` no limita | **Pendiente** (decisión 8) | R2 | Tras N fallos seguidos desde una IP o contra una cuenta: bloqueo temporal, mensaje neutro y un evento en la bitácora |
 | **P6** | **Refactorización previa:** una sola función `_borrar_flujos_de_sesion` para los siete caminos de cierre (4.3), en su propio cambio | Evita que un camino olvidado deje una regla abierta | **Pendiente** | R1 | Una prueba por camino; la suite del mapper en verde |
 | **P7** | **Servicio de prueba en el catálogo de la slice** (por ejemplo `student_records`, puerto 8102) y denegado hoy al docente | Es lo que se abrirá en la validación (fase 5) | **Por comprobar** | R2 | `nc -zv -w 2 -s <IP de h2> 10.0.0.10 8102` da `timed out` antes de la excepción; el servicio figura en `services` del `policy.yaml`/`policy.local.yaml` |
 | **P8** | **Mapper HA estable y vistas de ONOS iguales** | Las excepciones se instalan por ONOS y se reconcilian con él | **Hecho** (el mapper con la reposición del flujo 40001, `6726bc4`, está desplegado según la nota de R1; las tres vistas de ONOS en 5 de 5 el 23-nov) | R1 + R2 | El registrador sin `VISTA_DESIGUAL`; `/health/ha` en `ready` |
-| **P9** | **Equipos y cuentas de la prueba** | El ascenso necesita un equipo con sesión 802.1X de alumno y una cuenta de profesor en LDAP | **Por confirmar** | R1 | h2 con `72 -e arrancar=true -e objetivo_host=h2-alumno` y sesión Alumno en `/sessions`; `profesor01` en el grupo `profesor` |
+| **P9** | **Equipos y cuentas de la prueba** | El ascenso necesita un equipo con sesión 802.1X de alumno y una cuenta de profesor en LDAP | **Por confirmar** | R1 | h2 con `72 -e arrancar=true -e objetivo_host=h2-alumno` y sesión Alumno en `/sessions`; `profesor02` (cuenta de persona, sin MAC) en el grupo `profesor` |
 | **P10** | **La misma política en las tres réplicas** | Cada réplica del mapper lee su propio `policy.yaml`; con una lista de excepciones, una réplica distinta daría resultados distintos según quién atienda | **Por comprobar** | R1 | `sha256sum` del `policy.yaml` (y del archivo de excepciones) idéntico en las tres réplicas |
 | **P11** | **El rol `superadmin` y su equipo dedicado** (sección 4.7): grupo y equipo en LDAP, rama en el `post-auth` de RADIUS, rol y servicio `admin_panel` en `policy.yaml` y, además, **el webhook del mapper**, donde el mapeo rol → VLAN está escrito en el código y un rol nuevo se rechaza | Es quien entra al panel. **No hace falta antes de la fase 6**: hasta que exista el panel, las excepciones se dan de alta editando el archivo por el repositorio | **Por hacer** | R1 (LDAP, RADIUS, mapper) + R2 (`policy.yaml`) | El equipo dedicado autentica y `/sessions` lo muestra con el rol `superadmin` en la tabla elegida; un equipo de otro rol no alcanza el puerto del panel |
 
@@ -35,13 +35,22 @@
 | **Soporte TI** (administrador) | **Se le da un equipo y se autentica por 802.1X**, como hoy (rol `soporte`, tabla 40). No entra por el portal | No. (Que soporte use el portal por ascenso queda **aparcado**: es una opción válida, pero no se necesita.) |
 | **Superadmin** (rol nuevo) | **Un equipo dedicado** que se autentica por 802.1X; **no entra por el portal**. Es el único que entra al panel y da de alta y de baja las excepciones (decisión 6, sección 4.7) | No: administra las excepciones, no las recibe |
 
+### 1.1 Persona y equipo se separan (decidido el 24-nov)
+
+**Una excepción se da a una cuenta de persona, nunca a la identidad de un equipo.** En el LDAP en vivo (leído el 24-nov, sin modificarlo) casi todas las cuentas son de equipos: `alumno01` es la MAC, el switch y el puerto de h2; `profesor01` es los de h1 (`fa:16:3e:b6:96:08`, sw-acc-1 puerto 1) y es la identidad 802.1X de ese equipo; `alumno02`, `alumno03` y `support01` llevan MAC de Mininet. Solo `profesor02` y `guest01` no llevan MAC ni puerto. Por eso:
+
+- Las excepciones (ejemplo, pruebas y validación) usan **`profesor02`**, que es una cuenta de persona (grupo `profesor`, sin MAC). `profesor01` no se usa: sería dar un permiso a la identidad de h1.
+- La clave `usuario` de `excepciones.yaml` es el uid que se escribe en el portal (`profesor02`), no el CN de una sesión 802.1X (`profesor01@example.org`); no coinciden aunque la persona y el equipo se llamen parecido, así que una excepción nunca se aplica a una sesión 802.1X.
+- Las excepciones no se guardan en LDAP y no crean usuarios: viven en `R2/policy/excepciones.yaml`. Crear cuentas de persona nuevas es un cambio de R1 al LDAP; si la validación necesita otro usuario, se crea **`guest02`** (acordado con Dani el 24-nov). Un invitado no puede tener excepciones (`roles: [docente]`) ni ascender: `guest02` sirve para las pruebas negativas, no para recibir permisos.
+- La contraseña de `profesor02` no está en el repositorio; para la fase 5 hay que fijarla o dársela a quien valide (no se prueba a adivinarla).
+
 ## 2. El problema
 
 La política se decide por **rol**. El grupo del usuario llega por RADIUS como una VLAN; el flujo de sesión (tabla 0, prioridad 40001, `in_port` + `eth_src`) hace `push_vlan` con ese id y salta a la **tabla de su rol** (docente 10, alumno 20, soporte 40, invitado 50). Esa tabla solo compara **VLAN, IP y puerto TCP del destino** (`flujos_tabla_rol`): no mira quién es la persona, y `policy.yaml` no tiene ninguna sección de excepciones. Un permiso individual obliga hoy a crear un rol nuevo (grupo LDAP + RADIUS + VLAN/tabla + todas las filas de `rules` **+ una rama nueva en el webhook del mapper**, donde el mapeo rol → VLAN está escrito en el código), que no escala: un rol por excepción, y cada rol es una tabla en cada switch de acceso.
 
 ## 3. Qué se quiere
 
-- Dar a una **cuenta de profesor** permiso a uno o varios servicios que su rol no tiene (por ejemplo `student_records` a `profesor01`), **sin** crear rol, VLAN ni tabla.
+- Dar a una **cuenta de profesor** permiso a uno o varios servicios que su rol no tiene (por ejemplo `student_records` a `profesor02`), **sin** crear rol, VLAN ni tabla.
 - Que valga **mientras dure su sesión de portal** y, opcionalmente, hasta una fecha.
 - Que se retire sola en **todos** los casos en que acaba la sesión.
 - Que quede **auditada** y que se pueda dar de alta y de baja desde el panel.
@@ -58,7 +67,7 @@ excepciones:
   roles: [docente]                       # solo las cuentas que entran con este rol pueden tener excepciones
   no_excepcionables: [network_management]  # servicios que nunca se abren por excepción
   lista:
-    - {usuario: profesor01, servicios: [student_records], hasta: "2026-12-31", motivo: "Coordinación de matrícula"}
+    - {usuario: profesor02, servicios: [student_records], hasta: "2026-12-31", motivo: "Coordinación de matrícula"}
 ```
 
 `cargar_politica` debe **rechazar** una sección inválida con un mensaje claro: usuario vacío, servicio que no está en `services` o en `no_excepcionables`, `hasta` pasado o mal escrito, rol no permitido, o servicio que el rol ya tiene (redundante). Un archivo mal escrito no puede dejar la política a medias.
@@ -182,7 +191,7 @@ A nivel de red las dos son igual de seguras: un equipo sin sesión 802.1X solo l
 
 **Fase 4 — despliegue.** Réplica a réplica, con el procedimiento de R1 (paquete, comprobación de sesiones y acceso al gateway, copia de seguridad): **primero el código sin ninguna excepción configurada en las tres**, después la política (cada réplica lee su `policy.yaml`: que las tres tengan el mismo) y por último la primera excepción de prueba.
 
-**Fase 5 — validación en vivo** (cuando 0 a 4 estén hechos). Con h2 como equipo de alumno y `profesor01` por el portal. Por defecto `student_records` (puerto 8102 del server) está denegado al docente: `nc -zv -w 2 -s <IP de h2> 10.0.0.10 8102` da **`timed out`**.
+**Fase 5 — validación en vivo** (cuando 0 a 4 estén hechos). Con h2 como equipo de alumno y `profesor02` por el portal. Por defecto `student_records` (puerto 8102 del server) está denegado al docente: `nc -zv -w 2 -s <IP de h2> 10.0.0.10 8102` da **`timed out`**.
 1. Con la excepción definida y el ascenso hecho: la misma prueba da **`Connection refused`** (hay camino; el servidor no escucha). Otro puerto no autorizado (8105) sigue en `timed out`.
 2. En el switch de h2, `ovs-ofctl -O OpenFlow13 dump-flows br0 table=10 | grep eth_src` muestra la regla; ONOS la lista bajo su appId.
 3. Cerrar sesión en el portal: vuelve a `timed out` y la regla desaparece.

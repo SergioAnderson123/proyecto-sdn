@@ -1,6 +1,6 @@
 """excepciones.py: permisos individuales de una cuenta del portal (docs/DISENO_EXCEPCIONES_POR_SESION.md, fase 1).
 
-Una excepción abre a UNA cuenta (por ejemplo `profesor01`) uno o varios servicios que su rol no tiene, sin crear rol, VLAN ni tabla.
+Una excepción abre a UNA cuenta (por ejemplo `profesor02`) uno o varios servicios que su rol no tiene, sin crear rol, VLAN ni tabla.
 Se instala en la tabla del rol de la sesión, con la regla del rol MÁS `ETH_SRC` = la MAC del equipo, a la prioridad PRIO_EXCEPCION.
 
 Todo lo de este módulo es puro (sin red): leer y validar `excepciones.yaml`, decidir qué servicios tiene una cuenta ahora y generar los flujos.
@@ -11,7 +11,7 @@ Formato de `excepciones.yaml` (junto a `policy.yaml`, o donde diga EXCEPCIONES_P
     roles: [docente]                         # solo las cuentas con este rol pueden tener excepciones
     no_excepcionables: [network_management]  # servicios que nunca se abren por excepción
     lista:
-      - {usuario: profesor01, servicios: [student_records], hasta: "2026-12-31", motivo: "Coordinación de matrícula"}
+      - {usuario: profesor02, servicios: [student_records], hasta: "2026-12-31", motivo: "Coordinación de matrícula"}
 """
 import datetime as dt
 import os
@@ -49,7 +49,7 @@ def leer(ruta: str) -> Optional[dict]:
 
 
 def normalizar_usuario(usuario) -> str:
-    """Cómo se compara una cuenta: sin espacios y sin distinguir mayúsculas (`Profesor01 ` = `profesor01`)."""
+    """Cómo se compara una cuenta: sin espacios y sin distinguir mayúsculas (`Profesor02 ` = `profesor02`)."""
     return str(usuario or "").strip().lower()
 
 

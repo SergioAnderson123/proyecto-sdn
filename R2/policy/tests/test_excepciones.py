@@ -26,7 +26,7 @@ def base():
 
 
 def entrada(**cambios):
-    e = {"usuario": "profesor01", "servicios": ["student_records"], "hasta": "2026-12-31", "motivo": "Coordinación de matrícula"}
+    e = {"usuario": "profesor02", "servicios": ["student_records"], "hasta": "2026-12-31", "motivo": "Coordinación de matrícula"}
     e.update(cambios)
     return e
 
@@ -49,9 +49,9 @@ def con_excepciones(pol, d):
 
 # ---------- validación ----------
 def test_una_seccion_valida_se_normaliza():
-    sec = ex.validar(base(), datos(entrada(usuario="  Profesor01 ", hasta="2026-12-31")), HOY)
+    sec = ex.validar(base(), datos(entrada(usuario="  Profesor02 ", hasta="2026-12-31")), HOY)
     assert sec["roles"] == ["docente"] and sec["no_excepcionables"] == ["network_management"]
-    assert sec["lista"] == [{"usuario": "profesor01", "servicios": ["student_records"], "hasta": dt.date(2026, 12, 31),
+    assert sec["lista"] == [{"usuario": "profesor02", "servicios": ["student_records"], "hasta": dt.date(2026, 12, 31),
                              "motivo": "Coordinación de matrícula"}]
 
 
@@ -81,7 +81,7 @@ def test_rol_desconocido_y_no_excepcionable_desconocido():
 
 
 def test_usuario_repetido_aunque_cambien_mayusculas():
-    assert "usuario repetido" in errores(datos(entrada(), entrada(usuario="PROFESOR01", servicios=["print_server"])))
+    assert "usuario repetido" in errores(datos(entrada(), entrada(usuario="PROFESOR02", servicios=["print_server"])))
 
 
 def test_limites_de_servicios_por_usuario_y_de_usuarios():
@@ -93,7 +93,7 @@ def test_limites_de_servicios_por_usuario_y_de_usuarios():
 
 
 def test_todos_los_errores_se_informan_juntos():
-    msg = errores(datos(entrada(usuario="", motivo=""), entrada(usuario="profesor02", servicios=["no_existe"])))
+    msg = errores(datos(entrada(usuario="", motivo=""), entrada(usuario="profesor03", servicios=["no_existe"])))
     assert "usuario vacío" in msg and "falta el motivo" in msg and "no_existe" in msg
 
 
@@ -120,7 +120,7 @@ def test_el_archivo_junto_a_la_politica_se_carga_y_valida(tmp_path, monkeypatch)
     monkeypatch.delenv("EXCEPCIONES_PATH", raising=False)
     ruta = copia_de_politica(tmp_path)
     (tmp_path / "excepciones.yaml").write_text(yaml.safe_dump(datos(entrada(hasta=None))), encoding="utf8")
-    assert pt.cargar_politica(ruta)["excepciones"]["lista"][0]["usuario"] == "profesor01"
+    assert pt.cargar_politica(ruta)["excepciones"]["lista"][0]["usuario"] == "profesor02"
 
 
 def test_un_archivo_invalido_rechaza_toda_la_politica(tmp_path, monkeypatch):
@@ -141,16 +141,16 @@ def test_excepciones_path_apunta_a_otro_archivo(tmp_path, monkeypatch):
 # ---------- quién tiene qué ----------
 def test_excepciones_de_por_usuario_rol_y_fecha():
     pol = con_excepciones(base(), datos())
-    assert ex.excepciones_de(pol, "PROFESOR01", "docente", AHORA) == ["student_records"]
-    assert ex.excepciones_de(pol, "profesor02", "docente", AHORA) == []
-    assert ex.excepciones_de(pol, "profesor01", "alumno", AHORA) == []          # el rol del momento no admite excepciones
-    assert ex.excepciones_de(base(), "profesor01", "docente", AHORA) == []      # sin archivo, nada
+    assert ex.excepciones_de(pol, "PROFESOR02", "docente", AHORA) == ["student_records"]
+    assert ex.excepciones_de(pol, "profesor03", "docente", AHORA) == []
+    assert ex.excepciones_de(pol, "profesor02", "alumno", AHORA) == []          # el rol del momento no admite excepciones
+    assert ex.excepciones_de(base(), "profesor02", "docente", AHORA) == []      # sin archivo, nada
 
 
 def test_hasta_incluye_todo_ese_dia_y_despues_vence():
     pol = con_excepciones(base(), datos())
-    assert ex.excepciones_de(pol, "profesor01", "docente", dt.datetime(2026, 12, 31, 23, 59)) == ["student_records"]
-    assert ex.excepciones_de(pol, "profesor01", "docente", dt.datetime(2027, 1, 1, 0, 0)) == []
+    assert ex.excepciones_de(pol, "profesor02", "docente", dt.datetime(2026, 12, 31, 23, 59)) == ["student_records"]
+    assert ex.excepciones_de(pol, "profesor02", "docente", dt.datetime(2027, 1, 1, 0, 0)) == []
 
 
 # ---------- flujos ----------
@@ -184,9 +184,9 @@ def test_sin_mac_o_con_un_servicio_prohibido_no_hay_flujos():
 
 def test_vista_previa_por_switch():
     pol = con_excepciones(politica(), datos(entrada(servicios=["student_records"])))
-    plan = ex.vista_previa(pol, "profesor01", "docente", MAC["alumno"], [A1, A2], AHORA)
+    plan = ex.vista_previa(pol, "profesor02", "docente", MAC["alumno"], [A1, A2], AHORA)
     assert set(plan) == {A1, A2} and all(len(v) == 1 and v[0]["tableId"] == 10 for v in plan.values())
-    assert ex.vista_previa(pol, "profesor02", "docente", MAC["alumno"], [A1], AHORA) == {}
+    assert ex.vista_previa(pol, "profesor03", "docente", MAC["alumno"], [A1], AHORA) == {}
 
 
 def test_las_excepciones_no_cuentan_como_reglas_de_r2():

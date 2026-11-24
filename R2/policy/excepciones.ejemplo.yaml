@@ -5,4 +5,4 @@
 roles: [docente]
 no_excepcionables: [network_management]
 lista:
-  - {usuario: profesor01, servicios: [student_records], hasta: "2026-12-31", motivo: "Coordinación de matrícula"}
+  - {usuario: profesor02, servicios: [student_records], hasta: "2026-12-31", motivo: "Coordinación de matrícula"}
