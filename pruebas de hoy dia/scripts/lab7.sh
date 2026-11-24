@@ -39,10 +39,10 @@ OUT=~/lab7_${COD}_$(hostname)_$(date +%Y%m%d_%H%M%S).txt
   echo "################################################################################"
   $PY -m pytest "$F" -v -rs -p no:cacheprovider -k "${R}_${N}_" 2>&1 | sed -E 's#^[A-Za-z0-9_/]+test_lab7_r[0-9]\.py::test_##'
   echo "RESULTADO $COD: exit=${PIPESTATUS[0]}"
-  # Salida caso por caso (entrada, esperado, obtenido y verificaciones) del archivo propio de la prueba, si existe: R5/pruebas/lab7/r5_01.py ...
-  if [ "$R" = "R5" ] && [ -f "R5/pruebas/lab7/r5_${N}.py" ]; then
+  # Salida caso por caso (entrada, comando, obtenido y verificaciones) del script propio de la prueba, si existe: R5/pruebas/lab7/r5_01.sh ...
+  if [ "$R" = "R5" ] && [ -f "R5/pruebas/lab7/r5_${N}.sh" ]; then
     echo; echo "=================== CASOS DE $COD ==================="
-    $PY "R5/pruebas/lab7/r5_${N}.py" 2>&1
+    SIN_ARCHIVO=1 PY="$PY" bash "R5/pruebas/lab7/r5_${N}.sh" 2>&1
     echo "RESULTADO CASOS $COD: exit=$?"
   fi
 } | tee "$OUT" | tee -a ~/r5_live.log
