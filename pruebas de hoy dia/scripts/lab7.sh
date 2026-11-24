@@ -22,7 +22,7 @@ R5-0[1-6]) F=R5/tests/test_lab7_r5.py; E=""; C="Seguridad perimetral (R5)"; T="$
    R5-01) T="R5-01  parse_ids_alert: lectura de la alerta del IDS (3.1.x)"; E="Alerta valida -> devuelve IP, puertos, protocolo, firma y severidad. Incompleta, corrupta o que no es alerta -> None sin excepcion. Linea a medio escribir -> no avanza el offset." ;;
    R5-02) T="R5-02  classify_alert y decidir: severidad y direccion (3.2.x)"; E="classify_alert: severidad 1-2 -> bloquear, 3 o mas -> registrar, menor que 1 -> ignorar. decidir: externo->interno bloquea en los cores; interno->externo en el borde." ;;
    R5-03) T="R5-03  en_lista_blanca y lista blanca (3.3.x)"; E="Una IP de la lista blanca (interna o externa) nunca se bloquea; su vecina no listada si; el destino protegido no libera al atacante; un prefijo invalido se detecta al arrancar." ;;
-   R5-04) T="R5-04  Regla DROP del perimetro (3.4.x)"; E="Prioridad 42000, timeout 300 s, solo ipv4_src de esa IP, en todos los cores; incidente con tiempos y flow_id." ;;
+   R5-04) T="R5-04  build_perimeter_rule e incidente: regla DROP del perimetro (3.4.x)"; E="DROP de prioridad 42000 y timeout 300 s solo contra ipv4_src del atacante; cores para un externo, borde para un interno; IP invalida no genera regla; incidente con origen, destino, firma, accion y tiempos." ;;
    R5-05) T="R5-05  Sin duplicar y liberacion (3.5.x)"; E="Misma IP 3 veces -> 1 regla. Flujo borrado -> se olvida la IP. Reincidente -> se vuelve a bloquear." ;;
    R5-06) T="R5-06  Resiliencia ante fallas de ONOS (3.6.x)"; E="Nodo caido o 5xx -> siguiente nodo. 401/403/408/429 -> reintento. 4xx -> descarta." ;;
    esac ;;

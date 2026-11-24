@@ -19,6 +19,7 @@ verif() { local d="$1"; shift; if "$@"; then echo "    [OK] $d"; else echo "    
 contiene() { grep -qF -- "$1" <<<"$SALIDA"; }
 es()       { [ "$SALIDA" = "$1" ]; }
 no_es()    { [ "$SALIDA" != "$1" ]; }
+no_contiene() { ! grep -qF -- "$1" <<<"$SALIDA"; }
 contiene_todo() { local p; for p in "$@"; do contiene "$p" || return 1; done; }
 fin() {
   CASOS=$((CASOS+1))

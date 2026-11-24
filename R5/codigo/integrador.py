@@ -240,6 +240,25 @@ def origen_suplantado(ev, ip):
     return True
 
 
+def registrar_incidente(alerta, ip, donde, device, flow_id, t_lectura, t_post, t_201):
+    """Arma el registro del incidente de un bloqueo y escribe su línea BLOQUEO en el log. Devuelve el registro (se guarda en el estado).
+
+    Contiene: quién (IP bloqueada) contra quién (destino), qué ataque (sid y firma), qué se hizo (accion DROP, en qué switch y con qué
+    flow_id), cuándo (hora del paquete en el sensor y los instantes de lectura, POST y 201) y qué sensor lo detectó.
+    El formato de la línea BLOQUEO lo lee deploy/repeticiones.py: no cambiarlo sin actualizar su expresión regular."""
+    destino = alerta["dest_ip"] if alerta["src_ip"] == ip else alerta["src_ip"]      # con to_client el atacante es el destino de la alerta
+    incidente = {
+        "vence": t_201 + BLOCK_SEC,   # estimación: el timeout real de ONOS es de inactividad
+        "device": device, "flow_id": flow_id, "donde": donde, "sensor": SENSOR,
+        "sid": alerta["sid"], "firma": alerta["firma"],
+        "destino": destino, "proto": alerta["proto"], "accion": "DROP",
+        "t_alerta": alerta["timestamp"],   # hora del paquete en el sensor (reloj de Suricata)
+        "t_lectura": t_lectura, "t_post": t_post, "t_201": t_201,
+    }
+    log.info("BLOQUEO %s en %s (%s) flow=%s lectura->201=%.1f ms", ip, device, alerta["firma"], flow_id, (t_201 - t_lectura) * 1000)
+    return incidente
+
+
 def revocar_sesion(ip, mac=None):
     """I11: tras bloquear a un host interno, pide al Policy Mapper que revoque su sesión de R1/R2.
 
@@ -277,9 +296,15 @@ def revocar_sesion(ip, mac=None):
     return None
 
 
-def regla_drop(device, ip):
-    """Construye el cuerpo JSON de ONOS para una regla que descarta el tráfico IPv4 cuyo origen es `ip` en `device`."""
-    return {"flows": [{
+def build_perimeter_rule(ip, device):
+    """Regla de ONOS (un flujo) que descarta el tráfico IPv4 cuyo origen es `ip` en el switch `device`.
+
+    Prioridad PRIORITY (banda de R5, 41000-44999) y expiración por inactividad a los BLOCK_SEC segundos, así el bloqueo se libera solo
+    cuando el atacante calla. Sin instrucciones = DROP. El selector es exacto (ETH_TYPE IPv4 e IPV4_SRC /32): solo esa IP, no el resto.
+    Solo cubre el tráfico que SALE de `ip`; el que llega hacia ella no se descarta.
+    Lanza ValueError si `ip` no es una IPv4 válida (IPv6 incluido): un dato inválido no debe llegar al switch como selector basura."""
+    origen = ipaddress.IPv4Address(ip)
+    return {
         "priority": PRIORITY,
         "timeout": BLOCK_SEC,                       # expira por inactividad
         "isPermanent": False,
@@ -287,9 +312,14 @@ def regla_drop(device, ip):
         "treatment": {"instructions": []},          # sin instrucciones = DROP
         "selector": {"criteria": [
             {"type": "ETH_TYPE", "ethType": "0x0800"},     # solo IPv4
-            {"type": "IPV4_SRC", "ip": f"{ip}/32"},
+            {"type": "IPV4_SRC", "ip": f"{origen}/32"},
         ]},
-    }]}
+    }
+
+
+def regla_drop(device, ip):
+    """Nombre anterior de build_perimeter_rule: la misma regla dentro del cuerpo {"flows": [...]} que espera POST /flows."""
+    return {"flows": [build_perimeter_rule(ip, device)]}
 
 
 def aplicar(ip, donde):
@@ -301,7 +331,7 @@ def aplicar(ip, donde):
         t_post:  instante (epoch) en que se envía el POST.
         t_201:   instante (epoch) en que ONOS confirma la creación."""
     devices = dispositivos_para(ip, donde)                          # I10a / I10b
-    payload = {"flows": [regla_drop(d, ip)["flows"][0] for d in devices]}
+    payload = {"flows": [build_perimeter_rule(ip, d) for d in devices]}
     device = ",".join(devices)
     t_post = time.time()
     if DRY_RUN:
@@ -499,15 +529,7 @@ def procesar(ev, st, t_lectura=None):
         log.error("Regla descartada para %s: %s", ip, e)
         return
     t_lectura = t_lectura or t_post
-    st["bloqueadas"][ip] = {
-        "vence": t_201 + BLOCK_SEC,   # estimación: el timeout real de ONOS es de inactividad
-        "device": device, "flow_id": flow_id, "donde": donde, "sensor": SENSOR,
-        "sid": ev["alert"].get("signature_id"), "firma": ev["alert"].get("signature"),
-        "t_alerta": ev.get("timestamp"),   # hora del paquete en el sensor (reloj de Suricata)
-        "t_lectura": t_lectura, "t_post": t_post, "t_201": t_201,
-    }
-    log.info("BLOQUEO %s en %s (%s) flow=%s lectura->201=%.1f ms", ip, device,
-             ev["alert"].get("signature"), flow_id, (t_201 - t_lectura) * 1000)
+    st["bloqueadas"][ip] = registrar_incidente(alerta, ip, donde, device, flow_id, t_lectura, t_post, t_201)
     if donde == "borde":                    # host interno: además del DROP, se revoca su sesión de R1/R2 (I11)
         st["bloqueadas"][ip]["sesion"] = revocar_sesion(ip, mac_del_evento(ev, ip))
 

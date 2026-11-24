@@ -10,7 +10,10 @@ Subcomandos (desde la raiz del repositorio):
   llamar.py classify SEVERIDAD          classify_alert(alerta con esa severidad): bloquear | registrar | ignorar (MAX_SEVERITY del entorno, 2 por defecto)
   llamar.py decidir SRC DST [DIRECCION] decidir(evento): a quien se bloquea y donde (core | borde), o None
   llamar.py bloqueo SRC DST SEVERIDAD [DIRECCION] [IP=DEVICE ...]
-                                        procesar(alerta) completo con un ONOS falso; IP=DEVICE indica donde ve ONOS a un host interno
+                                        procesar(alerta) completo con un ONOS falso; IP=DEVICE indica donde ve ONOS a un host interno;
+                                        la palabra sin-flowid hace que ONOS responda sin flowId. Con DRY_RUN=1 no se contacta con ONOS.
+  llamar.py regla IP [DEVICE]           build_perimeter_rule(IP, DEVICE): la regla DROP que se enviaria a ONOS (P_R5 y BLOCK_SEC del entorno)
+  llamar.py incidente SRC DST SEVERIDAD procesar(alerta) y muestra el registro del incidente que queda guardado para SRC
   llamar.py lista-blanca IP             en_lista_blanca(IP) con LISTA_BLANCA del entorno (10.0.0.99/32 y 10.0.0.10/32 por defecto)
   llamar.py redes VALOR                 redes(VALOR): como se leen los prefijos de una variable (HOME_NET, LISTA_BLANCA); ValueError si es invalido
 Codigo de salida: 0 si la funcion termino sin excepcion; 1 si lanzo una.
@@ -42,16 +45,18 @@ class Resp:
 class OnosFalso:
     """Doble de ONOS: registra las peticiones y responde lo minimo para que el integrador funcione."""
 
-    def __init__(self, hosts=None):
-        self.llamadas, self.hosts = [], hosts or []
+    def __init__(self, hosts=None, flowid=True):
+        self.llamadas, self.hosts, self.flowid, self.flujos = [], hosts or [], flowid, []
 
     def __call__(self, metodo, ruta, **kw):
         self.llamadas.append((metodo, ruta))
         if metodo == "GET" and ruta == "/hosts":
             return Resp({"hosts": self.hosts})
         if metodo == "POST" and ruta == "/flows":
-            dev = kw["json"]["flows"][0]["deviceId"]
-            return Resp({"flows": [{"deviceId": dev, "flowId": "777"}]})
+            flujos = kw["json"]["flows"]
+            self.flujos.extend(flujos)
+            return Resp({"flows": [dict({"deviceId": f["deviceId"]}, **({"flowId": str(777 + i)} if self.flowid else {}))
+                                   for i, f in enumerate(flujos)]})
         return Resp()
 
     def posts(self):
@@ -128,13 +133,16 @@ def cmd_decidir(src, dst, direccion="to_server"):
 def cmd_bloqueo(src, dst, severidad, *resto):
     direccion = "to_server"
     hosts = []
+    flowid = True
     for x in resto:
-        if "=" in x:                                              # IP=DEVICE: ONOS conoce a ese host en ese switch de borde
+        if x == "sin-flowid":
+            flowid = False
+        elif "=" in x:                                              # IP=DEVICE: ONOS conoce a ese host en ese switch de borde
             ip, dev = x.split("=", 1)
             hosts.append({"ipAddresses": [ip], "locations": [{"elementId": dev}]})
         else:
             direccion = x
-    onos = OnosFalso(hosts)
+    onos = OnosFalso(hosts, flowid)
     integ.onos = onos
     st = {"bloqueadas": {}, "inode": None, "offset": 0}
     ev = evento(src, dst, int(severidad), direccion)
@@ -143,8 +151,36 @@ def cmd_bloqueo(src, dst, severidad, *resto):
     print(f"accion={accion}")
     print(f"bloqueadas={','.join(sorted(st['bloqueadas'])) or '(ninguna)'}")
     print(f"POST a ONOS={len(onos.posts())}")
+    print(f"flows_en_el_POST={len(onos.flujos)} dispositivos={','.join(f['deviceId'] for f in onos.flujos) or '(ninguno)'}")
     for ip, v in sorted(st["bloqueadas"].items()):
-        print(f"registro: {ip} -> device={v['device']}, donde={v['donde']}, sid={v['sid']}")
+        print(f"registro: {ip} -> device={v['device']}, donde={v['donde']}, sid={v['sid']}, flow_id={v['flow_id']}")
+
+
+def cmd_regla(ip, device="of:0000000000000001"):
+    try:
+        regla = integ.build_perimeter_rule(ip, device)
+    except ValueError as e:                                       # una IP invalida no debe producir una regla: aqui es lo esperado
+        print(f"ValueError: {e}")
+        return 0
+    print(json.dumps(regla, indent=2))
+    print(f"criterios={','.join(c['type'] for c in regla['selector']['criteria'])}")
+    return 0
+
+
+def cmd_incidente(src, dst, severidad):
+    integ.onos = OnosFalso()
+    st = {"bloqueadas": {}, "inode": None, "offset": 0}
+    integ.procesar(evento(src, dst, int(severidad)), st)
+    v = st["bloqueadas"].get(src)
+    if v is None:
+        print("incidente=(ninguno)")
+        return 0
+    tiempos = ("vence", "t_lectura", "t_post", "t_201")
+    print(f"ip_bloqueada={src}")
+    print(json.dumps({k: x for k, x in v.items() if k not in tiempos}, indent=2, ensure_ascii=False))
+    print(f"tiempos_ordenados={v['t_lectura'] <= v['t_post'] <= v['t_201']}")
+    print(f"vence_despues_de_t_201={v['vence'] > v['t_201']}")
+    return 0
 
 
 def cmd_lista_blanca(ip):
@@ -182,6 +218,10 @@ def main(argv):
             cmd_decidir(*args)
         elif cmd == "bloqueo" and len(args) >= 3:
             cmd_bloqueo(*args)
+        elif cmd == "regla" and len(args) in (1, 2):
+            return cmd_regla(*args)
+        elif cmd == "incidente" and len(args) == 3:
+            return cmd_incidente(*args)
         elif cmd == "lista-blanca" and len(args) == 1:
             cmd_lista_blanca(*args)
         elif cmd == "redes" and len(args) == 1:

@@ -268,14 +268,29 @@ def test_R5_03_3_3_5b_un_prefijo_invalido_se_detecta_al_arrancar(monkeypatch, va
 
 
 # =====================================================================================================
-# R5-04 (3.4.x) Regla DROP del perímetro: campos, prioridad y timeout.  Criterio: mitigación.
+# R5-04 (3.4.x) build_perimeter_rule(ip, device) y registrar_incidente: la regla DROP del perímetro y su registro.  Criterio: mitigación.
 # =====================================================================================================
 def test_R5_04_3_4_1_la_regla_descarta_solo_el_origen_con_prioridad_y_timeout():
-    f = integ.regla_drop("of:0000000000000001", "203.0.113.7")["flows"][0]
+    f = integ.build_perimeter_rule("203.0.113.7", "of:0000000000000001")
+    assert f["deviceId"] == "of:0000000000000001"
     assert f["priority"] == 42000 and f["timeout"] == 300 and f["isPermanent"] is False
     assert f["treatment"]["instructions"] == []                              # sin instrucciones = DROP
     crit = {(c["type"], c.get("ip") or c.get("ethType")) for c in f["selector"]["criteria"]}
     assert crit == {("ETH_TYPE", "0x0800"), ("IPV4_SRC", "203.0.113.7/32")}   # solo esa IP, no el resto
+    assert integ.regla_drop("of:0000000000000001", "203.0.113.7") == {"flows": [f]}   # el nombre anterior sigue entregando la misma regla
+
+
+@pytest.mark.parametrize("ip", ["no es ip", "203.0.113.999", "2001:db8::1", ""])
+def test_R5_04_3_4_1b_ip_invalida_o_ipv6_no_genera_regla(ip):
+    with pytest.raises(ValueError):          # la regla es de IPv4: un dato inválido no debe terminar como un selector basura en el switch
+        integ.build_perimeter_rule(ip, "of:0000000000000001")
+
+
+def test_R5_04_3_4_1c_prioridad_y_timeout_son_configurables(monkeypatch):
+    monkeypatch.setattr(integ, "PRIORITY", 43000)
+    monkeypatch.setattr(integ, "BLOCK_SEC", 60)
+    f = integ.build_perimeter_rule("203.0.113.7", "of:0000000000000001")
+    assert f["priority"] == 43000 and f["timeout"] == 60
 
 
 def test_R5_04_3_4_2_el_atacante_externo_se_bloquea_en_todos_los_cores(monkeypatch, onos):
@@ -287,13 +302,40 @@ def test_R5_04_3_4_2_el_atacante_externo_se_bloquea_en_todos_los_cores(monkeypat
     assert onos.posts()[0][2]["params"] == {"appId": "org.campus.r5"}
 
 
-def test_R5_04_3_4_3_registra_el_incidente_con_tiempos_y_flow_id(onos):
+def test_R5_04_3_4_2b_el_host_interno_se_bloquea_solo_en_su_borde(onos):
+    onos.hosts = [{"ipAddresses": ["10.0.0.21"], "locations": [{"elementId": "of:00000000000000a1"}]}]
+    st = estado()
+    integ.procesar(alerta("10.0.0.21", "198.51.100.9"), st)
+    flujos = onos.posts()[0][2]["json"]["flows"]
+    assert [f["deviceId"] for f in flujos] == ["of:00000000000000a1"]
+
+
+def test_R5_04_3_4_3_registra_el_incidente_con_origen_destino_accion_y_tiempos(onos):
     st = estado()
     t0 = time.time()
     integ.procesar(alerta("203.0.113.7", "10.0.0.50"), st, t_lectura=t0)
     v = st["bloqueadas"]["203.0.113.7"]
     assert v["flow_id"] == "777" and v["donde"] == "core" and v["t_alerta"]
+    assert v["destino"] == "10.0.0.50" and v["accion"] == "DROP" and v["sensor"] == integ.SENSOR     # quién, contra quién y qué se hizo
+    assert (v["sid"], v["firma"]) == (9000002, "LOCAL Port scan SYN")                              # tipo de ataque
     assert v["t_lectura"] <= v["t_post"] <= v["t_201"] and v["vence"] > v["t_201"]
+
+
+def test_R5_04_3_4_4_en_simulacion_no_toca_onos_pero_registra_el_incidente(onos, monkeypatch):
+    monkeypatch.setattr(integ, "DRY_RUN", True)
+    st = estado()
+    integ.procesar(alerta("203.0.113.7", "10.0.0.50"), st)
+    assert onos.posts() == []
+    assert st["bloqueadas"]["203.0.113.7"]["flow_id"] is None and st["bloqueadas"]["203.0.113.7"]["accion"] == "DROP"
+
+
+def test_R5_04_3_4_5_si_onos_no_devuelve_flowid_el_incidente_se_registra_igual(monkeypatch):
+    def sin_id(metodo, ruta, **kw):
+        return Resp({"flows": [{"deviceId": "of:0000000000000001"}]}) if metodo == "POST" else Resp()
+    monkeypatch.setattr(integ, "onos", sin_id)
+    st = estado()
+    integ.procesar(alerta("203.0.113.7", "10.0.0.50"), st)
+    assert st["bloqueadas"]["203.0.113.7"]["flow_id"] is None          # sin flowId no se podrá borrar por id, pero el bloqueo existe
 
 
 # =====================================================================================================
