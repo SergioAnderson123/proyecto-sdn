@@ -25,7 +25,7 @@ Propuesta mínima: **el server y el portal no cambian de IP** (`10.0.0.10`), y l
 | servicios | `sw-core-1` | 5 (server `ens4`) | `10.0.0.0/24` | `10.0.0.254` | — | `.10` server y portal | `10.0.0.10` → **`10.0.0.10`** (no cambia) |
 | acc-1 | `sw-acc-1` | 1 | `10.0.1.0/24` | `10.0.1.254` | `.100–.199`, servidor `.250` | `.201` | h1-profesor `10.0.0.201` → **`10.0.1.201`** |
 | acc-2 | `sw-acc-2` | 1 | `10.0.2.0/24` | `10.0.2.254` | `.100–.199`, servidor `.250` | `.202` | h2-alumno `10.0.0.202` → **`10.0.2.202`** |
-| externa | `switch-borde` | 1 | `203.0.113.0/24` | `203.0.113.254` | **sin DHCP** (los externos no obtienen IP) | `.103` (propuesta) | host-jhon (atacante simulado; sin IP hoy) |
+| externa | `switch-borde` | 1 | `203.0.113.0/24` | `203.0.113.254` | **sin DHCP** (los externos no obtienen IP) | `.103` (propuesta) | host-jhon (atacante simulado). **No se da de alta como host:** el borde lleva una **ruta por defecto** hacia el siguiente salto (la MAC de esa VM, `salida` del plan; ver `DISENO_CAPA3.md` V10) |
 
 - **Agregado del campus:** `10.0.0.0/16` (servicios y accesos) → ese es el `HOME_NET`. La subred `externa` queda **fuera** (es "el exterior"); `203.0.113.0/24` es el rango de documentación que ya proponía `group_vars/all.yml` (`red_externa`).
 - **Reservado para crecer:** `10.0.3.0/24 – 10.0.9.0/24` (más accesos), sin asignar.

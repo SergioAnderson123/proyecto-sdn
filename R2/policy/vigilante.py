@@ -369,6 +369,9 @@ def main(argv=None):
             log(f"NO ARRANCO: {e}")
             return 2
         log(f"MODO CAPA 3{' AISLADO en la tabla ' + str(arg.tabla) if arg.tabla != fp.TABLA_REENVIO else ''}{' (RETIRAR)' if arg.retirar else ''}: {len(plan.subredes)} subredes ({', '.join(s.nombre for s in plan.subredes)}).")
+        if plan.salida is not None:
+            log(f"Salida al exterior: ruta por defecto por {NOMBRES.get(plan.salida.dispositivo, plan.salida.dispositivo)}/{plan.salida.puerto} hacia el siguiente salto {plan.salida.mac}; "
+                f"no salen: {', '.join(str(p) for p in plan.salida.bloquear)}.")
     nucleo = [{v: k for k, v in NOMBRES.items()}.get(x.strip(), x.strip()) for x in arg.nucleo.split(",") if x.strip()] if arg.nucleo else None
     if not acceso and not plan:
         if arg.aplicar:

@@ -28,6 +28,9 @@ PRIO_ARP_LOCAL = fp.PRIO_DIFUSION   # 200: ARP en difusión, solo hacia puertos 
 PRIO_ENTREGA = 160          # IP de un host de este switch (/32): reescribe MAC y entrega
 PRIO_RUTA = 150             # prefijo de otra subred: hacia el switch de esa subred
 PRIO_SUBIDA = 120           # modo con ruta por defecto: lo que sale de un puerto de acceso va "hacia arriba"
+PRIO_BLOQUEO = 130          # con salida al exterior: las direcciones privadas sin ruta se descartan (nunca salen por la ruta por defecto)
+PRIO_DEFECTO = 110          # con salida al exterior: todo lo demás va hacia el switch de salida y sale por el siguiente salto
+BLOQUEO_PRIVADO = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 PRIO_L2_LOCAL = fp.PRIO_UNICAST     # 100: MAC de un host de este switch
 PRIO_DESCARTE = fp.PRIO_DESCARTE    # 1
 
@@ -55,12 +58,38 @@ class Subred:
         return f"Subred({self.nombre} {self.prefijo} gw {self.gateway} en {self.dispositivo}{list(self.puertos)})"
 
 
+class Salida:
+    """Ruta por defecto hacia el exterior: el switch `dispositivo` entrega por `puerto` a un único SIGUIENTE SALTO (la MAC del equipo del otro lado del enlace, como la del router del
+    proveedor). Así el exterior no se da de alta host por host: cualquier IP que no sea de la red interna sale por ahí. `bloquear`: prefijos que jamás salen (por defecto, los privados)."""
+
+    def __init__(self, dispositivo: str, puerto, mac: str, bloquear: Optional[Iterable[str]] = None):
+        if not _MAC.match(str(mac)):
+            raise PlanInvalido(f"salida: MAC del siguiente salto inválida: {mac}")
+        try:
+            self.puerto = int(puerto)
+        except (TypeError, ValueError):
+            raise PlanInvalido(f"salida: puerto inválido: {puerto}")
+        if self.puerto < 1:
+            raise PlanInvalido(f"salida: puerto inválido: {puerto}")
+        self.dispositivo, self.mac = dispositivo, str(mac).upper()
+        try:
+            self.bloquear = tuple(ipaddress.ip_network(p, strict=True) for p in (BLOQUEO_PRIVADO if bloquear is None else bloquear))
+        except ValueError as e:
+            raise PlanInvalido(f"salida: prefijo a bloquear inválido ({e})")
+        if any(p.version != 4 for p in self.bloquear):
+            raise PlanInvalido("salida: solo IPv4")
+
+    def __repr__(self):
+        return f"Salida({self.dispositivo}/{self.puerto} -> {self.mac})"
+
+
 class Plan:
-    def __init__(self, gw_mac: str, subredes: Iterable[Subred]):
+    def __init__(self, gw_mac: str, subredes: Iterable[Subred], salida: Optional[Salida] = None):
         if not _MAC.match(gw_mac):
             raise PlanInvalido(f"MAC del gateway inválida: {gw_mac}")
         self.gw_mac = gw_mac.upper()
         self.subredes: List[Subred] = list(subredes)
+        self.salida = salida
         self._validar()
 
     def _validar(self):
@@ -97,7 +126,15 @@ def cargar_plan(datos: dict, nombres: Optional[Dict[str, str]] = None) -> Plan:
             raise PlanInvalido(str(e))
     if not subredes:
         raise PlanInvalido("el plan no tiene subredes")
-    return Plan(datos.get("gw_mac", ""), subredes)
+    salida = None
+    if datos.get("salida") is not None:
+        s = datos["salida"]
+        try:
+            d = s["dispositivo"]
+            salida = Salida(por_nombre.get(d, d), s["puerto"], s["mac"], s.get("bloquear"))
+        except KeyError as e:
+            raise PlanInvalido(f"a la salida le falta el campo {e}")
+    return Plan(datos.get("gw_mac", ""), subredes, salida)
 
 
 def hosts_validos(plan: Plan, hosts: Iterable[dict]) -> Tuple[List[dict], List[Tuple[dict, str]]]:
@@ -220,6 +257,35 @@ def flujos_capa3(plan: Plan, grafo: caminos.Grafo, hosts: Iterable[dict], prefer
                 flujos.append(fp._base(d, tabla, PRIO_SUBIDA, [
                     {"type": "IN_PORT", "port": p}, {"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "ETH_DST", "mac": plan.gw_mac}],
                     [_dec_ttl(), _salida(arriba[d][1])]))
+    if plan.salida is not None:
+        flujos += _flujos_de_salida(plan, grafo, preferidos, nucleo_set, tabla)
+    return flujos
+
+
+def _flujos_de_salida(plan: Plan, grafo: caminos.Grafo, preferidos: List[str], nucleo_set: Optional[set], tabla: int) -> List[dict]:
+    """Ruta por defecto hacia el exterior. Todo en la tabla de reenvío, solo para IPv4 con la MAC del gateway (igual que el resto de la capa 3):
+      - switch de salida: una regla (PRIO_DEFECTO) que reescribe origen = gateway y destino = siguiente salto, decrementa el TTL y saca por el puerto de salida;
+      - los demás switches con rutas completas: una regla (PRIO_DEFECTO) hacia el switch de salida por el árbol;
+      - en todos ellos, el descarte de los prefijos privados (PRIO_BLOQUEO): sobre la ruta por defecto, bajo las rutas y entregas reales, así que una IP interna que no existe
+        se descarta en vez de salir al exterior.
+    Una IP externa nueva no necesita ninguna regla nueva."""
+    sal = plan.salida
+    if sal.dispositivo not in grafo:
+        raise PlanInvalido(f"la salida usa el switch {sal.dispositivo}, que no está en la topología")
+    if nucleo_set is not None and sal.dispositivo not in nucleo_set:
+        raise PlanInvalido(f"el switch de salida {sal.dispositivo} debe ser del núcleo (switches con rutas completas)")
+    gw = plan.gw_mac
+    ipv4_al_gateway = [{"type": "ETH_TYPE", "ethType": "0x0800"}, {"type": "ETH_DST", "mac": gw}]
+    arbol = caminos.arbol_hacia(grafo, sal.dispositivo, preferidos)
+    flujos = [fp._base(sal.dispositivo, tabla, PRIO_DEFECTO, ipv4_al_gateway, [
+        {"type": "L2MODIFICATION", "subtype": "ETH_SRC", "mac": gw}, {"type": "L2MODIFICATION", "subtype": "ETH_DST", "mac": sal.mac},
+        _dec_ttl(), _salida(sal.puerto)])]
+    con_rutas = [sal.dispositivo] + [d for d in sorted(grafo) if d != sal.dispositivo and d in arbol and (nucleo_set is None or d in nucleo_set)]
+    for d in con_rutas:
+        if d != sal.dispositivo:
+            flujos.append(fp._base(d, tabla, PRIO_DEFECTO, ipv4_al_gateway, [_dec_ttl(), _salida(arbol[d][1])]))
+        for prefijo in sal.bloquear:
+            flujos.append(fp._base(d, tabla, PRIO_BLOQUEO, ipv4_al_gateway + [{"type": "IPV4_DST", "ip": str(prefijo)}], []))
     return flujos
 
 

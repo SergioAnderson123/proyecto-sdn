@@ -99,7 +99,8 @@ def hosts_con_ip(plan, hosts: Iterable[dict]) -> List[dict]:
 def plan_vivo(plan, grafo: c.Grafo):
     """El plan sin las subredes cuyo switch no está vivo (un switch caído no debe impedir calcular el resto; sus hosts quedan sin camino, que es lo correcto)."""
     vivas = [s for s in plan.subredes if s.dispositivo in grafo]
-    return l3.Plan(plan.gw_mac, vivas) if vivas else None
+    salida = plan.salida if plan.salida is not None and plan.salida.dispositivo in grafo else None       # sin el switch de salida no hay ruta por defecto, pero lo interno sigue
+    return l3.Plan(plan.gw_mac, vivas, salida) if vivas else None
 
 
 PRIO_ENTRADA = 40060        # sobre la sesión (40001), el portal (40002) y el ARP proactivo (40003); bajo la lista negra (45000)
