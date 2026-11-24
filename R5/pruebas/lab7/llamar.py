@@ -11,6 +11,8 @@ Subcomandos (desde la raiz del repositorio):
   llamar.py decidir SRC DST [DIRECCION] decidir(evento): a quien se bloquea y donde (core | borde), o None
   llamar.py bloqueo SRC DST SEVERIDAD [DIRECCION] [IP=DEVICE ...]
                                         procesar(alerta) completo con un ONOS falso; IP=DEVICE indica donde ve ONOS a un host interno
+  llamar.py lista-blanca IP             en_lista_blanca(IP) con LISTA_BLANCA del entorno (10.0.0.99/32 y 10.0.0.10/32 por defecto)
+  llamar.py redes VALOR                 redes(VALOR): como se leen los prefijos de una variable (HOME_NET, LISTA_BLANCA); ValueError si es invalido
 Codigo de salida: 0 si la funcion termino sin excepcion; 1 si lanzo una.
 """
 import importlib
@@ -145,6 +147,21 @@ def cmd_bloqueo(src, dst, severidad, *resto):
         print(f"registro: {ip} -> device={v['device']}, donde={v['donde']}, sid={v['sid']}")
 
 
+def cmd_lista_blanca(ip):
+    print(f"ip={ip} en_lista_blanca={integ.en_lista_blanca(ip)} lista={','.join(str(r) for r in integ.LISTA_BLANCA)}")
+
+
+def cmd_redes(valor):
+    os.environ["PRUEBA_LISTA"] = valor
+    try:
+        r = integ.redes("PRUEBA_LISTA", "")
+    except ValueError as e:                                       # un prefijo invalido debe detectarse al arrancar: aqui es lo esperado
+        print(f"ValueError: {e}")
+        return 0
+    print(f"redes={','.join(str(x) for x in r) or '(ninguna)'}")
+    return 0
+
+
 def main(argv):
     if not argv:
         print(__doc__)
@@ -165,6 +182,10 @@ def main(argv):
             cmd_decidir(*args)
         elif cmd == "bloqueo" and len(args) >= 3:
             cmd_bloqueo(*args)
+        elif cmd == "lista-blanca" and len(args) == 1:
+            cmd_lista_blanca(*args)
+        elif cmd == "redes" and len(args) == 1:
+            return cmd_redes(*args)
         else:
             print(__doc__)
             return 2

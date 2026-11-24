@@ -196,26 +196,75 @@ def test_R5_02_3_2_5_externo_se_bloquea_en_el_core_e_interno_en_su_borde(onos):
 
 
 # =====================================================================================================
-# R5-03 (3.3.x) Lista blanca: una IP legítima nunca se bloquea.  Criterio: falsos positivos.
+# R5-03 (3.3.x) en_lista_blanca(ip) y lista blanca en decidir/procesar: una IP legítima nunca se bloquea.  Criterio: falsos positivos.
 # =====================================================================================================
+@pytest.mark.parametrize("ip,esperado", [
+    ("10.0.0.99", True),            # en la lista
+    ("10.0.0.10", True),            # en la lista
+    ("10.0.0.98", False),           # vecina anterior
+    ("10.0.0.100", False),          # vecina siguiente
+    ("203.0.113.7", False),         # externa que no está
+    ("no es una ip", False),        # dato inválido: no revienta y no se considera protegida
+    ("", False),
+])
+def test_R5_03_3_3_1_en_lista_blanca_segun_la_ip(ip, esperado):
+    assert integ.en_lista_blanca(ip) is esperado
+
+
+@pytest.mark.parametrize("ip,esperado", [
+    ("10.0.0.0", True), ("10.0.0.3", True),          # extremos del /30
+    ("10.0.0.4", False),                             # justo fuera del /30
+    ("192.0.2.5", True),                             # una IP externa conocida (p. ej. un NAT de salida) también puede protegerse
+    ("192.0.2.6", False),
+])
+def test_R5_03_3_3_1b_la_lista_acepta_rangos_y_ips_externas(monkeypatch, ip, esperado):
+    monkeypatch.setattr(integ, "LISTA_BLANCA", [integ.ipaddress.ip_network("10.0.0.0/30"), integ.ipaddress.ip_network("192.0.2.5/32")])
+    assert integ.en_lista_blanca(ip) is esperado
+
+
 @pytest.mark.parametrize("src,dst", [("10.0.0.99", "203.0.113.7"), ("10.0.0.10", "198.51.100.9")])
-def test_R5_03_3_3_1_ip_en_lista_blanca_no_se_bloquea(onos, src, dst):
+def test_R5_03_3_3_2_ip_interna_en_lista_blanca_no_se_bloquea(onos, src, dst):
     st = estado()
     integ.procesar(alerta(src, dst), st)
     assert st["bloqueadas"] == {} and onos.posts() == []
 
 
-def test_R5_03_3_3_2_ip_no_listada_se_bloquea_y_la_blanca_vecina_no(onos):
+def test_R5_03_3_3_2b_ip_externa_en_lista_blanca_no_se_bloquea(onos, monkeypatch):
+    monkeypatch.setattr(integ, "LISTA_BLANCA", [integ.ipaddress.ip_network("192.0.2.5/32")])
+    st = estado()
+    integ.procesar(alerta("192.0.2.5", "10.0.0.50"), st)          # externo -> interno: sin la lista blanca sería un bloqueo en el core
+    assert st["bloqueadas"] == {} and onos.posts() == []
+
+
+def test_R5_03_3_3_3_ip_no_listada_se_bloquea_y_la_blanca_vecina_no(onos):
     st = estado()
     integ.procesar(alerta("10.0.0.98", "203.0.113.7"), st)      # vecina de 10.0.0.99, pero no está en la lista
     integ.procesar(alerta("10.0.0.99", "203.0.113.7"), st)
     assert list(st["bloqueadas"]) == ["10.0.0.98"]
 
 
-def test_R5_03_3_3_3_la_lista_blanca_protege_solo_a_la_ip_que_se_iba_a_bloquear(onos):
+def test_R5_03_3_3_4_la_lista_blanca_protege_solo_a_la_ip_que_se_iba_a_bloquear(onos):
     st = estado()
     integ.procesar(alerta("203.0.113.7", "10.0.0.10"), st)      # destino en lista blanca: el atacante sí se bloquea
     assert "203.0.113.7" in st["bloqueadas"]
+
+
+def test_R5_03_3_3_4b_firma_sobre_la_respuesta_del_servidor_protegido(onos):
+    st = estado()
+    integ.procesar(alerta("10.0.0.10", "203.0.113.7", direction="to_client"), st)   # el servidor (en lista blanca) responde: el atacante es el destino
+    assert list(st["bloqueadas"]) == ["203.0.113.7"]
+
+
+def test_R5_03_3_3_5_la_lista_ignora_entradas_vacias(monkeypatch):
+    monkeypatch.setenv("PRUEBA_LISTA", "10.0.0.40/32, ,10.0.0.50/32,")
+    assert [str(r) for r in integ.redes("PRUEBA_LISTA", "")] == ["10.0.0.40/32", "10.0.0.50/32"]
+
+
+@pytest.mark.parametrize("valor", ["10.0.0.0/33", "no-es-red", "10.0.0.5/24"])     # el último trae bits de host: ONOS/Suricata lo rechazan también
+def test_R5_03_3_3_5b_un_prefijo_invalido_se_detecta_al_arrancar(monkeypatch, valor):
+    monkeypatch.setenv("PRUEBA_LISTA", valor)
+    with pytest.raises(ValueError):
+        integ.redes("PRUEBA_LISTA", "")
 
 
 # =====================================================================================================

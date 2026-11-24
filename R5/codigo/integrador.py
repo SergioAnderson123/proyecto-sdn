@@ -430,6 +430,18 @@ def en(a, lista):
     return any(a in n for n in lista)
 
 
+def en_lista_blanca(ip):
+    """True si `ip` (texto o ipaddress) pertenece a la lista blanca (LISTA_BLANCA): una IP que nunca se debe bloquear.
+
+    La lista admite prefijos de cualquier tamaño y también IPs externas conocidas (p. ej. el NAT de salida de la PUCP). Un dato que no
+    es una IP válida devuelve False en lugar de lanzar una excepción: sin evidencia no se protege, pero tampoco se interrumpe al integrador."""
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return en(a, LISTA_BLANCA)
+
+
 def decidir(ev):
     """Decide a quién bloquear y dónde, a partir de una alerta EVE.
 
@@ -452,7 +464,7 @@ def decidir(ev):
         res = (src, "borde")         # ataque dentro de la intranet (R3/R4) -> DROP en el borde del origen
     else:
         return None
-    if en(res[0], LISTA_BLANCA):     # solo se protege a la IP que se iba a bloquear
+    if en_lista_blanca(res[0]):      # solo se protege a la IP que se iba a bloquear
         log.warning("IP en lista blanca, no se bloquea: %s", res[0])
         return None
     return str(res[0]), res[1]
