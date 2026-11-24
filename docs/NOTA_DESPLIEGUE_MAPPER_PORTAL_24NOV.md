@@ -50,7 +50,22 @@ Es el mismo resultado que con `6726bc4`: la reparación funciona, pero la verifi
 
 h1 está autenticado ahora mismo por 802.1X (`profesor01`, sesión `922bf7cb`, flujo 40001 `ADDED` en sw-acc-1 puerto 1, `8101` → `Connection refused`), así que sirve tal cual para el paso 1 de la validación del portal (`NOTA_PORTAL_MAC_POR_IP.md`, §7): con el token puesto en el portal, `curl -sk https://10.0.0.10:8443/` desde h1 debe mostrar su sesión y no el formulario. El mapper ya resuelve su IP: `GET /portal/estado?ip=10.0.1.100` con el token devuelve `profesor01`, rol Docente, 802.1X.
 
+## Token en el portal y validación (05:10–05:13)
+
+- En el `server` se cambió solo la línea `Environment="PORTAL_TOKEN=…"` de `/etc/systemd/system/r1-portal.service` (copia en `r1-portal.service.bak-20261124a`) y se reinició `r1-portal`. La huella del token en la unidad y en el proceso es `9f0a63c24e8a`, la misma que en el mapper. El `server.py` ya era el nuevo (manda la IP de origen).
+- Validación de `NOTA_PORTAL_MAC_POR_IP.md` §7:
+
+| Prueba | Resultado |
+|---|---|
+| h1 (802.1X, `profesor01`) abre `https://10.0.0.10:8443/` | «Sesión activa · Hola, profesor01 · Rol: Docente · método: 802.1X» (ya no ve el formulario). El mapper resolvió `?ip=10.0.1.100` con el token |
+| Contraseña mala desde h1 | «Usuario o contraseña incorrectos», `POST /portal/login` 401 y evento `rechazado` |
+| h2 sin agente 802.1X → `guest01` por el portal | «Sesión activa · Rol: Invitado · método: Portal»; `/sessions` con `guest01`, VLAN 50; flujo 40001 en `of:…c741` con VLAN 50; evento `admitido` («Portal cautivo: tabla 50») |
+| Alcance del invitado | `8003` (portal universitario) → `Connection refused` (llega); `8101` (notas) → `timed out` (bloqueado) |
+| Cerrar sesión por el portal | evento `logout`, la sesión y el flujo 40001 desaparecen |
+| Volver a arrancar el agente de h2 | `alumno01` de nuevo en VLAN 20, `8001` → `Connection refused` |
+
+Al terminar: las tres réplicas `ready` con 2 sesiones (`profesor01`, `alumno01`), sus flujos 40001 `ADDED` vistos desde los tres ONOS, y `95` sin tormenta. Justo después de instalarse, ctrl-2 mostró el flujo nuevo de h2 en `PENDING_ADD` unos segundos aunque ya pasaba tráfico.
+
 ## Pendiente
 
-- **Portal:** el `server` todavía no manda el token, así que sus `POST /portal/login` reciben 403 del mapper hasta que `r1-portal` tenga el mismo `PORTAL_TOKEN` (`portal.yml`, variable `portal_token`).
 - La lentitud de etcd y de las transacciones no cambió con este despliegue; la causa sigue sin conocerse.
