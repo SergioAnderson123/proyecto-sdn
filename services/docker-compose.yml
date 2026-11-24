@@ -1,24 +1,64 @@
 services:
-  alumnos:
+  grade_system:
     image: httpd:2.4
-    container_name: s-alumnos
+    container_name: grade_system
     ports:
-      - "8081:80"
+      - "8101:80"
     volumes:
-      - ./servidor-alumnos:/usr/local/apache2/htdocs:ro
+      - ./grade_system:/usr/local/apache2/htdocs:ro
 
-  notas:
+  learning_platform:
     image: httpd:2.4
-    container_name: s-notas
+    container_name: learning_platform
     ports:
-      - "8082:80"
+      - "8002:80"
     volumes:
-      - ./servidor-notas:/usr/local/apache2/htdocs:ro
+      - ./learning_platform:/usr/local/apache2/htdocs:ro
 
-  portal-cautivo:
+  network_management:
     image: httpd:2.4
-    container_name: s-cautivo
+    container_name: network_management
     ports:
-      - "8083:80"
+      - "8105:80"
     volumes:
-      - ./servidor-cautivo:/usr/local/apache2/htdocs:ro
+      - ./network_management:/usr/local/apache2/htdocs:ro
+
+  print_server:
+    image: httpd:2.4
+    container_name: print_server
+    ports:
+      - "8104:80"
+    volumes:
+      - ./print_server:/usr/local/apache2/htdocs:ro
+
+  research_database:
+    image: httpd:2.4
+    container_name: research_database
+    ports:
+      - "8103:80"
+    volumes:
+      - ./research_database:/usr/local/apache2/htdocs:ro
+
+  student_records:
+    image: httpd:2.4
+    container_name: student_records
+    ports:
+      - "8102:80"
+    volumes:
+      - ./student_records:/usr/local/apache2/htdocs:ro
+
+  university_portal:
+    image: httpd:2.4
+    container_name: university_portal
+    ports:
+      - "8003:80"
+    volumes:
+      - ./university_portal:/usr/local/apache2/htdocs:ro
+
+  virtual_library:
+    image: httpd:2.4
+    container_name: virtual_library
+    ports:
+      - "8001:80"
+    volumes:
+      - ./virtual_library:/usr/local/apache2/htdocs:ro
