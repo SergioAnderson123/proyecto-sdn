@@ -14,7 +14,10 @@ Las funciones `flujos_*` son puras (sin red) para poder probarlas; `sincronizar`
 """
 import os
 from collections import Counter
+from datetime import date
 from typing import Dict, List, Optional
+
+import excepciones
 
 try:
     import httpx
@@ -65,6 +68,11 @@ def cargar_politica(ruta: Optional[str] = None) -> dict:
             _fusionar(p, yaml.safe_load(f) or {})
     for clave in ("roles", "services", "trusted", "rules"):
         p.setdefault(clave, {} if clave != "rules" else [])
+    # Excepciones por cuenta (R2/policy/excepciones.py): su propio archivo junto a policy.yaml. Si no existe, no hay excepciones y la política
+    # queda igual que antes. Si existe y está mal, se rechaza ENTERA (ExcepcionesInvalidas): nunca una política a medias.
+    datos = excepciones.leer(excepciones.ruta_excepciones(ruta))
+    if datos is not None:
+        p["excepciones"] = excepciones.validar(p, datos, date.today())
     return p
 
 

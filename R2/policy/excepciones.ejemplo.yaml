@@ -1,0 +1,8 @@
+# Ejemplo de excepciones por cuenta (R2/policy/excepciones.py). NO se carga: para usarlo, copiarlo como excepciones.yaml junto a policy.yaml
+# (o apuntar EXCEPCIONES_PATH a él). Sin excepciones.yaml la política queda igual que antes.
+# Reglas: solo cuentas del rol de `roles`; como mucho 3 servicios por usuario y 10 usuarios; `hasta` opcional (AAAA-MM-DD, a 90 días como mucho);
+# `motivo` obligatorio; ningún servicio de `no_excepcionables`; nada que el rol ya tenga. Un archivo inválido se rechaza entero.
+roles: [docente]
+no_excepcionables: [network_management]
+lista:
+  - {usuario: profesor01, servicios: [student_records], hasta: "2026-12-31", motivo: "Coordinación de matrícula"}

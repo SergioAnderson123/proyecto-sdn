@@ -6,7 +6,7 @@ import tarfile
 root = Path(__file__).resolve().parents[2]
 def build(destination):
     sources = list((root/'R1/shared/policy_mapper').glob('*.py'))
-    sources += [root/'R2/policy'/name for name in ('policy_tables.py', 'portal_auth.py', 'policy.yaml')]
+    sources += [root/'R2/policy'/name for name in ('policy_tables.py', 'excepciones.py', 'portal_auth.py', 'policy.yaml')]
     with tarfile.open(destination, 'w:gz') as bundle:
         for source in sorted(sources):
             bundle.add(source, arcname=source.name)

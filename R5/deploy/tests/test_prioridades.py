@@ -43,6 +43,13 @@ def test_r2_sesion_confianza_y_tablas_coinciden_con_el_mapa(mapa):
     assert {r: d["tabla"] for r, d in roles.items()} == mapa["r2"]["tablas"]
 
 
+def test_la_excepcion_por_cuenta_coincide_con_el_mapa_y_queda_sobre_las_reglas_del_rol(mapa):
+    import excepciones
+    assert excepciones.PRIO_EXCEPCION == mapa["r2"]["excepcion"]
+    assert mapa["r2"]["tabla_rol"] < mapa["r2"]["excepcion"] < mapa["r2"]["portal"]   # en la tabla del rol, sobre sus reglas (y lejos de la tabla 0)
+    assert excepciones.APP_ID_EXCEPCIONES != pt.APP_ID                              # el contador de dispositivos_incompletos no debe verlas
+
+
 def test_portal_cautivo_coincide_con_el_mapa_y_cede_ante_la_sesion(mapa):
     assert pt.PRIO_PORTAL_ARP == mapa["r2"]["portal_arp"] and pt.PRIO_PORTAL_RETORNO == mapa["r2"]["portal_retorno"]
     assert pt.PRIO_PORTAL == mapa["r2"]["portal"]

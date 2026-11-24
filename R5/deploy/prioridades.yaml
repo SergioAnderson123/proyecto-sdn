@@ -11,6 +11,7 @@ r2:
   sesion: 40001         # in_port + eth_src -> push_vlan + goto_table (solo switches de acceso)
   confianza: 40001      # puertos de servidores y troncales -> NORMAL
   tabla_rol: 30000      # reglas permitidas dentro de las tablas de rol (10, 20, 40): otra tabla, no compite con la tabla 0
+  excepcion: 30500      # excepción de una cuenta (R2/policy/excepciones.py): la regla del rol + ETH_SRC de su equipo, en la tabla del rol; sobre las reglas del rol (30000), appId org.campus.excepciones
   tablas: {docente: 10, alumno: 20, soporte: 40, invitado: 50}   # la 30 queda reservada a IoT/MAB
   portal_arp: 40002     # portal cautivo: ARP de quien no tiene sesión (R1 solo lo manda al controlador)
   portal_retorno: 40002 # portal cautivo: reescribe la respuesta del portal al destino original (sobre la confianza de la troncal)

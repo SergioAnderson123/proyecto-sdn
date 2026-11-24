@@ -42,6 +42,7 @@ CATALOGO: List[Tuple[Optional[int], int, str]] = [
     (0, 5, "Núcleo de ONOS: ARP al controlador, regla por defecto de ONOS (org.onosproject.core)"),
     (0, 35000, "Portal cautivo: tráfico al portal y desvío del HTTP (bajo la sesión: con sesión nunca se desvía)"),
     (0, 1000, "Sin sesión ni otra regla: pone la VLAN de cuarentena y salta a su tabla (solo ARP y portal)"),
+    (None, 30500, "Tabla de rol: excepción de una cuenta (un servicio extra solo para la MAC de su equipo, mientras dure su sesión)"),
     (None, 30000, "Tabla de rol: un servicio permitido (VLAN del rol + IP y puerto TCP del servicio)"),
     (None, 310, "Tabla 60: la respuesta ARP a la MAC del gateway sube al controlador (sondeo de presencia, campus-dhcp)"),
     (None, 300, "Tabla 60: ARP dirigido al gateway virtual; lo contesta el propio switch (campus-gatewayarp)"),
