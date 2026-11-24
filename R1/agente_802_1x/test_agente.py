@@ -165,7 +165,7 @@ def test_si_el_policy_mapper_no_tiene_aun_la_sesion_no_se_guarda_esa_respuesta(a
     agente.conectar("profesor01")
     monkeypatch.setattr(agente, "_wpa_cli", lambda: {"suppPortStatus": "Authorized"})
     respuestas = iter([{"sessions": {}}, {"sessions": {MAC: {"vlan": 10, "rol": "Docente"}}}])
-    monkeypatch.setattr(ag, "http_json", lambda url, timeout=3: next(respuestas))
+    monkeypatch.setattr(ag, "http_json", lambda url, timeout=3: [] if url.endswith("/events") else next(respuestas))
     assert agente.estado()["sesion"] is None            # todavia no esta
     assert agente.estado()["sesion"]["vlan"] == 10      # a la siguiente ya la ve, sin esperar a que caduque la cache
 
@@ -177,6 +177,25 @@ def test_estado_rechazado_muestra_el_motivo_del_policy_mapper(agente, monkeypatc
     monkeypatch.setattr(ag, "http_json", lambda url, timeout=3: [ev])
     e = agente.estado()
     assert e["estado"] == "rechazado" and "lista negra" in e["mensaje"]
+
+
+def test_autenticado_por_802_1x_pero_rechazado_por_el_policy_mapper_no_se_muestra_en_verde(agente, monkeypatch):
+    # alumno01 con la MAC de otro equipo: el certificado vale (Authorized) pero el mapper lo deja en lista negra por ubicacion no autorizada
+    agente.conectar("alumno01")
+    monkeypatch.setattr(agente, "_wpa_cli", lambda: {"suppPortStatus": "Authorized"})
+    ev = {"t": agente.desde + 1, "tipo": "conflicto", "mac": MAC, "detalle": "Ubicacion no autorizada (of:1:1); se esperaba of:2:1. Posible clonacion; lista negra 600 s"}
+    monkeypatch.setattr(ag, "http_json", lambda url, timeout=3: [ev] if url.endswith("/events") else {"sessions": {}})
+    e = agente.estado()
+    assert e["estado"] == "rechazado" and e["sesion"] is None and "Ubicacion no autorizada" in e["mensaje"]
+
+
+def test_autenticado_sin_sesion_ni_rechazo_sigue_como_autenticado(agente, monkeypatch):
+    agente.conectar("alumno01")
+    monkeypatch.setattr(agente, "_wpa_cli", lambda: {"suppPortStatus": "Authorized"})
+    viejo = {"t": agente.desde - 500, "tipo": "conflicto", "mac": MAC, "detalle": "de una conexion anterior"}
+    monkeypatch.setattr(ag, "http_json", lambda url, timeout=3: [viejo] if url.endswith("/events") else {"sessions": {}})
+    e = agente.estado()
+    assert e["estado"] == "autenticado" and "sin datos del Policy Mapper" in e["mensaje"]
 
 
 def test_desconectado_sin_proceso(agente):

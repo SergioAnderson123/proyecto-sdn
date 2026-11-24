@@ -303,7 +303,15 @@ class Agente:
                 resp["sesion"] = sesion
                 resp["mensaje"] = f"Acceso concedido como {rol} (VLAN {sesion.get('vlan', vlan)})"
             else:
-                resp["mensaje"] = "Autenticado por 802.1X; sin datos del Policy Mapper"
+                # El certificado fue valido (RADIUS acepto y wpa_supplicant esta Authorized), pero el Policy Mapper decide despues
+                # sobre MAC, ubicacion y sesiones duplicadas: si rechazo a este equipo, "autenticado" en verde seria enganoso (la
+                # red lo descarta o lo deja en cuarentena). Se muestra el motivo del Policy Mapper.
+                rechazo = ultimo_rechazo(mac, self.consultar_mapper("/events", ttl=2.0), desde) if mac else None
+                if rechazo:
+                    resp["estado"] = "rechazado"
+                    resp["mensaje"] = rechazo.get("detalle", "Acceso denegado por el Policy Mapper")
+                else:
+                    resp["mensaje"] = "Autenticado por 802.1X; sin datos del Policy Mapper"
         elif estado == "rechazado":
             ev = ultimo_rechazo(mac, self.consultar_mapper("/events", ttl=2.0), desde) if mac else None
             resp["mensaje"] = ev.get("detalle", "Acceso denegado") if ev else "El servidor rechazo la autenticacion"
