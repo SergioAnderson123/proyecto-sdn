@@ -97,7 +97,7 @@ def test_los_filtros_se_aplican_en_el_servidor_y_arman_el_comando_para_el_switch
     base, _ = servidor()
     c, j = pedir(base + "/api/flujos?switch=acc-1&tabla=60&ip_dst=10.0.1.100&prioridad=100-200")
     assert c == 200 and [(f["tabla"], f["prioridad"]) for f in j["flujos"]] == [(60, 160)] and j["total"] == 1 and j["total_switch"] == 7
-    assert j["comandos"]["principal"].startswith('sudo ovs-ofctl -O OpenFlow13 dump-flows br0 "table=60,ip,nw_dst=10.0.1.100"') and "p[1]>=100 && p[1]<=200" in j["comandos"]["principal"]
+    assert j["comandos"]["principal"].startswith('sudo ovs-ofctl -O OpenFlow13 dump-flows br0 "table=60,ip,nw_dst=10.0.1.100"') and 'grep -E "priority=(1[0-9]{2}|200)[, ]"' in j["comandos"]["principal"]
     assert j["filtros"] == {"tabla": "60", "prioridad": "100-200", "ip_dst": "10.0.1.100"}
     c, j = pedir(base + "/api/flujos?switch=acc-1&ip_dst_cubre=10.0.2.77")
     assert j["total"] == 2 and j["comandos"]["traza"] is None                                            # la ruta 10.0.2.0/24 y el bloqueo 10/8 contienen esa IP; sin puerto de entrada no hay traza

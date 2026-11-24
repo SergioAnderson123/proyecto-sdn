@@ -284,6 +284,75 @@ def cookies_por_app(crudos: Iterable[dict]) -> Dict[str, str]:
     return {app: f"0x{next(iter(v)):x}000000000000" for app, v in vistos.items() if len(v) == 1 and next(iter(v)) > 0}
 
 
+PRIORIDAD_MAX_ABIERTA = 99999       # «40000-» (sin tope) se escribe hasta 99999: ninguna prioridad de OpenFlow pasa de 65535, y así la expresión de grep queda corta y legible
+
+
+def _clase(a: int, b: int) -> str:
+    return str(a) if a == b else f"[{a}-{b}]"
+
+
+def _libres(n: int) -> str:
+    return "" if n == 0 else ("[0-9]" if n == 1 else f"[0-9]{{{n}}}")
+
+
+def _trozos(lo: str, hi: str) -> List[Tuple[str, int, int]]:
+    """Trozos (expresión, desde, hasta) cuya unión son los números de [lo, hi], ambos con los mismos dígitos. Cada trozo fija un prefijo y deja libres los dígitos que sobran."""
+    n = len(lo)
+    if n == 0:
+        return [("", 0, 0)]
+    if n == 1:
+        return [(_clase(int(lo), int(hi)), int(lo), int(hi))]
+    if lo == "0" * n and hi == "9" * n:                        # todos los números de n dígitos: [0-9]{n}
+        return [(_libres(n), 0, 10 ** n - 1)]
+    d1, d2, peso = int(lo[0]), int(hi[0]), 10 ** (n - 1)
+    if d1 == d2:
+        return [(lo[0] + rx, d1 * peso + a, d1 * peso + b) for rx, a, b in _trozos(lo[1:], hi[1:])]
+    lleno_abajo, lleno_arriba = lo[1:] == "0" * (n - 1), hi[1:] == "9" * (n - 1)
+    out = []
+    if not lleno_abajo:
+        out += [(lo[0] + rx, d1 * peso + a, d1 * peso + b) for rx, a, b in _trozos(lo[1:], "9" * (n - 1))]
+    medio_a, medio_b = (d1 if lleno_abajo else d1 + 1), (d2 if lleno_arriba else d2 - 1)
+    if medio_a <= medio_b:
+        out.append((_clase(medio_a, medio_b) + _libres(n - 1), medio_a * peso, (medio_b + 1) * peso - 1))
+    if not lleno_arriba:
+        out += [(hi[0] + rx, d2 * peso + a, d2 * peso + b) for rx, a, b in _trozos("0" * (n - 1), hi[1:])]
+    return out
+
+
+_FORMA = re.compile(r"^(\[\d-\d\]|\d)(?:\[0-9\](?:\{(\d+)\})?)?$")
+
+
+def regex_rango(a: int, b: int) -> Tuple[str, List[Tuple[str, int, int]]]:
+    """Una expresión regular (para `grep -E`) que acepta exactamente los enteros de a a b, y los tramos que la forman con su rango numérico (para explicarla)."""
+    trozos: List[Tuple[str, int, int]] = []
+    for largo in range(len(str(a)), len(str(b)) + 1):
+        lo, hi = max(a, 0 if largo == 1 else 10 ** (largo - 1)), min(b, 10 ** largo - 1)
+        if lo <= hi:
+            trozos += _trozos(str(lo), str(hi))
+    unidos: List[list] = []                                    # [clase, libres_min, libres_max, [(desde, hasta)...]]: «[1-9][0-9]{2}» y «[1-9][0-9]{3}» se escriben «[1-9][0-9]{2,3}»
+    for rx, d, h in trozos:
+        m = _FORMA.match(rx)
+        if m:
+            libres = 0 if rx == m.group(1) else (1 if m.group(2) is None else int(m.group(2)))
+            if unidos and isinstance(unidos[-1], list) and unidos[-1][0] == m.group(1) and unidos[-1][2] + 1 == libres:
+                unidos[-1][2], unidos[-1][3] = libres, unidos[-1][3] + [(d, h)]
+                continue
+            unidos.append([m.group(1), libres, libres, [(d, h)]])
+        else:
+            unidos.append([None, rx, d, h])
+    expresiones, tramos = [], []
+    for u in unidos:
+        if u[0] is None:
+            expresiones.append(u[1])
+            tramos.append((u[1], u[2], u[3]))
+        else:
+            clase, mn, mx, rangos = u
+            rx = clase + ("" if mx == 0 else (_libres(mx) if mn == mx else f"[0-9]{{{mn},{mx}}}"))
+            expresiones.append(rx)
+            tramos.append((rx, rangos[0][0], rangos[-1][1]))
+    return "|".join(expresiones), tramos
+
+
 # ---------- comandos para el switch real ----------
 def _ovs_match(f: Dict[str, str]) -> Tuple[List[str], List[str]]:
     """(campos de ovs-ofctl, notas) a partir de los filtros que ovs-ofctl sabe expresar. Ojo: `dump-flows` con un filtro muestra los flujos cuyo match está CONTENIDO en él."""
@@ -317,11 +386,25 @@ def _ovs_match(f: Dict[str, str]) -> Tuple[List[str], List[str]]:
     return t, notas
 
 
-def comandos_ovs(filtros: Dict[str, str], cookie_app: Optional[str] = None, puente: str = "br0", version: str = "OpenFlow13") -> dict:
-    """Los comandos que, EN LA VM DEL SWITCH, enseñan lo mismo que el panel con esos filtros. Devuelve {principal, tablas, traza, notas}.
+EXPLICA_CAMPO = {
+    "ip": "solo paquetes IPv4", "arp": "solo paquetes ARP", "tcp": "solo paquetes IPv4 con TCP", "udp": "solo paquetes IPv4 con UDP", "icmp": "solo paquetes ICMP (ping)",
+    "dl_type": "solo el tipo de Ethernet", "nw_proto": "solo el protocolo IP con ese número", "in_port": "que entraron por ese número de puerto de OpenFlow", "dl_src": "con esa MAC de origen",
+    "dl_dst": "con esa MAC de destino", "nw_src": "con IP de origen igual o dentro de esa red", "nw_dst": "con IP de destino igual o dentro de esa red", "tcp_src": "con ese puerto TCP de origen",
+    "tcp_dst": "con ese puerto TCP de destino", "udp_src": "con ese puerto UDP de origen", "udp_dst": "con ese puerto UDP de destino", "dl_vlan": "con esa VLAN", "arp_op": "con esa operación ARP (1 = petición, 2 = respuesta)",
+    "table": "solo la tabla de OpenFlow con ese número", "cookie": "solo los flujos de esa app: ONOS guarda en el cookie de cada flujo el número de la app que lo instaló (los 16 bits de arriba) y la máscara hace que solo se compare esa parte",
+}
 
-    `ovs-ofctl dump-flows` solo filtra por campos de coincidencia, tabla y cookie; la prioridad, las acciones, los paquetes o el texto se aplican con `grep`/`awk` sobre su salida. El estado
-    (ADDED...) es de ONOS y el switch no lo tiene. `ofproto/trace` dice, para un paquete concreto, qué regla lo atrapa."""
+
+def _explicar_filtro(token: str) -> str:
+    clave = token.split("=")[0]
+    return EXPLICA_CAMPO.get(clave, "filtro de ovs-ofctl")
+
+
+def comandos_ovs(filtros: Dict[str, str], cookie_app: Optional[str] = None, puente: str = "br0", version: str = "OpenFlow13") -> dict:
+    """Los comandos que, EN LA VM DEL SWITCH, enseñan lo mismo que el panel con esos filtros. Devuelve {principal, partes, tablas, traza, traza_partes, notas}.
+
+    `ovs-ofctl dump-flows` solo filtra por campos de coincidencia, tabla y cookie; la prioridad, las acciones, los paquetes o el texto se aplican con `grep` sobre su salida (solo grep: es lo que
+    se puede explicar de un vistazo). El estado (ADDED...) es de ONOS y el switch no lo tiene. `ofproto/trace` dice, para un paquete concreto, qué regla lo atrapa. `partes` explica cada trozo del comando."""
     f = {k: str(v).strip() for k, v in filtros.items() if v is not None and str(v).strip() != ""}
     notas: List[str] = []
     for k in list(f):                                   # lo que se escriba aquí acaba pegado en un terminal: solo caracteres inofensivos, nunca texto que el shell interprete
@@ -344,40 +427,64 @@ def comandos_ovs(filtros: Dict[str, str], cookie_app: Optional[str] = None, puen
         notas.append(f"No conozco el cookie de la app «{f['app']}» (el panel lo deduce de los flujos de esa app que ve en este switch): el comando no filtra por app")
     else:
         campos_cookie = None
+    con_paquetes = f.get("con_paquetes", "").lower() in ("1", "true", "si", "sí", "on")
 
-    def armar(tabla: Optional[str]) -> str:
-        partes = ([f"table={tabla}"] if tabla else []) + campos + ([campos_cookie] if campos_cookie else [])
-        cmd = base + (f' "{",".join(partes)}"' if partes else "")
+    def armar(tabla: Optional[str]) -> Tuple[str, List[dict]]:
+        partes = [{"codigo": base, "explica": f"Pide a Open vSwitch que liste los flujos del puente {puente}, hablando OpenFlow {version[-2]}.{version[-1]}. Lleva sudo porque necesita permisos de administrador."}]
+        nativos = ([f"table={tabla}"] if tabla else []) + campos + ([campos_cookie] if campos_cookie else [])
+        cmd = base
+        if nativos:
+            cmd += f' "{",".join(nativos)}"'
+            partes.append({"codigo": f'"{",".join(nativos)}"', "explica": "Filtro que aplica el propio ovs-ofctl (el switch solo devuelve lo que casa). Cada trozo, separado por comas, es una condición que debe cumplirse a la vez:"})
+            for tk in nativos:
+                partes.append({"codigo": tk, "explica": _explicar_filtro(tk), "nivel": 1})
         if "prioridad" in f:
             try:
                 a, b = _rango(f["prioridad"])
             except FiltroInvalido as e:
                 notas.append(str(e))
                 a = b = None
-            if a is not None and a == b:
-                cmd += f' | grep -E "priority={a}[, ]"'
-            elif a is not None or b is not None:
-                cmd += (" | awk -F'priority=' '{split($2,p,/[, ]/); if (" + " && ".join(c for c in ((f"p[1]>={a}" if a is not None else ""), (f"p[1]<={b}" if b is not None else "")) if c) + ") print}'")
-        if f.get("con_paquetes", "").lower() in ("1", "true", "si", "sí", "on"):
+            if a is not None or b is not None:
+                a, b = (0 if a is None else a), (PRIORIDAD_MAX_ABIERTA if b is None else b)
+                if a > b:
+                    notas.append("el rango de prioridad está al revés: no se filtra por prioridad")
+                elif a == b:
+                    cmd += f' | grep -E "priority={a}[, ]"'
+                    partes.append({"codigo": f'| grep -E "priority={a}[, ]"', "explica": f"ovs-ofctl no sabe filtrar por prioridad, así que se filtra su salida: grep -E se queda solo con las líneas que contienen priority={a} seguido de coma o espacio (para no confundirlo con {a}0 o {a}1)."})
+                else:
+                    rx, tramos = regex_rango(a, b)
+                    cmd += f' | grep -E "priority=({rx})[, ]"' if len(tramos) > 1 else f' | grep -E "priority={rx}[, ]"'
+                    partes.append({"codigo": f'| grep -E "priority=({rx})[, ]"' if len(tramos) > 1 else f'| grep -E "priority={rx}[, ]"',
+                                   "explica": f"ovs-ofctl no sabe filtrar por prioridad, así que se filtra su salida: grep -E se queda con las líneas cuya prioridad está entre {a} y {b}. "
+                                              "La expresión lista los números posibles por tramos (el | significa «o», [0-9] es un dígito cualquiera y {n} repite n veces):"})
+                    for rx_t, d, h in tramos:
+                        partes.append({"codigo": rx_t, "explica": f"de {d} a {h}", "nivel": 1})
+        if con_paquetes:
             cmd += ' | grep -v "n_packets=0,"'
+            partes.append({"codigo": '| grep -v "n_packets=0,"', "explica": "grep -v quita las líneas que contienen n_packets=0, es decir, los flujos que no han visto ningún paquete."})
         acc = {"salida": "output:", "goto": "goto_table", "meter": "meter:", "descarte": "actions=drop", "controlador": "CONTROLLER", "modifica": "set_field|mod_|push_vlan|pop_vlan|dec_ttl", "extension": "move:|load:"}.get(f.get("accion", ""))
         if acc:
             cmd += f' | grep -E "{acc}"'
+            partes.append({"codigo": f'| grep -E "{acc}"', "explica": f"Se queda con las líneas cuyas acciones contienen {acc.replace('|', ' o ')} (el tipo de acción «{f['accion']}»)."})
         if f.get("texto"):
-            cmd += " | grep -i " + "'" + f["texto"].replace("'", "") + "'"
-        return cmd
+            tx = f["texto"].replace("'", "")
+            cmd += f" | grep -i '{tx}'"
+            partes.append({"codigo": f"| grep -i '{tx}'", "explica": "Se queda con las líneas que contienen ese texto, sin distinguir mayúsculas de minúsculas (-i)."})
+        return cmd, partes
 
     if len(tablas) > 1:
-        principal = "for t in " + " ".join(tablas) + "; do echo \"=== tabla $t ===\"; " + armar("$t") + "; done"
+        interior, partes_in = armar("$t")
+        principal = "for t in " + " ".join(tablas) + "; do echo \"=== tabla $t ===\"; " + interior + "; done"
+        partes_principal = [{"codigo": "for t in " + " ".join(tablas) + "; do … done", "explica": "Repite el comando para cada tabla pedida, imprimiendo antes un título (echo). En cada vuelta, $t vale una de las tablas."}] + partes_in
     else:
-        principal = armar(tablas[0] if tablas else None)
+        principal, partes_principal = armar(tablas[0] if tablas else None)
     if "estado" in f:
         notas.append("El estado (ADDED, PENDING_ADD...) lo lleva ONOS; el switch no lo tiene")
     if "ip_dst_cubre" in f or "ip_src_cubre" in f:
         notas.append("«Cubre» (qué reglas contienen esa IP) no es un filtro de ovs-ofctl: use el comando de traza de abajo para ver qué regla atrapa un paquete a esa IP")
     if "ip_dst" in f or "ip_src" in f:
         notas.append("ovs-ofctl muestra los flujos cuyo prefijo está CONTENIDO en el que se pide: con una IP exacta no salen las rutas por prefijo que la contienen")
-    traza = None
+    traza, traza_partes = None, []
     if f.get("in_port", "").isdigit() and ("ip_dst" in f or "ip_dst_cubre" in f or "eth_dst" in f):
         spec = [f"in_port={f['in_port']}"]
         if "eth_src" in f:
@@ -391,9 +498,13 @@ def comandos_ovs(filtros: Dict[str, str], cookie_app: Optional[str] = None, puen
         if "vlan" in f:
             spec.append(f"dl_vlan={f['vlan']}")
         traza = f"sudo ovs-appctl ofproto/trace {puente} '{','.join(spec)}'"
+        traza_partes = [{"codigo": f"sudo ovs-appctl ofproto/trace {puente}", "explica": "Simula, dentro del switch, un paquete que entra y enseña tabla por tabla qué regla lo atrapa y qué acciones aplica. No envía nada a la red."},
+                        {"codigo": f"'{','.join(spec)}'", "explica": "El paquete que se simula, descrito por sus campos:"}]
+        for tk in spec:
+            traza_partes.append({"codigo": tk, "explica": _explicar_filtro(tk), "nivel": 1})
     elif "ip_dst_cubre" in f:
         notas.append("Para la traza falta el puerto de entrada (in_port): indique por qué puerto entraría el paquete")
-    return {"principal": principal, "tablas": tablas, "traza": traza, "notas": notas}
+    return {"principal": principal, "partes": partes_principal, "tablas": tablas, "traza": traza, "traza_partes": traza_partes, "notas": notas}
 
 
 # ---------- lectura de ONOS ----------

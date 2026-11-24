@@ -195,11 +195,12 @@ def test_tcp_udp_arp_y_vlan_usan_los_atajos_y_los_nombres_de_ovs():
     assert '"dl_type=0x88cc"' in fl.comandos_ovs({"eth_type": "0x88cc"})["principal"]
 
 
-def test_la_prioridad_el_estado_de_paquetes_y_las_acciones_se_aplican_con_grep_y_awk():
+def test_la_prioridad_el_estado_de_paquetes_y_las_acciones_se_aplican_solo_con_grep():
     assert fl.comandos_ovs({"tabla": "60", "prioridad": "160"})["principal"].endswith('| grep -E "priority=160[, ]"')
     r = fl.comandos_ovs({"prioridad": "100-200"})["principal"]
-    assert "awk -F'priority='" in r and "p[1]>=100 && p[1]<=200" in r
-    assert "p[1]>=40000)" in fl.comandos_ovs({"prioridad": "40000-"})["principal"] and "p[1]<=1)" in fl.comandos_ovs({"prioridad": "-1"})["principal"]
+    assert r.endswith('| grep -E "priority=(1[0-9]{2}|200)[, ]"') and "awk" not in r
+    assert fl.comandos_ovs({"tabla": "0", "prioridad": "40000-"})["principal"] == 'sudo ovs-ofctl -O OpenFlow13 dump-flows br0 "table=0" | grep -E "priority=[4-9][0-9]{4}[, ]"'
+    assert fl.comandos_ovs({"prioridad": "-1"})["principal"].endswith('| grep -E "priority=[0-1][, ]"') and "awk" not in fl.comandos_ovs({"prioridad": "150-160"})["principal"]
     assert fl.comandos_ovs({"con_paquetes": "1"})["principal"].endswith('| grep -v "n_packets=0,"')
     assert fl.comandos_ovs({"accion": "goto"})["principal"].endswith('| grep -E "goto_table"') and fl.comandos_ovs({"accion": "descarte"})["principal"].endswith('| grep -E "actions=drop"')
     assert fl.comandos_ovs({"texto": "gateway"})["principal"].endswith("| grep -i 'gateway'")
@@ -324,3 +325,87 @@ def test_dos_peticiones_a_la_vez_para_el_mismo_switch_leen_a_onos_una_sola_vez()
     for h in hilos:
         h.join()
     assert len(red.llamadas) == 1 and len(res) == 4 and all(len(r["flujos"]) == 2 for r in res)
+
+
+# ---------- la expresión de grep para un rango de prioridades (se comprueba contra TODOS los números) ----------
+def _acepta(rx, n):
+    return re.fullmatch(rx, str(n)) is not None
+
+
+@pytest.mark.parametrize("a,b", [(0, 0), (0, 1), (1, 1), (5, 9), (9, 10), (10, 99), (100, 200), (150, 160), (160, 160), (1, 99999), (100, 99999), (1000, 4999), (30000, 40999), (40000, 99999), (40001, 40001),
+                                 (50000, 65535), (65000, 99999), (5, 5000), (99, 101), (999, 1000), (12345, 54321), (0, 99999)])
+def test_la_expresion_de_un_rango_acepta_exactamente_sus_numeros(a, b):
+    rx, tramos = fl.regex_rango(a, b)
+    malos = [n for n in range(0, 100000) if _acepta(rx, n) != (a <= n <= b)]
+    assert malos == [], (rx, malos[:5])
+    assert sum(h - d + 1 for _, d, h in tramos) >= b - a + 1 and tramos[0][1] == a and tramos[-1][2] == b                         # los tramos explicados cubren el rango sin salirse
+
+
+def test_la_expresion_es_correcta_para_todos_los_rangos_pequenos():
+    for a in range(0, 130):
+        for b in range(a, 130):
+            rx, _ = fl.regex_rango(a, b)
+            for n in range(0, 200):
+                assert _acepta(rx, n) == (a <= n <= b), (a, b, n, rx)
+
+
+def test_la_expresion_es_correcta_para_rangos_al_azar():
+    import random
+    azar = random.Random(7)
+    for _ in range(300):
+        a = azar.randint(0, 99999)
+        b = azar.randint(a, 99999)
+        rx, _ = fl.regex_rango(a, b)
+        for n in [a, b, a - 1, b + 1, (a + b) // 2] + [azar.randint(0, 99999) for _ in range(60)]:
+            if 0 <= n <= 99999:
+                assert _acepta(rx, n) == (a <= n <= b), (a, b, n, rx)
+
+
+def test_las_expresiones_de_los_casos_reales_son_cortas_y_legibles():
+    assert fl.regex_rango(40000, 99999)[0] == "[4-9][0-9]{4}" and fl.regex_rango(100, 200)[0] == "1[0-9]{2}|200" and fl.regex_rango(30000, 40999)[0] == "3[0-9]{4}|40[0-9]{3}"
+    assert fl.regex_rango(100, 99999)[0] == "[1-9][0-9]{2,4}" and fl.regex_rango(0, 1)[0] == "[0-1]"
+
+
+def test_el_grep_de_prioridad_no_confunde_numeros_que_empiezan_igual():
+    exacto = re.compile(r"priority=160[, ]")
+    assert exacto.search(" cookie=0x1, table=60, priority=160,ip actions=drop") and exacto.search(" table=60, priority=160 actions=drop")
+    assert not exacto.search(" table=60, priority=1600,ip actions=drop") and not exacto.search(" table=60, priority=16,ip actions=drop")
+    rango = re.compile(r'priority=(1[0-9]{2}|200)[, ]')
+    assert rango.search("priority=100,ip") and rango.search("priority=200 actions=drop") and not rango.search("priority=1000,ip") and not rango.search("priority=201,ip") and not rango.search("priority=99,ip")
+
+
+def test_un_rango_al_reves_o_invalido_no_filtra_y_lo_avisa_sin_romper():
+    c = fl.comandos_ovs({"prioridad": "200-100"})
+    assert "grep" not in c["principal"] and any("al revés" in n for n in c["notas"])
+    c = fl.comandos_ovs({"prioridad": "abc"})
+    assert "grep" not in c["principal"] and any("inválida" in n for n in c["notas"])
+
+
+# ---------- «qué hace cada parte» ----------
+def test_cada_comando_trae_la_explicacion_de_sus_partes_y_cada_trozo_del_comando_aparece_explicado():
+    c = fl.comandos_ovs({"tabla": "20", "in_port": "1", "ip_dst": "10.0.0.10", "tcp_dst": "8001", "prioridad": "100-200", "con_paquetes": "1", "accion": "goto", "texto": "rol"})
+    codigos = [p["codigo"] for p in c["partes"]]
+    assert codigos[0] == "sudo ovs-ofctl -O OpenFlow13 dump-flows br0" and all(p["explica"] for p in c["partes"])
+    for trozo in ("table=20", "in_port=1", "nw_dst=10.0.0.10", "tcp_dst=8001", '| grep -E "priority=(1[0-9]{2}|200)[, ]"', '| grep -v "n_packets=0,"', '| grep -E "goto_table"', "| grep -i 'rol'"):
+        assert trozo in codigos, trozo
+        assert trozo in c["principal"]
+    assert "1[0-9]{2}" in codigos and any(p["explica"] == "de 100 a 199" for p in c["partes"]) and any(p["explica"] == "de 200 a 200" for p in c["partes"])
+
+
+def test_las_explicaciones_dicen_que_ovs_ofctl_no_filtra_por_prioridad_y_que_el_cookie_es_de_la_app():
+    c = fl.comandos_ovs({"tabla": "60", "app": "r2", "prioridad": "160"}, cookie_app="0xb2000000000000")
+    texto = " ".join(p["explica"] for p in c["partes"])
+    assert "no sabe filtrar por prioridad" in texto and "número de la app" in texto and "priority=160" in texto
+    assert any(p["codigo"].startswith("cookie=0xb2000000000000/") and p["nivel"] == 1 for p in c["partes"])
+
+
+def test_la_traza_tambien_se_explica_campo_a_campo():
+    c = fl.comandos_ovs({"in_port": "1", "eth_src": "fa:16:3e:b6:96:08", "eth_dst": GW, "ip_dst": "10.0.0.10", "tcp_dst": "8101"})
+    cod = [p["codigo"] for p in c["traza_partes"]]
+    assert cod[0] == "sudo ovs-appctl ofproto/trace br0" and "in_port=1" in cod and "tcp_dst=8101" in cod and "No envía nada a la red" in c["traza_partes"][0]["explica"]
+    assert fl.comandos_ovs({"tabla": "60"})["traza_partes"] == []
+
+
+def test_varias_tablas_explican_el_bucle():
+    c = fl.comandos_ovs({"tabla": "0,60"})
+    assert c["partes"][0]["codigo"].startswith("for t in 0 60") and "Repite el comando" in c["partes"][0]["explica"]

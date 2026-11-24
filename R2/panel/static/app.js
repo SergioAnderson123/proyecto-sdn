@@ -258,7 +258,24 @@ async function cargarSwitchesFl() {
   flSwitchesListos = d.switches.length > 0;
 }
 
-function caja(titulo, texto) {
+function explicacion(partes) {
+  const det = document.createElement("details");
+  det.open = true;
+  det.className = "partes";
+  det.appendChild(el("summary", "¿Qué hace cada parte?"));
+  const ul = document.createElement("ul");
+  for (const p of partes) {
+    const li = document.createElement("li");
+    if (p.nivel) li.className = "n" + p.nivel;
+    li.appendChild(el("code", p.codigo));
+    li.appendChild(document.createTextNode(" — " + p.explica));
+    ul.appendChild(li);
+  }
+  det.appendChild(ul);
+  return det;
+}
+
+function caja(titulo, texto, partes) {
   const c = el("div", null, "caja-cmd");
   c.appendChild(el("div", titulo, "ayuda"));
   const pre = el("pre", texto, "cmd");
@@ -271,6 +288,7 @@ function caja(titulo, texto) {
     setTimeout(() => { b.textContent = "Copiar"; }, 2000);
   });
   c.appendChild(b);
+  if (partes && partes.length) c.appendChild(explicacion(partes));
   return c;
 }
 
@@ -298,8 +316,8 @@ async function pintarFlujos(actualizar) {
   for (const [app, n] of Object.entries(d.cuentas.apps)) { const o = el("option", app + " (" + n + ")"); o.value = app; dl.appendChild(o); }
   // comandos para el switch real
   const dnd = d.switch.ssh ? (d.switch.ssh.local ? "En " + d.switch.ssh.vm + ": " : "En la VM " + d.switch.ssh.vm + " (entra con " + d.switch.ssh.comando + "): ") : "En la VM del switch: ";
-  cont.appendChild(caja(dnd + "los mismos flujos con ovs-ofctl", d.comandos.principal));
-  if (d.comandos.traza) cont.appendChild(caja("Qué regla atrapa un paquete así (ofproto/trace)", d.comandos.traza));
+  cont.appendChild(caja(dnd + "los mismos flujos con ovs-ofctl", d.comandos.principal, d.comandos.partes));
+  if (d.comandos.traza) cont.appendChild(caja("Qué regla atrapa un paquete así (ofproto/trace)", d.comandos.traza, d.comandos.traza_partes));
   if (d.comandos.notas.length) { const ul = el("ul", null, "notas"); for (const n of d.comandos.notas) ul.appendChild(el("li", n)); cont.appendChild(ul); }
   for (const x of d.flujos) {
     const tr = fila(tb, [x.tabla, x.prioridad, x.app.replace("org.campus.", "campus.").replace("org.onosproject.", "onos."), el("span", x.coincide_texto, "mono"), x.acciones_texto, x.paquetes, x.estado, x.explicacion]);

@@ -59,3 +59,9 @@ pre.cmd { margin: 4px 0 6px; white-space: pre-wrap; word-break: break-all; font:
 .paginas { color: var(--suave); }
 ul.notas { margin: 4px 0; padding-left: 18px; color: var(--suave); font-size: 12px; }
 #t-fl td:nth-child(8) { color: var(--suave); font-size: 12px; max-width: 360px; }
+details.partes { margin-top: 8px; }
+details.partes summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--primario); }
+details.partes ul { list-style: none; margin: 6px 0 0; padding: 0; font-size: 12.5px; }
+details.partes li { margin: 4px 0; color: var(--texto); }
+details.partes li.n1 { margin-left: 22px; color: var(--suave); }
+details.partes code { font: 12px ui-monospace, Consolas, monospace; background: var(--fondo); border: 1px solid var(--borde); border-radius: 4px; padding: 0 5px; word-break: break-all; }
