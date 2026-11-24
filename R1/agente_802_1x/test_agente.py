@@ -63,6 +63,7 @@ def test_sesion_y_rechazo_del_policy_mapper():
     assert ag.ultimo_rechazo(MAC, eventos, desde=150)["detalle"].startswith("MAC registrada")
     assert ag.ultimo_rechazo(MAC, eventos, desde=300) is None
     assert ag.ultimo_rechazo(MAC, [{"t": 5, "tipo": "conflicto", "mac": MAC}], desde=0)["tipo"] == "conflicto"
+    assert ag.ultimo_rechazo(MAC, None, desde=0) is None            # el Policy Mapper no contesto: no revienta la pagina
 
 
 LLAMADAS = []   # comandos que el agente ejecuta con subprocess.run (wpa_cli)
@@ -196,6 +197,35 @@ def test_autenticado_sin_sesion_ni_rechazo_sigue_como_autenticado(agente, monkey
     monkeypatch.setattr(ag, "http_json", lambda url, timeout=3: [viejo] if url.endswith("/events") else {"sessions": {}})
     e = agente.estado()
     assert e["estado"] == "autenticado" and "sin datos del Policy Mapper" in e["mensaje"]
+
+
+def test_si_el_policy_mapper_tarda_se_usa_el_ultimo_dato_bueno_y_se_marca(agente, monkeypatch):
+    agente.conectar("alumno01")
+    monkeypatch.setattr(agente, "_wpa_cli", lambda: {"suppPortStatus": "Authorized"})
+    ses = {"sessions": {MAC: {"vlan": 20, "rol": "Alumno", "dpid": "of:1", "port": "1"}}}
+    estado_mapper = {"responde": True}
+    monkeypatch.setattr(ag, "http_json", lambda url, timeout=3: ses if estado_mapper["responde"] else None)
+    reloj = [1000.0]
+    monkeypatch.setattr(ag.time, "monotonic", lambda: reloj[0])
+    e = agente.estado()
+    assert e["sesion"]["vlan"] == 20 and "dato anterior" not in e["mensaje"]
+    estado_mapper["responde"] = False
+    reloj[0] += 10.0                                    # pasado el TTL: pregunta, no contesta, y usa el ultimo dato bueno
+    e = agente.estado()
+    assert e["estado"] == "autenticado" and e["sesion"]["vlan"] == 20 and "dato anterior" in e["mensaje"]
+    reloj[0] += 60.0                                    # pasada la gracia: ya no se inventa nada
+    e = agente.estado()
+    assert e["sesion"] is None and "sin datos del Policy Mapper" in e["mensaje"]
+
+
+def test_al_cambiar_de_identidad_no_se_reutiliza_el_dato_de_la_anterior(agente, monkeypatch):
+    agente.conectar("alumno01")
+    monkeypatch.setattr(agente, "_wpa_cli", lambda: {"suppPortStatus": "Authorized"})
+    monkeypatch.setattr(ag, "http_json", lambda url, timeout=3: {"sessions": {MAC: {"vlan": 20, "rol": "Alumno"}}})
+    assert agente.estado()["sesion"]["vlan"] == 20
+    agente.conectar("alumno02")
+    monkeypatch.setattr(ag, "http_json", lambda url, timeout=3: None)          # el Policy Mapper no contesta justo ahora
+    assert agente.estado()["sesion"] is None                                     # nada de lo anterior se muestra para la identidad nueva
 
 
 def test_desconectado_sin_proceso(agente):

@@ -42,6 +42,7 @@ TOKEN = os.environ.get("R1_TOKEN", "")
 WPA_SUPPLICANT = os.environ.get("R1_WPA", "/usr/sbin/wpa_supplicant")
 WPA_CLI = os.environ.get("R1_WPA_CLI", "/usr/sbin/wpa_cli")
 CTRL = "/run/wpa_supplicant"
+GRACIA_S = 30.0      # cuanto tiempo vale el ultimo dato bueno del Policy Mapper si este no contesta (ver consultar_mapper)
 
 ROLES = {"profesor": ("Docente", 10), "alumno": ("Alumno", 20), "support": ("Soporte (Administrador)", 40)}
 
@@ -100,7 +101,7 @@ def sesion_de(mac, sesiones):
 
 def ultimo_rechazo(mac, eventos, desde):
     """El ultimo evento de rechazo o conflicto del Policy Mapper para esa MAC, posterior a `desde`."""
-    lista = eventos
+    lista = eventos or []        # el Policy Mapper puede no haber contestado (None): sin datos no hay rechazo que mostrar
     if isinstance(eventos, dict):
         lista = next((v for v in eventos.values() if isinstance(v, list)), [])
     candidatos = [e for e in lista if isinstance(e, dict) and str(e.get("mac", "")).lower() == mac.lower()
@@ -141,17 +142,28 @@ class Agente:
         self.desde = 0.0
         self.log = deque(maxlen=60)
         self._cache = {}         # ruta del Policy Mapper -> (instante, respuesta)
+        self._anteriores = set() # rutas cuya ultima respuesta fue el dato anterior porque el Policy Mapper no contesto a tiempo
 
     def consultar_mapper(self, ruta, ttl=5.0):
         """GET al Policy Mapper con una cache corta: la pagina consulta el estado cada 2 s (y puede haber varias abiertas) y
-        no hace falta preguntarle al Policy Mapper por cada una. Las respuestas vacias o con error no se guardan."""
+        no hace falta preguntarle al Policy Mapper por cada una. Las respuestas vacias o con error no se guardan.
+
+        Medido (24-nov, mapper HA): `GET /sessions` espera a que termine la transaccion de mantenimiento, que retiene el cerrojo hasta 5,5 s
+        mientras habla con ONOS, y las esperas llegaron a 12 s: mas que el plazo de 3 s. Si el Policy Mapper no contesta, se usa el ultimo
+        dato bueno hasta GRACIA_S segundos (y se marca como anterior) en vez de mostrar «sin datos»."""
         guardado = self._cache.get(ruta)
         if guardado and time.monotonic() - guardado[0] < ttl:
             return guardado[1]
         respuesta = http_json(f"{self.mapper}{ruta}")
         if respuesta is not None:
             self._cache[ruta] = (time.monotonic(), respuesta)
-        return respuesta
+            self._anteriores.discard(ruta)
+            return respuesta
+        if guardado and time.monotonic() - guardado[0] < GRACIA_S:
+            self._anteriores.add(ruta)
+            return guardado[1]
+        self._anteriores.discard(ruta)
+        return None
 
     def usuarios(self):
         return descubrir_usuarios(self.carpeta)
@@ -222,11 +234,15 @@ class Agente:
                 raise ValueError(f"Usuario desconocido: {uid}")
             self._parar("cambio de identidad")
             self.deseado = uid
+            self._cache.clear()      # lo que el Policy Mapper dijo de la identidad anterior no vale para esta
+            self._anteriores.clear()
             self._lanzar(uid)
 
     def desconectar(self):
         with self.lock:
             self.deseado = None
+            self._cache.clear()
+            self._anteriores.clear()
             self._parar()
 
     def vigilar(self):
@@ -302,6 +318,8 @@ class Agente:
             if sesion:
                 resp["sesion"] = sesion
                 resp["mensaje"] = f"Acceso concedido como {rol} (VLAN {sesion.get('vlan', vlan)})"
+                if "/sessions" in self._anteriores:
+                    resp["mensaje"] += " [dato anterior: el Policy Mapper tardo en contestar]"
             else:
                 # El certificado fue valido (RADIUS acepto y wpa_supplicant esta Authorized), pero el Policy Mapper decide despues
                 # sobre MAC, ubicacion y sesiones duplicadas: si rechazo a este equipo, "autenticado" en verde seria enganoso (la
