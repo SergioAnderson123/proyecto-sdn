@@ -236,7 +236,8 @@ async def _vigilar_puertos_de_sesion() -> None:
 class PortalLogin(BaseModel):
     usuario: str
     clave: str
-    mac: str
+    mac: str = ""        # la del ARP del portal (cliente en su mismo segmento L2); vacía con la capa 3
+    ip: str = ""         # IP de origen de la conexión del cliente al portal (la ve el socket del portal); con ella se resuelve la MAC si no viene
 
 
 PORTAL_TOKEN = os.getenv("PORTAL_TOKEN", "")
@@ -245,6 +246,15 @@ PORTAL_TOKEN = os.getenv("PORTAL_TOKEN", "")
 def _verificar_portal(token: str) -> None:
     if PORTAL_TOKEN and token != PORTAL_TOKEN:
         raise HTTPException(status_code=403, detail="Portal no autorizado")
+
+
+async def _mac_del_portal(mac: str, ip: str) -> Optional[str]:
+    """MAC del equipo que usa el portal: la que aporta el portal (su ARP, cliente en su mismo segmento L2) o, si no la tiene (capa 3: el cliente está detrás del
+    gateway), la que ONOS asocia a la IP de origen de su conexión (hosts de la app DHCP). None si no se puede identificar. Si vienen las dos manda la MAC."""
+    mac = (mac or "").strip().lower().replace("-", ":")
+    if mac:
+        return mac
+    return await portal_auth.mac_de_ip(ip, ONOS_BASE_URL, ONOS_AUTH) if ip else None
 
 
 async def _validar_ascenso(ses_mac, ses_usuario, rol_destino: str, mac: str) -> Optional[str]:
@@ -291,9 +301,13 @@ async def _restaurar_base(ses: ActiveSession, motivo: str) -> None:
 async def portal_login(p: PortalLogin, x_portal_token: str = Header(default="")):
     """Portal cautivo: valida usuario y contraseña contra LDAP e instala la sesión (mismo flujo 40001 que 802.1X).
 
-    La MAC la aporta el portal (la lee de su tabla ARP, no del cliente), por eso el endpoint exige `X-Portal-Token` si PORTAL_TOKEN está definido."""
+    La MAC la aporta el portal (la lee de su tabla ARP, no del cliente) o, si el cliente es de otra subred, se resuelve con la IP de origen que el portal vio en la
+    conexión; por eso el endpoint exige `X-Portal-Token` si PORTAL_TOKEN está definido."""
     _verificar_portal(x_portal_token)
-    mac = p.mac.lower().replace("-", ":")
+    mac = await _mac_del_portal(p.mac, p.ip)
+    if not mac:
+        eventos.registrar("rechazado", p.usuario, "", detalle="Portal: no se pudo identificar el equipo (sin MAC en el ARP del portal y la IP no figura en los hosts de ONOS)")
+        raise HTTPException(status_code=409, detail="No se pudo identificar el equipo; reintente")
     grupos = await asyncio.to_thread(portal_auth.autenticar_ldap, p.usuario, p.clave)
     if grupos is None:
         eventos.registrar("rechazado", p.usuario, mac, detalle="Portal: usuario o contraseña incorrectos")
@@ -353,15 +367,16 @@ async def portal_login(p: PortalLogin, x_portal_token: str = Header(default=""))
 
 
 class PortalLogout(BaseModel):
-    mac: str
+    mac: str = ""
+    ip: str = ""
 
 
 @app.post("/portal/logout")
 async def portal_logout(p: PortalLogout, x_portal_token: str = Header(default="")):
     """Cierra una sesión creada por el portal (no toca las de 802.1X)."""
     _verificar_portal(x_portal_token)
-    mac = p.mac.lower().replace("-", ":")
-    ses = session_store.get_by_mac(mac)
+    mac = await _mac_del_portal(p.mac, p.ip)
+    ses = session_store.get_by_mac(mac) if mac else None
     if not ses or ses.metodo != "Portal":
         return {"status": "sin_sesion"}
     if ses.base is not None:      # un ascenso: el equipo vuelve a su rol base
@@ -374,9 +389,14 @@ async def portal_logout(p: PortalLogout, x_portal_token: str = Header(default=""
 
 
 @app.get("/portal/estado")
-async def portal_estado(mac: str):
-    """Sesión (si hay) de una MAC; el portal lo usa para mostrar «ya inició sesión»."""
-    ses = session_store.get_by_mac(mac.lower().replace("-", ":"))
+async def portal_estado(mac: str = "", ip: str = "", x_portal_token: str = Header(default="")):
+    """Sesión (si hay) de un equipo; el portal lo usa para mostrar «ya inició sesión». Se identifica por la MAC o, sin ella, por la IP de origen de la conexión
+    del cliente (capa 3). Buscar por IP exige `X-Portal-Token` (revela qué sesión tiene esa IP); por MAC sigue como antes."""
+    mac = mac.strip()
+    if not mac and ip:
+        _verificar_portal(x_portal_token)
+        mac = await _mac_del_portal("", ip) or ""
+    ses = session_store.get_by_mac(mac.lower().replace("-", ":")) if mac else None
     if not ses:
         return {"sesion": None}
     ascenso_a = []
