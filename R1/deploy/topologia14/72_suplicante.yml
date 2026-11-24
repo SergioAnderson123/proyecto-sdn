@@ -2,6 +2,11 @@
 #   PLAYBOOK=72_suplicante.yml ./lanzar.sh                                   # prepara h1-profesor; NO autentica
 #   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true                  # arranca solo h1-profesor (con su identidad por defecto del inventario: alumno02)
 #   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true -e identidad=profesor01   # h1 entra como profesor01 (demostracion); sin -e identidad vuelve a alumno02
+# LOGIN MANUAL (login_manual=true en el inventario, es lo que hay hoy): el agente no autentica solo y estos comandos NO conectan ni desconectan a nadie; solo cambian
+# que identidades aparecen en la lista de la interfaz web del host (la lista se lee en vivo de los wpa_*.conf, sin reiniciar el agente). El login se hace en la interfaz:
+#   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e identidad=profesor01     # la lista de h1 gana profesor01 (desconecta antes lo que este conectado como alumno)
+#   PLAYBOOK=72_suplicante.yml ./lanzar.sh                             # h1 vuelve a la lista de alumnos (profesor01 desaparece de h1; desconectalo antes en la interfaz)
+#   interfaz web: ssh -L 8081:127.0.0.1:8080 -p 5821 ubuntu@10.20.11.14 (h1) y ssh -L 8082:127.0.0.1:8080 -p 5822 ubuntu@10.20.11.14 (h2), y http://localhost:8081 / :8082
 #   (identidad: alumno01|alumno02|alumno03|profesor01|profesor02|support01. Cambiarla deja en el host solo los certificados de esa identidad y de los alumnos:
 #    el de profesor desaparece del host al volver a alumno.)
 #   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e parar=true                     # para solo h1-profesor (envía logoff)
