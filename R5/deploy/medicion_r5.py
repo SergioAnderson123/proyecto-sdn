@@ -235,12 +235,14 @@ def cmd_recursos(rem, a):
         if fase not in estimulos:
             sys.exit(f"fase desconocida: {fase} (usa {', '.join(estimulos)})")
         print(f"\n--- fase «{fase}» ({d} s) ---")
+        inicio = time.time()
         for s, ip in SENSORES.items():
             rem.correr(ip, f"nohup python3 {destino_med}/medir_recursos.py --fase {fase} --duracion {d} --ifaces {a.ifaces} "
                            f"--salida {destino_med}/{fase}_{s}.csv > {destino_med}/{fase}_{s}.json 2>&1 &")
         if estimulos[fase]:
             rem.correr(ATACANTE, estimulos[fase], timeout=d + 60)
-        time.sleep(d + 6 if not estimulos[fase] else 6)            # sin estimulo hay que esperar la fase completa; con estimulo ya casi termino
+        # el muestreador sigue vivo hasta cumplir `d` segundos (el estimulo puede acabar antes, como el ddos al agotar los origenes): se espera a que escriba su JSON
+        time.sleep(max(0.0, inicio + d + 6 - time.time()))
         for s, ip in SENSORES.items():
             rc, out = rem.correr(ip, f"cat {destino_med}/{fase}_{s}.json", timeout=30)
             m = re.search(r"\{.*\}", out or "", re.S)
@@ -282,7 +284,7 @@ def main():
     rc = sub.choices["recursos"]
     rc.add_argument("--fase-s", type=int, default=60, help="segundos por fase")
     rc.add_argument("--fases", default="reposo,espejo,ddos,mixto")
-    rc.add_argument("--ifaces", default="ens4", help="NIC de espejo del sensor (IDS_IFACES de R5/deploy/.env)")
+    rc.add_argument("--ifaces", default="ens4,ens5", help="NICs de espejo del sensor, una por core (IDS_IFACES de R5/deploy/.env)")
     rc.add_argument("--pps", type=int, default=1000, help="paquetes por segundo de la fase «espejo»")
     rc.add_argument("--origenes", type=int, default=30, help="orígenes por ciclo en la fase «ddos» (1 a 150)")
     a = ap.parse_args()
