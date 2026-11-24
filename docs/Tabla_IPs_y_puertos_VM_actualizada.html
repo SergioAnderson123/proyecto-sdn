@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Topologia de 14 VM: direcciones IP y puertos de acceso</title>
+<style>
+@page { size: A4 landscape; margin: 11mm 12mm; }
+* { box-sizing: border-box; }
+body { font-family: "Segoe UI", "Noto Sans", Arial, sans-serif; font-size: 8.8pt; color: #1b2733; margin: 0; line-height: 1.3; }
+h1 { font-size: 17pt; color: #0f2d4a; margin: 0 0 2px 0; }
+h2 { font-size: 11.5pt; color: #0f2d4a; margin: 12px 0 4px 0; }
+.sub { color: #5b6773; font-size: 8.4pt; margin-bottom: 8px; }
+p { margin: 3px 0 6px 0; }
+table { width: 100%; border-collapse: collapse; margin: 3px 0 6px 0; }
+th { background: #0f2d4a; color: #fff; text-align: left; font-weight: 600; padding: 4px 6px; font-size: 8.6pt; }
+td { padding: 2px 6px; border-bottom: 1px solid #dfe5ea; vertical-align: top; }
+td.m { white-space: nowrap; }
+.junto { break-inside: avoid; }
+tbody tr:nth-child(even) td { background: #f3f7fb; }
+tr.cambio td { background: #fff3d1 !important; }
+code, .m { font-family: Consolas, "Cascadia Mono", monospace; font-size: 8.4pt; }
+.caja { border: 1px solid #e0b84a; background: #fff8e1; padding: 6px 9px; margin: 6px 0; font-size: 8.6pt; }
+.nota { color: #4a5560; font-size: 8.4pt; }
+.salto { break-before: page; }
+</style>
+</head>
+<body>
+
+<h1>Topología de 14 VM: direcciones IP y puertos de acceso</h1>
+<div class="sub">Grupo 4 · TEL354 Redes Definidas por Software · PUCP 2026-2 · Topología oficial de VNRT · <b>actualizado el 23-nov-2026</b> (acceso y MAC de vm-atacante verificados; accesos y hosts verificados por MAC el 14-nov)</div>
+
+<h2>1. Acceso a las VM</h2>
+<p>Todas las VM se alcanzan desde fuera por la IP pública del <b>switch-borde</b> (<b>10.20.11.14</b>) y un puerto distinto por VM (reenvío de puertos con iptables DNAT), <b>salvo vm-atacante</b>, que tiene su propia IP en la red pública. La red de gestión (roja, MP_Link) es <b>192.168.201.0/24</b>; la IP <b>192.168.201.254</b> es la del switch-borde. El usuario es <b>ubuntu</b>.</p>
+<table>
+<thead><tr><th>VM (hostname)</th><th>Nombre en VNRT</th><th>IP de gestión (red roja)</th><th>Puerto SSH</th><th>Comando de acceso (desde fuera)</th><th>Rol</th></tr></thead>
+<tbody>
+<tr><td><b>switch-borde</b></td><td>sw-edge / gateway</td><td>ens5: 192.168.201.254<br>ens3: 10.20.11.14 (pública)</td><td>22 (directo)</td><td class="m">ssh ubuntu@10.20.11.14</td><td>Borde / NAT / reenvío de puertos / OVS</td></tr>
+<tr><td><b>node-ctrl-1</b></td><td>node-ctrl-1</td><td>192.168.201.1</td><td>5801</td><td class="m">ssh -p 5801 ubuntu@10.20.11.14</td><td>ONOS (nodo 1, maestro), LDAP, RADIUS, Policy Mapper</td></tr>
+<tr><td><b>node-ctrl-2</b></td><td>node-ctrl-2</td><td>192.168.201.2</td><td>5802</td><td class="m">ssh -p 5802 ubuntu@10.20.11.14</td><td>ONOS (nodo 2)</td></tr>
+<tr><td><b>node-ctrl-3</b></td><td>node-ctrl-3</td><td>192.168.201.3</td><td>5803</td><td class="m">ssh -p 5803 ubuntu@10.20.11.14</td><td>ONOS (nodo 3)</td></tr>
+<tr class="cambio"><td><b>sw-acc-1</b></td><td>sw-acc-1</td><td><b>192.168.201.12</b></td><td><b>5812</b></td><td class="m">ssh -p 5812 ubuntu@10.20.11.14</td><td>Switch de acceso (OVS); conecta a <b>h1-profesor (host-bob)</b></td></tr>
+<tr class="cambio"><td><b>sw-acc-2</b></td><td>sw-acc-2</td><td><b>192.168.201.11</b></td><td><b>5811</b></td><td class="m">ssh -p 5811 ubuntu@10.20.11.14</td><td>Switch de acceso (OVS); conecta a <b>h2-alumno (host-alice)</b></td></tr>
+<tr><td><b>sw-core-1</b></td><td>sw-core-1</td><td>192.168.201.13</td><td>5813</td><td class="m">ssh -p 5813 ubuntu@10.20.11.14</td><td>Switch core (OVS)</td></tr>
+<tr><td><b>sw-core-2</b></td><td>sw-core-2</td><td>192.168.201.14</td><td>5814</td><td class="m">ssh -p 5814 ubuntu@10.20.11.14</td><td>Switch core (OVS)</td></tr>
+<tr><td><b>h1-profesor</b></td><td><b>host-bob</b></td><td>192.168.201.21</td><td>5821</td><td class="m">ssh -p 5821 ubuntu@10.20.11.14</td><td>Host de profesor</td></tr>
+<tr><td><b>h2-alumno</b></td><td><b>host-alice</b></td><td>192.168.201.22</td><td>5822</td><td class="m">ssh -p 5822 ubuntu@10.20.11.14</td><td>Host de alumno</td></tr>
+<tr><td><b>server</b></td><td>server</td><td>192.168.201.23</td><td>5823</td><td class="m">ssh -p 5823 ubuntu@10.20.11.14</td><td>Servidor de recursos (portal cautivo previsto aquí)</td></tr>
+<tr class="cambio"><td><b>vm-atacante</b></td><td><b>host-jhon</b></td><td>Sin red de gestión<br><b>ens3: 10.20.11.203/24</b> (pública, por DHCP)</td><td><b>22</b> (por su IP, sin reenvío)</td><td class="m"><b>ssh ubuntu@10.20.11.203</b></td><td>Origen de ataques; <b>ens4: 203.0.113.103/24</b> (subred externa, fija)</td></tr>
+<tr><td><b>node-sec-1</b></td><td>node-sec-1</td><td>192.168.201.31</td><td>5831</td><td class="m">ssh -p 5831 ubuntu@10.20.11.14</td><td>IDS (Suricata + integrador)</td></tr>
+<tr><td><b>node-sec-2</b></td><td>node-sec-2</td><td>192.168.201.32</td><td>5832</td><td class="m">ssh -p 5832 ubuntu@10.20.11.14</td><td>IDS (Suricata + integrador)</td></tr>
+</tbody>
+</table>
+
+<div class="caja"><b>Cambios respecto a la versión anterior (filas resaltadas).</b>
+<b>23-nov: vm-atacante</b> ya tiene acceso: se entra por su IP de la red pública (<span class="m">ssh ubuntu@10.20.11.203</span>, desde la red 10.20.11.0/24, por ejemplo desde switch-borde) y <b>no</b> por el puerto 5824, que no se usa; su <span class="m">ens4</span> lleva la IP fija <b>203.0.113.103/24</b> y su MAC fue leída en la propia VM (sección 3).
+<b>14-nov: sw-acc-1 y sw-acc-2</b>: sus nombres estaban cruzados entre la interfaz web de VNRT y los hostnames de las VM. Se comprobó cruzando las MAC (sección 3) y se <b>intercambiaron los hostnames</b> para que coincidan con VNRT. Las IP y los puertos no cambiaron: por eso la IP <b>.12 / puerto 5812</b> es ahora <b>sw-acc-1</b> y la <b>.11 / puerto 5811</b> es <b>sw-acc-2</b> (en la versión anterior estaban al revés).</div>
+
+<p class="nota">Notas: las interfaces de datos (ens4 a ens9) no llevan IP fija; son puertos de Open vSwitch (los hosts toman su IP por DHCP de la app de ONOS). <b>Excepción:</b> el <span class="m">ens4</span> de vm-atacante lleva <span class="m">203.0.113.103/24</span> fija (la subred externa no tiene DHCP). En todas las interfaces de todas las VM se usa <code>dhcp6: false</code>, <code>accept-ra: false</code> y <code>link-local: []</code> (pedido de la coach para evitar tormentas de broadcast en la topología con bucles). Las VM usan como ruta por defecto 192.168.201.254 y como DNS 8.8.8.8 (vm-atacante usa la red pública por <span class="m">ens3</span>).</p>
+
+<h2 class="salto">2. Qué conecta cada interfaz (según el dibujo oficial)</h2>
+<table>
+<thead><tr><th style="width:21%">VM</th><th style="width:14%">Interfaz</th><th>Conecta con</th><th style="width:15%">Plano</th></tr></thead>
+<tbody>
+<tr><td>switch-borde</td><td>ens3</td><td>Internet (IP pública 10.20.11.14)</td><td>Externo</td></tr>
+<tr class="cambio"><td>switch-borde</td><td>ens4</td><td>vm-atacante / host-jhon (ens4) · puerto 1 de OVS · subred externa 203.0.113.0/24</td><td>Datos</td></tr>
+<tr><td>switch-borde</td><td>ens5</td><td>Red de gestión (MP_Link), 192.168.201.254/24</td><td>Gestión (rojo)</td></tr>
+<tr><td>switch-borde</td><td>ens6 / ens7</td><td>sw-core-1 (ens9) / sw-core-2 (ens9)</td><td>Datos</td></tr>
+<tr><td>switch-borde</td><td>ens8 / ens9</td><td>node-sec-1 (ens5) / node-sec-2 (ens5)</td><td>Datos</td></tr>
+<tr class="cambio"><td>vm-atacante</td><td>ens3</td><td>Red pública (10.20.11.203/24 por DHCP)</td><td>Externo</td></tr>
+<tr class="cambio"><td>vm-atacante</td><td>ens4</td><td>switch-borde (ens4), 203.0.113.103/24 fija</td><td>Datos</td></tr>
+<tr><td>sw-core-1 y sw-core-2</td><td>ens3</td><td>Red de gestión</td><td>Gestión (rojo)</td></tr>
+<tr><td>sw-core-1 y sw-core-2</td><td>ens4</td><td>node-sec-1 (core-1) / node-sec-2 (core-2)</td><td>Datos</td></tr>
+<tr><td>sw-core-1 y sw-core-2</td><td>ens5 / ens6</td><td>sw-acc-1 y sw-acc-2 (enlaces en cruz)</td><td>Datos</td></tr>
+<tr><td>sw-core-1 y sw-core-2</td><td>ens7</td><td>El otro core</td><td>Datos</td></tr>
+<tr><td>sw-core-1 y sw-core-2</td><td>ens8</td><td>server (ens4 con core-1, ens5 con core-2)</td><td>Datos</td></tr>
+<tr><td>sw-core-1 y sw-core-2</td><td>ens9</td><td>switch-borde (ens6 / ens7)</td><td>Datos</td></tr>
+<tr><td>sw-acc-1 y sw-acc-2</td><td>ens3</td><td>Red de gestión</td><td>Gestión (rojo)</td></tr>
+<tr><td>sw-acc-1 y sw-acc-2</td><td>ens5 / ens6</td><td>sw-core-1 / sw-core-2</td><td>Datos</td></tr>
+<tr><td>sw-acc-1 y sw-acc-2</td><td>ens4</td><td>h1-profesor / host-bob (acc-1) / h2-alumno / host-alice (acc-2)</td><td>Datos</td></tr>
+<tr><td>node-sec-1 y node-sec-2</td><td>ens3</td><td>Red de gestión</td><td>Gestión (rojo)</td></tr>
+<tr><td>node-sec-1 y node-sec-2</td><td>ens4</td><td>sw-core-1 / sw-core-2 (espejo)</td><td>Datos</td></tr>
+<tr><td>node-sec-1 y node-sec-2</td><td>ens5</td><td>switch-borde (ens8 / ens9)</td><td>Datos</td></tr>
+<tr><td>node-ctrl-1, 2 y 3</td><td>ens3</td><td>Red de gestión (única interfaz)</td><td>Gestión (rojo)</td></tr>
+<tr><td>server</td><td>ens3 / ens4 / ens5</td><td>Gestión / sw-core-1 (ens8) / sw-core-2 (ens8)</td><td>Gestión y datos</td></tr>
+<tr><td>h1-profesor, h2-alumno</td><td>ens3 / ens4</td><td>Gestión / switch de acceso (ens4)</td><td>Gestión y datos</td></tr>
+</tbody>
+</table>
+<p class="nota">Estado: Open vSwitch instalado en los 5 switches, clúster ONOS de 3 nodos formado (Atomix, Raft de 3) con node-ctrl-1 como maestro de todos. vm-atacante ya tiene sus dos redes (ens3 pública y ens4 de la subred externa). Esta tabla describe el cableado según el dibujo; las conexiones de los accesos con los hosts están verificadas por MAC (sección 3); las de los cores, el server y los sensores no se han cruzado todavía con la interfaz de VNRT.</p>
+
+<div class="junto">
+<h2>3. Verificación por MAC de los accesos y los hosts</h2>
+<p>Cada ventana de un nodo en VNRT lista, por «Enlace N», la MAC de la NIC de ese nodo; el mismo número de enlace en dos ventanas son los dos extremos de un cable. Cruzado con <code>ip -br link</code> de cada VM:</p>
+<table>
+<thead><tr><th>VM (hostname actual)</th><th>MAC de ens4</th><th>Aparece en VNRT como</th><th>Cable</th><th>Conecta con</th><th>deviceId en ONOS</th></tr></thead>
+<tbody>
+<tr><td>sw-acc-1 (.12, 5812)</td><td class="m">fa:16:3e:3d:fe:8a</td><td>nodo sw-acc-1, Enlace 18</td><td>18</td><td>host-bob = h1-profesor</td><td class="m">of:0000e6925d87354b</td></tr>
+<tr><td>sw-acc-2 (.11, 5811)</td><td class="m">fa:16:3e:4a:5a:2c</td><td>nodo sw-acc-2, Enlace 19</td><td>19</td><td>host-alice = h2-alumno</td><td class="m">of:0000766a0c84c741</td></tr>
+<tr><td>h1-profesor</td><td class="m">fa:16:3e:b6:96:08</td><td>host-bob, Enlace 18</td><td>18</td><td>sw-acc-1</td><td>—</td></tr>
+<tr><td>h2-alumno</td><td class="m">fa:16:3e:71:08:66</td><td>host-alice, Enlace 19</td><td>19</td><td>sw-acc-2</td><td>—</td></tr>
+<tr class="cambio"><td>switch-borde</td><td class="m">fa:16:3e:12:48:4c</td><td>sin cruzar con VNRT</td><td>—</td><td>vm-atacante (puerto 1 de OVS = ens4)</td><td class="m">of:000052ca28945241</td></tr>
+<tr class="cambio"><td>vm-atacante</td><td class="m">fa:16:3e:eb:ea:4c</td><td>sin cruzar con VNRT</td><td>—</td><td>switch-borde (ens4)</td><td>—</td></tr>
+</tbody>
+</table>
+<p><b>host-bob</b> es <b>h1-profesor</b> y <b>host-alice</b> es <b>h2-alumno</b>: bob, alice y jhon son los nombres que usa VNRT en su interfaz y en el dibujo; el hostname real de las VM sigue siendo h1-profesor, h2-alumno y vm-atacante.</p>
+<p class="nota"><b>23-nov, filas resaltadas:</b> la MAC de <span class="m">ens4</span> de vm-atacante se leyó en la propia VM (<span class="m">ip link</span>) y la del puerto 1 del borde con <span class="m">ovs-ofctl show br0</span>; ese cable <b>no</b> se ha cruzado todavía con las ventanas de VNRT. La MAC de vm-atacante (<span class="m">fa:16:3e:eb:ea:4c</span>) es el <b>siguiente salto</b> de la ruta por defecto del vigilante de capa 3 (<span class="m">salida</span> en <span class="m">R2/policy/planes/vnrt_topologia14.json</span>); si la NIC cambia, hay que actualizar ese plan. MAC de <span class="m">ens3</span> de vm-atacante: <span class="m">fa:16:3e:55:29:68</span>.</p>
+</div>
+<p class="nota">Documento de referencia del Grupo 4. Detalle y procedimiento de verificación: R1/deploy/topologia14/TOPOLOGIA.md del repositorio.</p>
+
+</body>
+</html>

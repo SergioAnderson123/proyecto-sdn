@@ -27,7 +27,9 @@ Ventanas de VNRT usadas: nodo `sw-acc-1` (`MP_Link 0` `fa:16:3e:f8:d8:dc`, `Enla
 |---|---|---|---|---|---|---|
 | `h1-profesor` | 192.168.201.21 | 5821 | **host-bob** | `fa:16:3e:b6:96:08` | `Enlace 18` | `sw-acc-1` (`ens4` del acceso) |
 | `h2-alumno` | 192.168.201.22 | 5822 | **host-alice** | `fa:16:3e:71:08:66` | `Enlace 19` | `sw-acc-2` (`ens4` del acceso) |
-| `vm-atacante` | sin red de gestión | 5824 | **host-jhon** | (sin medir) | — | `switch-borde` (`ens4`) |
+| `vm-atacante` | sin red de gestión; `ens3` **10.20.11.203/24** (pública, DHCP) | 22, **por su IP** (`ssh ubuntu@10.20.11.203`; el 5824 no se usa) | **host-jhon** | `fa:16:3e:eb:ea:4c` (leída en la VM, 23-nov; cable sin cruzar con VNRT) | — | `switch-borde` (`ens4`, puerto 1 de OVS, MAC `fa:16:3e:12:48:4c`) |
+
+`vm-atacante` (23-nov): `ens4` lleva la IP **fija** `203.0.113.103/24` (subred externa, sin DHCP) y `ens3` la MAC `fa:16:3e:55:29:68`. La MAC de su `ens4` es el **siguiente salto** de la ruta por defecto del vigilante de capa 3 (`salida` en `R2/policy/planes/vnrt_topologia14.json`): si cambia la NIC hay que actualizar ese plan. La tabla de IP y puertos para consulta está en `docs/Tabla_IPs_y_puertos_VM_actualizada.pdf` (fuente: el `.html` de la misma carpeta).
 
 En resumen: **host-bob es `h1-profesor` (cuelga de `sw-acc-1`) y host-alice es `h2-alumno` (cuelga de `sw-acc-2`)**. El nombre del host no
 cambió: el hostname real sigue siendo `h1-profesor` / `h2-alumno`; bob, alice y jhon son los nombres que usa VNRT en su interfaz y en el dibujo.
