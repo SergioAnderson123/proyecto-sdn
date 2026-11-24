@@ -14,6 +14,7 @@ import difflib
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -73,22 +74,41 @@ def describir(a: dict, copias: List[dict]) -> dict:
     """Una entrada de `archivos`: copias, estado y diferencias. `igual` = dos o más copias, todas idénticas; `diverge` = hay dos o más versiones distintas; `una_copia` = solo una fuente lo tiene (no hay
     con qué compararlo: por ejemplo, un archivo que está en el repo y no se ha desplegado); `sin_datos` = ninguna fuente lo tiene."""
     existentes = [c for c in copias if c["existe"]]
-    huellas = sorted({c["sha256"] for c in existentes})
-    estado = "sin_datos" if not existentes else ("diverge" if len(huellas) > 1 else ("igual" if len(existentes) > 1 else "una_copia"))
     contenidos = {c["sha256"]: _texto(c["_datos"]) for c in existentes}
+    for c in existentes:                                  # se compara el CONTENIDO LÓGICO, no los bytes: el mismo JSON con otra sangría, o la unidad del respaldo, no son una divergencia
+        c["logico"] = _logico(a, c["_datos"])
+    logicos = sorted({c["logico"] for c in existentes})
+    estado = "sin_datos" if not existentes else ("diverge" if len(logicos) > 1 else ("igual" if len(existentes) > 1 else "una_copia"))
+    nota = None
+    if estado == "igual" and len({c["sha256"] for c in existentes}) > 1:
+        nota = ("mismo contenido, distinto formato (por ejemplo, el repo con sangría y lo desplegado compacto)" if a["formato"] == "json"
+                else "difieren solo en --respaldo-de: es lo que distingue al respaldo del principal")
     diferencias = []
     if estado == "diverge":
         ref = next((c for c in existentes if c["fuente"] == "repo"), existentes[0])
-        vistos = {ref["sha256"]}
+        vistos = {ref["logico"]}
         for c in existentes:
-            if c["sha256"] in vistos:
+            if c["logico"] in vistos:
                 continue
-            vistos.add(c["sha256"])
-            iguales = [x["fuente"] for x in existentes if x["sha256"] == c["sha256"]]
+            vistos.add(c["logico"])
+            iguales = [x["fuente"] for x in existentes if x["logico"] == c["logico"]]
             diff = list(difflib.unified_diff(contenidos[ref["sha256"]].splitlines(), contenidos[c["sha256"]].splitlines(), fromfile=ref["fuente"], tofile="+".join(iguales), lineterm="", n=2))
             diferencias.append({"base": ref["fuente"], "con": iguales, "diff": "\n".join(diff[:400]) + ("\n… (diff recortado)" if len(diff) > 400 else "")})
-    return {"id": a["id"], "titulo": a["titulo"], "formato": a["formato"], "descripcion": a["descripcion"], "estado": estado, "faltan": [c["fuente"] for c in copias if not c["existe"]],
-            "copias": [{k: v for k, v in c.items() if k != "_datos"} for c in copias], "contenidos": contenidos, "diferencias": diferencias}
+    return {"id": a["id"], "titulo": a["titulo"], "formato": a["formato"], "descripcion": a["descripcion"], "estado": estado, "nota": nota, "faltan": [c["fuente"] for c in copias if not c["existe"]],
+            "copias": [{k: v for k, v in c.items() if k not in ("_datos", "logico")} for c in copias], "contenidos": contenidos, "diferencias": diferencias}
+
+
+def _logico(a: dict, datos: bytes) -> str:
+    """Huella del contenido que importa: un JSON se compara ya parseado y ordenado (da igual la sangría); la unidad del vigilante, sin `--respaldo-de URL` (el principal y el respaldo se distinguen
+    solo por eso, por diseño); el resto, byte a byte."""
+    if a["formato"] == "json":
+        try:
+            return _huella(json.dumps(json.loads(datos.decode("utf-8")), sort_keys=True, separators=(",", ":")).encode())
+        except (ValueError, UnicodeDecodeError):
+            pass
+    if a["id"] == "vigilante-capa3.service":
+        return _huella(re.sub(r"\s+--respaldo-de\s+\S+", "", datos.decode("utf-8", errors="replace")).strip().encode())
+    return _huella(datos)
 
 
 # ---------- política interpretada ----------

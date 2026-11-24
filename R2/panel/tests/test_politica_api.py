@@ -213,3 +213,52 @@ def test_la_pagina_trae_las_pestanas_de_politicas_y_configuracion_sin_construir_
     html = open(os.path.join(RAIZ, "static", "index.html"), encoding="utf-8").read()
     assert 'data-v="politicas"' in html and 'data-v="config"' in html and 'id="v-politicas"' in html and 'id="v-config"' in html
     assert "pintarPoliticas" in js and "pintarConfig" in js and "innerHTML" not in js
+
+
+# ---------- lo que se vio al probar en la red real: ONOS devuelve los criterios en otro orden ----------
+def test_dos_flujos_iguales_con_los_criterios_en_distinto_orden_son_el_mismo(carpeta):
+    esperados = ex.exportar(carpeta)["politica"]["esperados"][ACC1]["flujos"]
+    crudos = _crudos_de_r2(ACC1)
+    for f in crudos:                                                                 # ONOS devuelve el selector en otro orden: se invierte el de todos
+        f["selector"] = {"criteria": list(reversed(f["selector"]["criteria"]))}
+        f["treatment"] = {"instructions": f["treatment"]["instructions"]}
+    r = fl.comparar(esperados, _n(crudos))
+    assert r["faltan"] == [] and r["sobran"] == [] and r["coinciden"] == r["esperados"] > 20
+
+
+def test_el_texto_de_los_campos_sale_siempre_en_el_mismo_orden():
+    a = fl.normalizar({"tableId": 20, "priority": 1, "selector": {"criteria": [{"type": "TCP_DST", "tcpPort": 80}, {"type": "VLAN_VID", "vlanId": 20}, {"type": "ETH_TYPE", "ethType": "0x800"}, {"type": "IN_PORT", "port": 1}]}})
+    b = fl.normalizar({"tableId": 20, "priority": 1, "selector": {"criteria": [{"type": "IN_PORT", "port": 1}, {"type": "ETH_TYPE", "ethType": "0x800"}, {"type": "VLAN_VID", "vlanId": 20}, {"type": "TCP_DST", "tcpPort": 80}]}})
+    assert a["coincide_texto"] == b["coincide_texto"] == "in_port=1, eth_type=0x0800, vlan=20, tcp_dst=80" and list(a["coincide"]) == ["in_port", "eth_type", "vlan", "tcp_dst"]
+
+
+def test_el_orden_de_las_acciones_no_cuenta_al_comparar_pero_una_accion_distinta_si():
+    base = {"tabla": 20, "prioridad": 30000, "coincide_texto": "vlan=20"}
+    a = dict(base, acciones_texto="quitar etiqueta VLAN; ir a la tabla 60")
+    b = dict(base, acciones_texto="ir a la tabla 60; quitar etiqueta VLAN")
+    c = dict(base, acciones_texto="ir a la tabla 60")
+    assert fl.comparar([a], [b])["coinciden"] == 1 and fl.comparar([a], [c])["coinciden"] == 0
+
+
+def test_la_regla_de_arp_por_defecto_de_onos_ya_tiene_explicacion():
+    assert "Núcleo de ONOS" in fl.explicar(0, 5) and fl.explicar(10, 5).startswith("Sin descripción")
+
+
+def test_onos_devuelve_el_descarte_como_noaction_y_es_lo_mismo_que_una_lista_vacia(carpeta):
+    vacio = fl.normalizar({"tableId": 20, "priority": 0, "appId": "org.campus.r2", "selector": {"criteria": []}, "treatment": {"instructions": []}})
+    noaction = fl.normalizar({"tableId": 20, "priority": 0, "appId": "org.campus.r2", "selector": {"criteria": []}, "treatment": {"instructions": [{"type": "NOACTION"}]}})
+    assert noaction["acciones"] == vacio["acciones"] == ["descarte"] and noaction["acciones_texto"] == vacio["acciones_texto"] == "descartar"
+    assert fl.comparar([vacio], [noaction])["coinciden"] == 1
+    assert fl.filtrar([noaction], {"accion": "descarte"}) == [noaction]
+
+
+def test_con_los_cambios_de_la_red_real_la_comparacion_da_cero_diferencias(carpeta):
+    """Los tres rasgos que ONOS tiene y mis datos de prueba no tenían: criterios en otro orden, DROP como NOACTION y acciones reordenadas."""
+    esperados = ex.exportar(carpeta)["politica"]["esperados"][ACC1]["flujos"]
+    crudos = copy.deepcopy(_crudos_de_r2(ACC1))
+    for f in crudos:
+        f["selector"] = {"criteria": list(reversed(f["selector"]["criteria"]))}
+        ins = f["treatment"]["instructions"]
+        f["treatment"] = {"instructions": ins if ins else [{"type": "NOACTION"}]}
+    r = fl.comparar(esperados, _n(crudos))
+    assert r["faltan"] == [] and r["sobran"] == [] and r["coinciden"] == r["esperados"] > 20

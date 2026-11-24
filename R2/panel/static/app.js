@@ -440,7 +440,10 @@ async function pintarConfig() {
     const b = el("button", "Ver");
     b.type = "button";
     b.addEventListener("click", () => mostrarArchivo(a.id));
-    const tr = fila(tb, [el("span", a.id, "mono"), el("span", ESTADOS_CFG[a.estado] || a.estado, "tag " + (a.estado === "diverge" ? "rechazado" : a.estado === "igual" ? "admitido" : "")), copias, a.descripcion, b]);
+    const estado = el("div");
+    estado.appendChild(el("span", ESTADOS_CFG[a.estado] || a.estado, "tag " + (a.estado === "diverge" ? "rechazado" : a.estado === "igual" ? "admitido" : "")));
+    if (a.nota) estado.appendChild(el("div", a.nota, "ayuda"));
+    const tr = fila(tb, [el("span", a.id, "mono"), estado, copias, a.descripcion, b]);
     if (a.estado === "diverge") tr.className = "desigual";
   }
 }

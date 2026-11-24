@@ -183,3 +183,52 @@ def test_la_linea_de_comandos_escribe_el_json_de_una_vez(carpeta, tmp_path, caps
     assert ex.main(["--carpeta", carpeta, "--salida", salida]) == 0
     j = json.load(open(salida, encoding="utf-8"))
     assert j["politica"]["roles"] and not os.path.exists(salida + ".tmp") and "policy.yaml: igual" in capsys.readouterr().out
+
+
+# ---------- comparación por contenido lógico (lo que se vio al desplegar en la red real) ----------
+def test_el_mismo_json_con_otra_sangria_es_igual_y_lo_dice_en_una_nota(tmp_path):
+    c = str(tmp_path)
+    poner(c, "repo", "hosts_fijos_capa3.json", '[\n {"nombre": "server", "ip": "10.0.0.10", "port": 5}\n]\n')
+    poner(c, "ctrl-2", "hosts_fijos_capa3.json", '[{"port": 5, "ip": "10.0.0.10", "nombre": "server"}]')                       # compacto y con otro orden de claves
+    a = por_id(ex.exportar(c))["hosts_fijos_capa3.json"]
+    assert a["estado"] == "igual" and "distinto formato" in a["nota"] and a["diferencias"] == [] and len(a["contenidos"]) == 2          # se siguen pudiendo ver las dos
+
+
+def test_un_json_con_otro_valor_si_diverge(tmp_path):
+    c = str(tmp_path)
+    poner(c, "repo", "hosts_fijos_capa3.json", '[{"ip": "10.0.0.10"}]')
+    poner(c, "ctrl-2", "hosts_fijos_capa3.json", '[{"ip": "10.0.0.11"}]')
+    a = por_id(ex.exportar(c))["hosts_fijos_capa3.json"]
+    assert a["estado"] == "diverge" and a["nota"] is None and len(a["diferencias"]) == 1 and "10.0.0.11" in a["diferencias"][0]["diff"]
+
+
+def test_un_json_roto_se_compara_byte_a_byte_sin_romper(tmp_path):
+    c = str(tmp_path)
+    poner(c, "repo", "plan_capa3.json", "{esto no es json")
+    poner(c, "ctrl-2", "plan_capa3.json", "{esto no es json")
+    poner(c, "ctrl-3", "plan_capa3.json", "{esto tampoco")
+    assert por_id(ex.exportar(c))["plan_capa3.json"]["estado"] == "diverge"
+
+
+UNIDAD = "[Service]\nExecStart=/usr/bin/python3 /opt/vigilante/vigilante.py --subredes /etc/vigilante/plan_capa3.json --salud-puerto 8098 --estable 15 {extra}--aplicar\n"
+
+
+def test_la_unidad_del_principal_y_la_del_respaldo_solo_difieren_en_respaldo_de_y_eso_no_es_una_divergencia(tmp_path):
+    c = str(tmp_path)
+    poner(c, "ctrl-3", "vigilante-capa3.service", UNIDAD.format(extra=""))
+    poner(c, "ctrl-2", "vigilante-capa3.service", UNIDAD.format(extra="--respaldo-de http://192.168.201.3:8098/salud "))
+    a = por_id(ex.exportar(c))["vigilante-capa3.service"]
+    assert a["estado"] == "igual" and "--respaldo-de" in a["nota"] and a["diferencias"] == []
+
+
+def test_si_la_unidad_difiere_en_otra_cosa_si_diverge_aunque_tambien_cambie_respaldo_de(tmp_path):
+    c = str(tmp_path)
+    poner(c, "ctrl-3", "vigilante-capa3.service", UNIDAD.format(extra=""))
+    poner(c, "ctrl-2", "vigilante-capa3.service", UNIDAD.format(extra="--respaldo-de http://192.168.201.3:8098/salud ").replace("--estable 15", "--estable 5"))
+    a = por_id(ex.exportar(c))["vigilante-capa3.service"]
+    assert a["estado"] == "diverge" and "--estable 5" in a["diferencias"][0]["diff"]
+
+
+def test_copias_con_los_mismos_bytes_no_llevan_nota(carpeta):
+    a = por_id(ex.exportar(carpeta))
+    assert a["policy.yaml"]["nota"] is None and a["plan_capa3.json"]["nota"] is None

@@ -39,6 +39,7 @@ CATALOGO: List[Tuple[Optional[int], int, str]] = [
     (0, 40002, "Portal cautivo: ARP de quien no tiene sesión, o reescritura de la respuesta del portal"),
     (0, 40001, "Sesión 802.1X (puerto + MAC de origen: pone la VLAN del rol y salta a su tabla) o puerto de confianza (servidor, troncal)"),
     (0, 40000, "Base de ONOS y R1: LLDP, BDDP, ARP y DHCP de ONOS al controlador"),
+    (0, 5, "Núcleo de ONOS: ARP al controlador, regla por defecto de ONOS (org.onosproject.core)"),
     (0, 35000, "Portal cautivo: tráfico al portal y desvío del HTTP (bajo la sesión: con sesión nunca se desvía)"),
     (0, 1000, "Sin sesión ni otra regla: pone la VLAN de cuarentena y salta a su tabla (solo ARP y portal)"),
     (None, 30000, "Tabla de rol: un servicio permitido (VLAN del rol + IP y puerto TCP del servicio)"),
@@ -92,6 +93,8 @@ def _valor(tipo: str, c: dict):
 def _accion(i: dict) -> Tuple[str, str]:
     """(tipo, texto) de una instrucción de ONOS."""
     t = i.get("type")
+    if t == "NOACTION":                          # así devuelve ONOS un flujo sin acciones (un DROP explícito): es lo mismo que una lista vacía
+        return "descarte", "descartar"
     if t == "OUTPUT":
         p = str(i.get("port"))
         return ("controlador", "controlador") if p.upper() == "CONTROLLER" else ("salida", f"salida {p}")
@@ -116,6 +119,14 @@ def _accion(i: dict) -> Tuple[str, str]:
     return "extension", str(t).lower()
 
 
+ORDEN_CAMPOS = ["in_port", "eth_src", "eth_dst", "eth_type", "vlan", "ip_proto", "ip_src", "ip_dst", "tcp_src", "tcp_dst", "udp_src", "udp_dst", "arp_op", "arp_spa", "arp_tpa", "icmp_type", "metadata"]
+
+
+def _canonico(coincide: dict) -> dict:
+    """Los campos en un orden fijo: ONOS devuelve los criterios en el orden que quiere (y no el que se instaló), y sin esto dos flujos iguales parecerían distintos al compararlos."""
+    return dict(sorted(coincide.items(), key=lambda kv: (ORDEN_CAMPOS.index(kv[0]) if kv[0] in ORDEN_CAMPOS else len(ORDEN_CAMPOS), kv[0])))
+
+
 def normalizar(f: dict) -> dict:
     """Un flujo de `GET /flows/{switch}` de ONOS, aplanado para filtrarlo y mostrarlo."""
     coincide = {}
@@ -126,9 +137,10 @@ def normalizar(f: dict) -> dict:
                 coincide[CAMPOS[c["type"]][0]] = v
         else:
             coincide[str(c.get("type", "?")).lower()] = "?"
+    coincide = _canonico(coincide)
     tr = f.get("treatment") or {}
     acciones = [_accion(i) for i in tr.get("instructions", [])] + [("modifica", "(diferida) " + _accion(i)[1]) for i in tr.get("deferred", [])]
-    if not acciones:
+    if not acciones or all(t == "descarte" for t, _ in acciones):
         acciones = [("descarte", "descartar")]
     tabla, prio = int(f.get("tableId", 0)), int(f.get("priority", 0))
     app = str(f.get("appId", ""))
@@ -433,7 +445,7 @@ def comparar(esperados: List[dict], instalados: List[dict]) -> dict:
     """Compara los flujos que R2 ESPERA en un switch (calculados con policy_tables) con los que ONOS tiene bajo el appId de R2. Ambos ya normalizados. Dos flujos son el mismo si coinciden
     tabla, prioridad, campos y acciones (un multiconjunto: si la política espera dos iguales y hay uno, falta uno). Devuelve {coinciden, faltan, sobran}: `faltan` = esperados que no están
     instalados (R2 no los instaló o ONOS los perdió); `sobran` = instalados que la política ya no pide (una política vieja, o a medio aplicar)."""
-    clave = lambda x: (x["tabla"], x["prioridad"], x["coincide_texto"], x["acciones_texto"])      # noqa: E731
+    clave = lambda x: (x["tabla"], x["prioridad"], x["coincide_texto"], tuple(sorted(x["acciones_texto"].split("; "))))      # noqa: E731  (el orden de las acciones no cuenta: ONOS puede devolverlas reordenadas)
     exp: Dict[tuple, List[dict]] = {}
     ins: Dict[tuple, List[dict]] = {}
     for x in esperados:
