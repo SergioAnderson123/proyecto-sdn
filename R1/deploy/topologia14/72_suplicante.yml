@@ -1,6 +1,9 @@
 # Prepara un solo host (por defecto h1-profesor) como suplicante 802.1X.
 #   PLAYBOOK=72_suplicante.yml ./lanzar.sh                                   # prepara h1-profesor; NO autentica
-#   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true                  # arranca solo h1-profesor
+#   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true                  # arranca solo h1-profesor (con su identidad por defecto del inventario: alumno02)
+#   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e arrancar=true -e identidad=profesor01   # h1 entra como profesor01 (demostracion); sin -e identidad vuelve a alumno02
+#   (identidad: alumno01|alumno02|alumno03|profesor01|profesor02|support01. Cambiarla deja en el host solo los certificados de esa identidad y de los alumnos:
+#    el de profesor desaparece del host al volver a alumno.)
 #   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e parar=true                     # para solo h1-profesor (envía logoff)
 #   PLAYBOOK=72_suplicante.yml ./lanzar.sh -e objetivo_host=h2-alumno -e arrancar=true  # selecciona explícitamente h2
 # Lo que cambia en el host: paquetes (wpasupplicant, tcpdump), /home/ubuntu/supp, el servicio r1-eapol-bcast (un filtro tc de salida en ens4 que cambia el
@@ -13,6 +16,14 @@
   gather_facts: false
   vars:
     host_objetivo: "{{ objetivo_host | default('h1-profesor') }}"
+    # identidad -> suplicante (los .conf estan en R1/shared/mininet/supplicants)
+    identidades:
+      alumno01: wpa_alumno_01.conf
+      alumno02: wpa_alumno_02.conf
+      alumno03: wpa_alumno_03.conf
+      profesor01: wpa_profe_01.conf
+      profesor02: wpa_profe_02.conf
+      support01: wpa_support_01.conf
   tasks:
     - name: Aceptar solo un host del grupo 802.1X
       ansible.builtin.assert:
@@ -20,6 +31,22 @@
           - host_objetivo in groups['hosts']
         fail_msg: "objetivo_host debe ser h1-profesor o h2-alumno"
         quiet: true
+
+    - name: Identidad pedida (-e identidad=...) conocida
+      ansible.builtin.assert:
+        that:
+          - identidad in identidades
+        fail_msg: "identidad debe ser una de: {{ identidades.keys() | list | join(', ') }}"
+        quiet: true
+      when: identidad is defined
+
+    - name: Cambiar la identidad por defecto de ese host (sustituye cert y conf del inventario solo en esta ejecucion)
+      ansible.builtin.set_fact:
+        cert: "{{ identidad }}@example.org.pem"
+        conf: "{{ identidades[identidad] }}"
+      delegate_to: "{{ host_objetivo }}"
+      delegate_facts: true
+      when: identidad is defined
 
     - name: Leer AGENTE_TOKEN (sin mostrarla)
       ansible.builtin.shell: grep '^AGENTE_TOKEN=' {{ repo_dir }}/R1/deploy/.env | head -1 | cut -d= -f2 | tr -d '\n'
