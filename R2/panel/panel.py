@@ -20,10 +20,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Dict, List, Tuple
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, AQUI)
 import datos  # noqa: E402
+import flujos  # noqa: E402
 
 log = logging.getLogger("panel")
 ESTATICOS = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
@@ -132,8 +134,56 @@ def _num(v):
         return None
 
 
-def hacer_manejador(rec: Recolector, historial: "datos.Historial", roles_admin, reloj=time.time, ip_de=None):
-    """`ip_de(manejador) -> str` da la IP de origen (por defecto la de la conexión TCP; las cabeceras X-Forwarded-For se IGNORAN: nadie las pone en medio y cualquiera podría falsearlas)."""
+FILTROS_FLUJOS = ("tabla", "prioridad", "app", "estado", "in_port", "eth_src", "eth_dst", "eth_type", "vlan", "ip_proto", "ip_src", "ip_dst", "ip_src_cubre", "ip_dst_cubre", "tcp_src", "tcp_dst",
+                  "udp_src", "udp_dst", "arp_op", "accion", "con_paquetes", "texto")
+
+
+def lista_de_switches(est: dict, vm_switch: dict, acceso_ssh: str) -> List[dict]:
+    """Los switches que ve ONOS, con su nombre (del vigilante), quién manda en cada uno y dónde ejecutar ahí un comando de ovs-ofctl."""
+    nombres = datos.nombres_de_switches(((est.get("vigilante") or {}).get("estado") or {}).get("topologia"))
+    out = []
+    for s in ((est.get("vistas") or {}).get("switches") or []):
+        nombre = nombres.get(s["id"], s["id"])
+        vm = vm_switch.get(nombre)
+        ssh = None
+        if vm:
+            host, _, puerto = vm.partition(":")
+            ssh = {"vm": host, "comando": f"ssh -p {puerto} ubuntu@{acceso_ssh}" if puerto else f"ssh ubuntu@{acceso_ssh}", "local": not puerto}
+        out.append({"id": s["id"], "nombre": nombre, "maestro": s.get("maestro"), "disponible": any(v["disponible"] for v in s["por_nodo"].values()), "ssh": ssh})
+    return sorted(out, key=lambda x: x["nombre"])
+
+
+def respuesta_flujos(q: Dict[str, str], est: dict, lector: "flujos.LectorFlujos", vm_switch: dict, acceso_ssh: str) -> Tuple[int, dict]:
+    """(código HTTP, JSON) de `/api/flujos`: los flujos de UN switch, filtrados y paginados, más los comandos de ovs-ofctl equivalentes."""
+    switches = lista_de_switches(est, vm_switch, acceso_ssh)
+    pedido = (q.get("switch") or "").strip()
+    sw = next((s for s in switches if pedido in (s["id"], s["nombre"])), None)
+    if sw is None:
+        return 400, {"error": "switch desconocido: use el identificador (of:...) o el nombre", "switches": [s["nombre"] for s in switches]}
+    filtros = {k: q[k] for k in FILTROS_FLUJOS if q.get(k, "").strip()}
+    lec = lector.obtener(sw["id"], sw["maestro"], forzar=q.get("actualizar") == "1")
+    todos = [flujos.normalizar(x) for x in lec["flujos"]]
+    try:
+        lista = flujos.ordenar(flujos.filtrar(todos, filtros), q.get("orden", "tabla"))
+    except flujos.FiltroInvalido as e:
+        return 400, {"error": str(e)}
+    try:
+        limite = max(1, min(500, int(q.get("limite", 100))))
+        pagina = max(0, int(q.get("pagina", 0)))
+    except ValueError:
+        return 400, {"error": "limite y pagina deben ser números"}
+    cookie = None
+    if filtros.get("app"):
+        coinciden = [a for a in flujos.cuentas(todos)["apps"] if filtros["app"].lower() in a.lower()]
+        cookie = flujos.cookies_por_app(lec["flujos"]).get(coinciden[0]) if len(coinciden) == 1 else None
+    return 200, {"switch": sw, "nodo": lec["nodo"], "t": lec["t"], "antiguo": lec["antiguo"], "error": lec["error"], "total_switch": len(todos), "total": len(lista), "pagina": pagina, "limite": limite,
+                 "flujos": lista[pagina * limite:(pagina + 1) * limite], "cuentas": flujos.cuentas(todos), "comandos": flujos.comandos_ovs(filtros, cookie_app=cookie), "filtros": filtros}
+
+
+def hacer_manejador(rec: Recolector, historial: "datos.Historial", roles_admin, reloj=time.time, ip_de=None, lector=None, vm_switch=None, acceso_ssh="10.20.11.14"):
+    """`ip_de(manejador) -> str` da la IP de origen (por defecto la de la conexión TCP; las cabeceras X-Forwarded-For se IGNORAN: nadie las pone en medio y cualquiera podría falsearlas).
+    `lector` (flujos.LectorFlujos) activa las pantallas de flujos; sin él `/api/flujos` no existe."""
+    vm_switch = vm_switch or {}
     estaticos = {}
     for ruta, (archivo, tipo) in ESTATICOS.items():
         with open(os.path.join(AQUI, "static", archivo), "rb") as f:
@@ -188,6 +238,11 @@ def hacer_manejador(rec: Recolector, historial: "datos.Historial", roles_admin, 
                 return self._json({"listo": est["listo"], "vistas": est["vistas"], "t": est["t"]})
             if ruta == "/api/vigilante":
                 return self._json({"listo": est["listo"], "vigilante": est["vigilante"], "t": est["t"]})
+            if ruta == "/api/switches":
+                return self._json({"listo": est["listo"], "switches": lista_de_switches(est, vm_switch, acceso_ssh)})
+            if ruta == "/api/flujos" and lector is not None:
+                codigo, cuerpo = respuesta_flujos(q, est, lector, vm_switch, acceso_ssh)
+                return self._json(cuerpo, codigo)
             if ruta == "/api/eventos":
                 evs = historial.listar(tipo=q.get("tipo") or None, usuario=q.get("usuario") or None, mac=q.get("mac") or None, texto=q.get("texto") or None,
                                        desde=_num(q.get("desde")), hasta=_num(q.get("hasta")), limite=int(_num(q.get("limite")) or 100))
@@ -227,6 +282,8 @@ def main(argv=None) -> int:
     a.add_argument("--vigilantes", default="", metavar="ctrl3=http://IP:8098,...")
     a.add_argument("--maestros-validos", default="", metavar="ctrl1,ctrl2", help="nodos de ONOS (con el nombre de --onos) que pueden mandar en los switches porque sirven 802.1X (RADIUS, LDAP, mapper); "
                    "si otro nodo manda en un switch el panel avisa. Vacío = no se comprueba")
+    a.add_argument("--vm-switch", default="", metavar="core-1=sw-core-1:5813,borde=switch-borde:", help="nombre del switch = VM:puerto SSH del borde (sin puerto = el propio borde); sirve para decir dónde ejecutar los comandos")
+    a.add_argument("--acceso-ssh", default="10.20.11.14", help="IP por la que se llega por SSH a las VM (la del borde)")
     a.add_argument("--roles-admin", default="superadmin", help="rol o roles (separados por comas) que pueden entrar y editar")
     a.add_argument("--db", default="panel.sqlite")
     a.add_argument("--intervalo", type=float, default=10.0, help="segundos entre rondas del recolector")
@@ -243,7 +300,8 @@ def main(argv=None) -> int:
     rec = Recolector(cfg, historial)
     parar = threading.Event()
     threading.Thread(target=rec.correr, args=(arg.intervalo, parar), daemon=True).start()
-    srv = ThreadingHTTPServer((arg.escuchar, arg.puerto), hacer_manejador(rec, historial, roles))
+    lector = flujos.LectorFlujos(cfg["onos"], leer_json, usuario=cfg["onos_usuario"], clave=cfg["onos_clave"])
+    srv = ThreadingHTTPServer((arg.escuchar, arg.puerto), hacer_manejador(rec, historial, roles, lector=lector, vm_switch=_pares(arg.vm_switch), acceso_ssh=arg.acceso_ssh))
     log.info("Panel (solo lectura) en http://%s:%d; entra el rol %s y, solo para leer, el túnel local; %d nodos de ONOS, cada %.0f s",
              arg.escuchar, arg.puerto, "/".join(roles), len(cfg["onos"]), arg.intervalo)
     try:

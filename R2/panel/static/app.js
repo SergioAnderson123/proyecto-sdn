@@ -227,6 +227,91 @@ function pintarVigilante(d) {
   if (!e.historial.length) fila(tb, ["Sin eventos desde que arrancó el vigilante", "", "", ""]);
 }
 
+// ---------- flujos de los switches ----------
+const CAMPOS_FL = ["tabla", "prioridad", "app", "estado", "in_port", "eth_src", "eth_dst", "eth_type", "vlan", "ip_src", "ip_dst", "ip_dst_cubre", "ip_proto", "tcp_dst", "udp_dst", "accion", "texto"];
+let flPagina = 0;
+let flSwitchesListos = false;
+
+function consultaFlujos(actualizar) {
+  const p = new URLSearchParams();
+  p.set("switch", $("fl-switch").value);
+  for (const c of CAMPOS_FL) if ($("fl-" + c).value.trim()) p.set(c, $("fl-" + c).value.trim());
+  if ($("fl-con_paquetes").checked) p.set("con_paquetes", "1");
+  p.set("orden", $("fl-orden").value);
+  p.set("pagina", String(flPagina));
+  p.set("limite", "100");
+  if (actualizar) p.set("actualizar", "1");
+  return p;
+}
+
+async function cargarSwitchesFl() {
+  const d = await api("/api/switches");
+  const sel = $("fl-switch");
+  const actual = sel.value;
+  vaciar(sel);
+  for (const s of d.switches) {
+    const o = el("option", s.nombre + (s.maestro ? " (manda " + s.maestro + ")" : "") + (s.disponible ? "" : " — no disponible"));
+    o.value = s.id;
+    sel.appendChild(o);
+  }
+  if (actual) sel.value = actual;
+  flSwitchesListos = d.switches.length > 0;
+}
+
+function caja(titulo, texto) {
+  const c = el("div", null, "caja-cmd");
+  c.appendChild(el("div", titulo, "ayuda"));
+  const pre = el("pre", texto, "cmd");
+  c.appendChild(pre);
+  const b = el("button", "Copiar");
+  b.type = "button";
+  b.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(texto); b.textContent = "Copiado"; }
+    catch (e) { const r = document.createRange(); r.selectNodeContents(pre); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); b.textContent = "Seleccionado: Ctrl+C"; }
+    setTimeout(() => { b.textContent = "Copiar"; }, 2000);
+  });
+  c.appendChild(b);
+  return c;
+}
+
+async function pintarFlujos(actualizar) {
+  if (!flSwitchesListos) await cargarSwitchesFl();
+  if (!$("fl-switch").value) { $("fl-info").textContent = "(no hay switches todavía)"; return; }
+  let r;
+  try {
+    r = await fetch("/api/flujos?" + consultaFlujos(actualizar).toString(), { credentials: "same-origin", cache: "no-store" });
+  } catch (e) { $("fl-info").textContent = "(error de red)"; return; }
+  if (r.status === 403) { await api("/api/resumen"); return; }
+  const d = await r.json();
+  const info = $("fl-info");
+  const tb = $("t-fl").tBodies[0];
+  const cont = $("fl-comandos");
+  vaciar(tb); vaciar(cont);
+  if (!r.ok) { info.textContent = "(" + (d.error || "error") + ")"; info.className = "cuenta error"; return; }
+  info.className = "cuenta";
+  const hace = d.t ? Math.max(0, Math.round(Date.now() / 1000 - d.t)) : null;
+  info.textContent = "(" + d.switch.nombre + " · leído del maestro " + (d.nodo || "?") + (hace === null ? "" : " hace " + hace + " s") + " · " + d.total + " de " + d.total_switch + " flujos)";
+  if (d.error) { const p = el("p", (d.antiguo ? "Se muestra la lectura anterior. " : "") + d.error, "error"); cont.appendChild(p); }
+  // datalist de apps, con la cuenta de cada una
+  const dl = $("fl-apps");
+  vaciar(dl);
+  for (const [app, n] of Object.entries(d.cuentas.apps)) { const o = el("option", app + " (" + n + ")"); o.value = app; dl.appendChild(o); }
+  // comandos para el switch real
+  const dnd = d.switch.ssh ? (d.switch.ssh.local ? "En " + d.switch.ssh.vm + ": " : "En la VM " + d.switch.ssh.vm + " (entra con " + d.switch.ssh.comando + "): ") : "En la VM del switch: ";
+  cont.appendChild(caja(dnd + "los mismos flujos con ovs-ofctl", d.comandos.principal));
+  if (d.comandos.traza) cont.appendChild(caja("Qué regla atrapa un paquete así (ofproto/trace)", d.comandos.traza));
+  if (d.comandos.notas.length) { const ul = el("ul", null, "notas"); for (const n of d.comandos.notas) ul.appendChild(el("li", n)); cont.appendChild(ul); }
+  for (const x of d.flujos) {
+    const tr = fila(tb, [x.tabla, x.prioridad, x.app.replace("org.campus.", "campus.").replace("org.onosproject.", "onos."), el("span", x.coincide_texto, "mono"), x.acciones_texto, x.paquetes, x.estado, x.explicacion]);
+    tr.title = "id " + x.id + " · " + x.bytes + " bytes · vive " + x.vida_s + " s";
+  }
+  if (!d.flujos.length) fila(tb, ["Ningún flujo con esos filtros", "", "", "", "", "", "", ""]);
+  const paginas = Math.max(1, Math.ceil(d.total / d.limite));
+  $("fl-pag").textContent = "página " + (d.pagina + 1) + " de " + paginas;
+  $("fl-ant").disabled = d.pagina <= 0;
+  $("fl-sig").disabled = d.pagina + 1 >= paginas;
+}
+
 // ---------- ciclo ----------
 async function refrescar() {
   try {
@@ -234,6 +319,7 @@ async function refrescar() {
     else if (vista === "sesiones") pintarSesiones(await api("/api/sesiones"));
     else if (vista === "vistas") pintarVistas(await api("/api/vistas"));
     else if (vista === "vigilante") pintarVigilante(await api("/api/vigilante"));
+    else if (vista === "flujos") await pintarFlujos(false);
     else if (vista === "eventos") await pintarEventos();
     $("estado").textContent = "actualizado " + new Date().toLocaleTimeString();
     if (vista === "resumen" && quien) $("estado").textContent += " · " + quien;
@@ -249,5 +335,11 @@ function cambiar(v) {
 }
 for (const b of document.querySelectorAll("#pestanas button")) b.addEventListener("click", () => cambiar(b.dataset.v));
 $("f-ev").addEventListener("submit", (ev) => { ev.preventDefault(); refrescar(); });
+$("f-fl").addEventListener("submit", (ev) => { ev.preventDefault(); flPagina = 0; pintarFlujos(false); });
+$("fl-switch").addEventListener("change", () => { flPagina = 0; });
+$("fl-releer").addEventListener("click", () => pintarFlujos(true));
+$("fl-limpiar").addEventListener("click", () => { for (const c of CAMPOS_FL) $("fl-" + c).value = ""; $("fl-con_paquetes").checked = false; flPagina = 0; pintarFlujos(false); });
+$("fl-ant").addEventListener("click", () => { flPagina = Math.max(0, flPagina - 1); pintarFlujos(false); });
+$("fl-sig").addEventListener("click", () => { flPagina += 1; pintarFlujos(false); });
 refrescar();
-temporizador = setInterval(() => { if (vista !== "eventos") refrescar(); }, 5000);   // los eventos se actualizan al filtrar, para no perder lo que se está leyendo
+temporizador = setInterval(() => { if (vista !== "eventos" && vista !== "flujos") refrescar(); }, 5000);   // eventos y flujos se actualizan al filtrar: no se pierde lo que se lee ni se lee a ONOS en bucle

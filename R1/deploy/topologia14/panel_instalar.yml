@@ -20,6 +20,8 @@
     escuchar: 127.0.0.1
     puerto: 8480
     maestros_validos: "ctrl1,ctrl2"  # nodos de ONOS que pueden mandar en los switches porque sirven 802.1X (RADIUS, LDAP, mapper); si manda otro, el panel avisa. Vacio = no se comprueba
+    vm_switch: "core-1=sw-core-1:5813,core-2=sw-core-2:5814,acc-1=sw-acc-1:5812,acc-2=sw-acc-2:5811,borde=switch-borde:"   # nombre del switch = VM:puerto SSH del borde (para decir donde ejecutar cada comando de ovs-ofctl)
+    acceso_ssh: 10.20.11.14          # IP publica del borde, por donde se entra por SSH a las VM
     roles_admin: superadmin          # rol o roles (separados por comas) que entran; el nombre debe coincidir con el `rol` de la sesion en el mapper (no distingue mayusculas)
     intervalo: 10                    # segundos entre rondas del recolector
     destino: /opt/panel-red
@@ -88,13 +90,14 @@
           loop:
             - {src: "{{ origen }}/panel.py", dest: panel.py}
             - {src: "{{ origen }}/datos.py", dest: datos.py}
+            - {src: "{{ origen }}/flujos.py", dest: flujos.py}
             - {src: "{{ origen }}/static/index.html", dest: static/index.html}
             - {src: "{{ origen }}/static/app.js", dest: static/app.js}
             - {src: "{{ origen }}/static/style.css", dest: static/style.css}
           register: programa
 
         - name: Comprobar que el programa es Python valido
-          ansible.builtin.command: python3 -c "import ast; [ast.parse(open('{{ destino }}/' + f, encoding='utf-8').read()) for f in ('panel.py', 'datos.py')]"
+          ansible.builtin.command: python3 -c "import ast; [ast.parse(open('{{ destino }}/' + f, encoding='utf-8').read()) for f in ('panel.py', 'datos.py', 'flujos.py')]"
           changed_when: false
 
         - name: Configuracion (credenciales de ONOS; solo la lee root)
@@ -117,7 +120,7 @@
 
               [Service]
               EnvironmentFile=/etc/panel-red.env
-              ExecStart=/usr/bin/python3 {{ destino }}/panel.py --escuchar {{ escuchar }} --puerto {{ puerto }} --onos {{ ['ctrl' ~ 1, 'ctrl' ~ 2, 'ctrl' ~ 3] | zip(nodos_onos) | map('join', '=') | join(',') }} --mapper {{ mapper_url }} --vigilantes {{ vigilantes }} --roles-admin {{ roles_admin }} --maestros-validos "{{ maestros_validos }}" --db /var/lib/panel-red/panel.sqlite --intervalo {{ intervalo }}
+              ExecStart=/usr/bin/python3 {{ destino }}/panel.py --escuchar {{ escuchar }} --puerto {{ puerto }} --onos {{ ['ctrl' ~ 1, 'ctrl' ~ 2, 'ctrl' ~ 3] | zip(nodos_onos) | map('join', '=') | join(',') }} --mapper {{ mapper_url }} --vigilantes {{ vigilantes }} --roles-admin {{ roles_admin }} --maestros-validos "{{ maestros_validos }}" --vm-switch "{{ vm_switch }}" --acceso-ssh {{ acceso_ssh }} --db /var/lib/panel-red/panel.sqlite --intervalo {{ intervalo }}
               Restart=always
               RestartSec=5
               DynamicUser=yes

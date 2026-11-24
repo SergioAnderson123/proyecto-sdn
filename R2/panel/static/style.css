@@ -50,3 +50,12 @@ tr.desigual td:first-child { border-left: 4px solid var(--alto); }
 .svg-topologia .nombre { font: 600 13px system-ui, sans-serif; fill: var(--texto); }
 .svg-topologia .etiqueta { font: 11px system-ui, sans-serif; fill: var(--suave); }
 .svg-topologia .etiqueta.mala { fill: var(--alto); }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.filtros label.marca { flex-direction: row; align-items: center; gap: 4px; color: var(--texto); }
+.comandos { margin: 8px 0; }
+.caja-cmd { background: var(--card); border: 1px solid var(--borde); border-radius: 8px; padding: 8px 10px; margin: 6px 0; }
+pre.cmd { margin: 4px 0 6px; white-space: pre-wrap; word-break: break-all; font: 12px/1.45 ui-monospace, Consolas, monospace; background: var(--fondo); border: 1px solid var(--borde); border-radius: 6px; padding: 6px 8px; }
+.caja-cmd button, .paginas button, .filtros button[type=button] { font: inherit; padding: 3px 10px; border: 1px solid var(--borde); border-radius: 6px; background: var(--card); color: var(--texto); cursor: pointer; }
+.paginas { color: var(--suave); }
+ul.notas { margin: 4px 0; padding-left: 18px; color: var(--suave); font-size: 12px; }
+#t-fl td:nth-child(8) { color: var(--suave); font-size: 12px; max-width: 360px; }

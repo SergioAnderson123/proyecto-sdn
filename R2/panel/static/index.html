@@ -14,6 +14,7 @@
     <button data-v="sesiones">Sesiones</button>
     <button data-v="eventos">Eventos</button>
     <button data-v="vigilante">Vigilante</button>
+    <button data-v="flujos">Flujos</button>
     <button data-v="vistas">Vistas de ONOS</button>
   </nav>
   <div id="estado" class="estado">cargando…</div>
@@ -62,6 +63,40 @@
     <div id="topologia" class="topologia"></div>
     <h2>Historial del vigilante</h2>
     <table id="t-hist"><thead><tr><th>Hora</th><th>Evento</th><th>Detalle</th><th>Flujos por switch</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="v-flujos" hidden>
+    <h2>Flujos de los switches <span id="fl-info" class="cuenta"></span></h2>
+    <p class="ayuda">Se leen del nodo maestro del switch, bajo demanda y con una caché de 10 s. El panel no instala ni borra ningún flujo. Con tus filtros arma el comando de <span class="mono">ovs-ofctl</span> para verlos en el switch real.</p>
+    <form id="f-fl" class="filtros">
+      <label>Switch <select id="fl-switch"></select></label>
+      <label>Tabla <input id="fl-tabla" placeholder="60 o 0,60" size="8"></label>
+      <label>Prioridad <input id="fl-prioridad" placeholder="160 o 100-200" size="11"></label>
+      <label>Quién la instaló <input id="fl-app" placeholder="r2, vigilante…" size="12" list="fl-apps"><datalist id="fl-apps"></datalist></label>
+      <label>Estado <select id="fl-estado"><option value="">todos</option><option>ADDED</option><option>PENDING_ADD</option><option>PENDING_REMOVE</option><option>FAILED</option></select></label>
+      <label>Puerto de entrada <input id="fl-in_port" size="6"></label>
+      <label>MAC origen <input id="fl-eth_src" size="17"></label>
+      <label>MAC destino <input id="fl-eth_dst" size="17"></label>
+      <label>EtherType <input id="fl-eth_type" placeholder="0x0800" size="7"></label>
+      <label>VLAN <input id="fl-vlan" size="5"></label>
+      <label>IP origen (contenida en) <input id="fl-ip_src" placeholder="10.0.1.0/24" size="14"></label>
+      <label>IP destino (contenida en) <input id="fl-ip_dst" placeholder="10.0.0.10" size="14"></label>
+      <label>IP destino «cubre» <input id="fl-ip_dst_cubre" placeholder="qué reglas la contienen" size="14"></label>
+      <label>Protocolo IP <input id="fl-ip_proto" placeholder="6 / 17" size="5"></label>
+      <label>TCP destino <input id="fl-tcp_dst" size="6"></label>
+      <label>UDP destino <input id="fl-udp_dst" size="6"></label>
+      <label>Acción <select id="fl-accion"><option value="">cualquiera</option><option value="salida">salida</option><option value="goto">ir a otra tabla</option><option value="meter">medidor</option>
+        <option value="descarte">descarte</option><option value="controlador">al controlador</option><option value="modifica">modifica</option></select></label>
+      <label>Texto <input id="fl-texto" placeholder="en regla o explicación" size="14"></label>
+      <label>Ordenar <select id="fl-orden"><option value="tabla">tabla y prioridad</option><option value="prioridad">prioridad</option><option value="paquetes">paquetes</option><option value="app">app</option></select></label>
+      <label class="marca"><input type="checkbox" id="fl-con_paquetes"> solo con paquetes</label>
+      <button type="submit">Filtrar</button>
+      <button type="button" id="fl-releer">Releer de ONOS</button>
+      <button type="button" id="fl-limpiar">Limpiar</button>
+    </form>
+    <div id="fl-comandos" class="comandos"></div>
+    <table id="t-fl"><thead><tr><th>Tabla</th><th>Prio.</th><th>Instalada por</th><th>Coincide</th><th>Acciones</th><th>Paquetes</th><th>Estado</th><th>Qué es</th></tr></thead><tbody></tbody></table>
+    <p class="paginas"><button type="button" id="fl-ant">« anterior</button> <span id="fl-pag"></span> <button type="button" id="fl-sig">siguiente »</button></p>
   </section>
 
   <section id="v-vistas" hidden>
