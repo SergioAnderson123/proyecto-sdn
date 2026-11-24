@@ -19,6 +19,7 @@
     memoria_minima_mb: 300
     escuchar: 127.0.0.1
     puerto: 8480
+    maestros_validos: "ctrl1,ctrl2"  # nodos de ONOS que pueden mandar en los switches porque sirven 802.1X (RADIUS, LDAP, mapper); si manda otro, el panel avisa. Vacio = no se comprueba
     roles_admin: superadmin          # rol o roles (separados por comas) que entran; el nombre debe coincidir con el `rol` de la sesion en el mapper (no distingue mayusculas)
     intervalo: 10                    # segundos entre rondas del recolector
     destino: /opt/panel-red
@@ -116,7 +117,7 @@
 
               [Service]
               EnvironmentFile=/etc/panel-red.env
-              ExecStart=/usr/bin/python3 {{ destino }}/panel.py --escuchar {{ escuchar }} --puerto {{ puerto }} --onos {{ ['ctrl' ~ 1, 'ctrl' ~ 2, 'ctrl' ~ 3] | zip(nodos_onos) | map('join', '=') | join(',') }} --mapper {{ mapper_url }} --vigilantes {{ vigilantes }} --roles-admin {{ roles_admin }} --db /var/lib/panel-red/panel.sqlite --intervalo {{ intervalo }}
+              ExecStart=/usr/bin/python3 {{ destino }}/panel.py --escuchar {{ escuchar }} --puerto {{ puerto }} --onos {{ ['ctrl' ~ 1, 'ctrl' ~ 2, 'ctrl' ~ 3] | zip(nodos_onos) | map('join', '=') | join(',') }} --mapper {{ mapper_url }} --vigilantes {{ vigilantes }} --roles-admin {{ roles_admin }} --maestros-validos "{{ maestros_validos }}" --db /var/lib/panel-red/panel.sqlite --intervalo {{ intervalo }}
               Restart=always
               RestartSec=5
               DynamicUser=yes

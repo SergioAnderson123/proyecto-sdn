@@ -156,7 +156,8 @@ def vistas_onos(por_nodo: Dict[str, Optional[dict]]) -> dict:
             d = next((x for x in datos.get("devices", []) if x.get("id") == i), None)
             vista[nodo] = {"disponible": bool(d.get("available")) if d else None, "rol": d.get("role") if d else None}
         valores = {v["disponible"] for v in vista.values() if v["disponible"] is not None}
-        switches.append({"id": i, "por_nodo": vista, "desigual": len(valores) > 1})
+        maestros = sorted(n for n, v in vista.items() if v["rol"] == "MASTER")
+        switches.append({"id": i, "por_nodo": vista, "desigual": len(valores) > 1, "maestros": maestros, "maestro": maestros[0] if len(maestros) == 1 else None})
     nodos = {}
     for nodo, datos in por_nodo.items():
         devs = (datos or {}).get("devices", [])
@@ -193,9 +194,35 @@ def avisos_de_topologia(topologia: Optional[dict]) -> List[dict]:
     return out
 
 
-def avisos(vistas: dict, vigilantes: Dict[str, dict], mapper_ok: Optional[bool], fuentes_caidas: Iterable[str] = (), topologia: Optional[dict] = None) -> List[dict]:
+def nombres_de_switches(topologia: Optional[dict]) -> Dict[str, str]:
+    """id -> nombre legible (core-1, acc-1...) tomado de la topología que publica el vigilante; vacío si no la hay."""
+    return {s["id"]: s.get("nombre") or s["id"] for s in (topologia or {}).get("switches", []) if s.get("id")}
+
+
+def avisos_de_maestros(vistas: dict, maestros_validos: Optional[Iterable[str]], nombres: Optional[Dict[str, str]] = None) -> List[dict]:
+    """Quién manda en cada switch. Solo comprueba si se configuró la lista de nodos válidos (los que sirven 802.1X: RADIUS, LDAP y mapper). Un switch cuyo maestro no es uno de ellos es un aviso alto: el 802.1X
+    de ese switch no podría autenticar. Varios nodos que dicen mandar, o ninguno, son avisos de vista y de «sin maestro»."""
+    validos = [n for n in (maestros_validos or []) if n]
+    if not validos:
+        return []
+    nombres = nombres or {}
+    out = []
+    for s in vistas.get("switches", []):
+        etiqueta = f"{nombres[s['id']]} ({s['id']})" if s["id"] in nombres else s["id"]
+        if len(s.get("maestros", [])) > 1:
+            out.append({"gravedad": "alta", "codigo": "MAESTRO_DUPLICADO", "texto": f"Varios nodos dicen mandar en {etiqueta}: {', '.join(s['maestros'])}"})
+        elif s.get("maestro") is None:
+            if any(v["disponible"] for v in s["por_nodo"].values()):
+                out.append({"gravedad": "media", "codigo": "SIN_MAESTRO", "texto": f"Ningún nodo figura como maestro de {etiqueta}"})
+        elif s["maestro"] not in validos:
+            out.append({"gravedad": "alta", "codigo": "MAESTRO_INVALIDO", "texto": f"El maestro de {etiqueta} es {s['maestro']}, que no sirve 802.1X (válidos: {', '.join(validos)})"})
+    return out
+
+
+def avisos(vistas: dict, vigilantes: Dict[str, dict], mapper_ok: Optional[bool], fuentes_caidas: Iterable[str] = (), topologia: Optional[dict] = None,
+           maestros_validos: Optional[Iterable[str]] = None) -> List[dict]:
     """Lista de avisos activos (gravedad «alta» o «media»), de lo más grave a lo menos."""
-    out = avisos_de_topologia(topologia)
+    out = avisos_de_topologia(topologia) + avisos_de_maestros(vistas, maestros_validos, nombres_de_switches(topologia))
     for i in vistas.get("desiguales", []):
         out.append({"gravedad": "alta", "codigo": "VISTA_DESIGUAL", "texto": f"Los nodos de ONOS no coinciden sobre si {i} está disponible"})
     for nodo, n in vistas.get("nodos", {}).items():
@@ -226,11 +253,12 @@ def sesiones_resumen(sesiones: List[dict]) -> dict:
     return {"total": len(sesiones), "por_rol": por_rol}
 
 
-def resumen(vistas: dict, vigilantes: Dict[str, dict], sesiones: List[dict], mapper_ok: Optional[bool], fuentes_caidas: Iterable[str], ahora: float, topologia: Optional[dict] = None) -> dict:
+def resumen(vistas: dict, vigilantes: Dict[str, dict], sesiones: List[dict], mapper_ok: Optional[bool], fuentes_caidas: Iterable[str], ahora: float, topologia: Optional[dict] = None,
+            maestros_validos: Optional[Iterable[str]] = None) -> dict:
     ids = vistas.get("switches", [])
     disponibles = sum(1 for s in ids if any(v["disponible"] for v in s["por_nodo"].values()))
     return {"t": ahora, "switches": {"total": len(ids), "disponibles": disponibles}, "nodos_onos": vistas.get("nodos", {}), "vigilantes": vigilantes,
-            "sesiones": sesiones_resumen(sesiones), "mapper_ok": mapper_ok, "avisos": avisos(vistas, vigilantes, mapper_ok, fuentes_caidas, topologia)}
+            "sesiones": sesiones_resumen(sesiones), "mapper_ok": mapper_ok, "avisos": avisos(vistas, vigilantes, mapper_ok, fuentes_caidas, topologia, maestros_validos)}
 
 
 def elegir_vigilante(saludes: Dict[str, Optional[dict]]) -> Optional[str]:

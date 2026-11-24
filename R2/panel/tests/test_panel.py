@@ -121,6 +121,36 @@ def test_un_cable_caido_o_la_red_partida_que_cuenta_el_vigilante_salen_como_avis
     assert [x["codigo"] for x in rec2.ciclo()["avisos"]] == ["RED_PARTIDA"]
 
 
+def _devs_rol(maestro):
+    """Lo que de verdad responde ONOS: cada nodo da SU rol; solo el maestro dice MASTER."""
+    return {"http://c%d/onos/v1/devices" % i: ({"devices": [{"id": s, "available": True, "role": "MASTER" if n == maestro else "STANDBY"} for s in ("of:1", "of:2")]}, None)
+            for i, n in ((1, "ctrl1"), (2, "ctrl2"), (3, "ctrl3"))}
+
+
+def test_si_manda_ctrl3_y_solo_ctrl1_y_ctrl2_sirven_802_1x_hay_un_aviso_alto_por_switch_con_su_nombre():
+    cfg = dict(CFG, maestros_validos=["ctrl1", "ctrl2"])
+    f = Fuentes(**_devs_rol("ctrl3"), **{"http://v3/estado": (dict(_estado_vig(), topologia=dict(_estado_vig()["topologia"], switches=[{"id": "of:1", "nombre": "core-1"}, {"id": "of:2", "nombre": "acc-1"}])), None)})
+    rec = p.Recolector(cfg, d.Historial(), leer=f, reloj=lambda: AHORA)
+    a = [x for x in rec.ciclo()["avisos"] if x["codigo"] == "MAESTRO_INVALIDO"]
+    assert len(a) == 2 and "core-1 (of:1)" in a[0]["texto"] and "ctrl3" in a[0]["texto"]
+    rec2 = p.Recolector(cfg, d.Historial(), leer=Fuentes(**_devs_rol("ctrl1")), reloj=lambda: AHORA)
+    assert [x for x in rec2.ciclo()["avisos"] if x["codigo"] == "MAESTRO_INVALIDO"] == []
+
+
+def test_sin_lista_de_nodos_validos_el_panel_no_juzga_quien_manda():
+    rec = p.Recolector(CFG, d.Historial(), leer=Fuentes(**_devs_rol("ctrl3")), reloj=lambda: AHORA)
+    assert [x["codigo"] for x in rec.ciclo()["avisos"]] == []
+
+
+def test_la_linea_de_comandos_lee_la_lista_de_maestros_validos(tmp_path, monkeypatch):
+    capturado = {}
+    monkeypatch.setattr(p, "Recolector", lambda cfg, h, **k: capturado.setdefault("cfg", cfg) and (_ for _ in ()).throw(SystemExit(0)))
+    base = ["--onos", "ctrl1=http://c1", "--mapper", "http://m", "--db", str(tmp_path / "p.sqlite")]
+    with pytest.raises(SystemExit):
+        p.main(["--maestros-validos", "ctrl1, ctrl2"] + base)
+    assert capturado["cfg"]["maestros_validos"] == ["ctrl1", "ctrl2"]
+
+
 def test_las_pantallas_leen_la_cache_y_no_provocan_lecturas():
     rec, _, f = recolector()
     rec.ciclo()

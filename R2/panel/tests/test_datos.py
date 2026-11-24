@@ -181,6 +181,52 @@ def test_sin_datos_de_ningun_nodo_no_falla():
     assert v == {"switches": [], "nodos": {"ctrl1": {"responde": False, "ven": 0, "total": 0}, "ctrl2": {"responde": False, "ven": 0, "total": 0}}, "desiguales": []}
 
 
+# ---------- quién manda en cada switch ----------
+def _roles(**por_switch):
+    """{switch: {nodo: rol}} -> vistas de ONOS (rol NONE o MASTER/STANDBY por nodo; disponible si hay algún rol)."""
+    nodos = {}
+    for sw, roles in por_switch.items():
+        for nodo, rol in roles.items():
+            nodos.setdefault(nodo, {"devices": []})["devices"].append({"id": sw, "available": True, "role": rol})
+    return d.vistas_onos(nodos)
+
+
+def test_las_vistas_dicen_quien_es_el_maestro_de_cada_switch():
+    v = _roles(s1={"ctrl1": "STANDBY", "ctrl2": "STANDBY", "ctrl3": "MASTER"}, s2={"ctrl1": "MASTER", "ctrl2": "STANDBY", "ctrl3": "STANDBY"})
+    assert [(s["id"], s["maestro"], s["maestros"]) for s in v["switches"]] == [("s1", "ctrl3", ["ctrl3"]), ("s2", "ctrl1", ["ctrl1"])]
+
+
+def test_un_maestro_fuera_de_los_nodos_validos_es_un_aviso_alto_con_el_nombre_del_switch():
+    v = _roles(s1={"ctrl1": "STANDBY", "ctrl2": "STANDBY", "ctrl3": "MASTER"}, s2={"ctrl1": "MASTER", "ctrl2": "STANDBY", "ctrl3": "STANDBY"})
+    a = d.avisos_de_maestros(v, ["ctrl1", "ctrl2"], {"s1": "acc-1"})
+    assert [(x["codigo"], x["gravedad"]) for x in a] == [("MAESTRO_INVALIDO", "alta")]
+    assert "acc-1 (s1)" in a[0]["texto"] and "ctrl3" in a[0]["texto"] and "ctrl1, ctrl2" in a[0]["texto"]
+
+
+def test_los_dos_nodos_de_802_1x_como_maestros_no_dan_aviso_y_sin_lista_no_se_comprueba():
+    v = _roles(s1={"ctrl1": "MASTER", "ctrl2": "STANDBY", "ctrl3": "STANDBY"}, s2={"ctrl1": "STANDBY", "ctrl2": "MASTER", "ctrl3": "STANDBY"})
+    assert d.avisos_de_maestros(v, ["ctrl1", "ctrl2"]) == []
+    malo = _roles(s1={"ctrl3": "MASTER", "ctrl1": "STANDBY"})
+    assert d.avisos_de_maestros(malo, None) == [] and d.avisos_de_maestros(malo, []) == [] and d.avisos_de_maestros(malo, ["", " "][:1]) == []
+
+
+def test_varios_maestros_o_ninguno_se_distinguen():
+    dos = _roles(s1={"ctrl1": "MASTER", "ctrl2": "MASTER", "ctrl3": "STANDBY"})
+    assert [x["codigo"] for x in d.avisos_de_maestros(dos, ["ctrl1", "ctrl2"])] == ["MAESTRO_DUPLICADO"]
+    ninguno = _roles(s1={"ctrl1": "STANDBY", "ctrl2": "STANDBY", "ctrl3": "STANDBY"})
+    a = d.avisos_de_maestros(ninguno, ["ctrl1", "ctrl2"])
+    assert [(x["codigo"], x["gravedad"]) for x in a] == [("SIN_MAESTRO", "media")]
+    caido = d.vistas_onos({"ctrl1": {"devices": [{"id": "s1", "available": False, "role": "NONE"}]}})
+    assert d.avisos_de_maestros(caido, ["ctrl1"]) == []                                       # un switch caído no tiene maestro y no es este aviso
+
+
+def test_el_resumen_y_los_avisos_incluyen_el_maestro_invalido_antes_que_lo_menos_grave():
+    v = _roles(s1={"ctrl1": "STANDBY", "ctrl3": "MASTER"})
+    r = d.resumen(v, {}, [], True, ["x"], AHORA, None, ["ctrl1", "ctrl2"])
+    assert [a["codigo"] for a in r["avisos"]] == ["MAESTRO_INVALIDO", "FUENTE_CAIDA"]
+    assert d.nombres_de_switches({"switches": [{"id": "s1", "nombre": "acc-1"}]}) == {"s1": "acc-1"} and d.nombres_de_switches(None) == {}
+
+
 # ---------- vigilante ----------
 def _salud(estado="sin cambios", ciclo=AHORA - 2, activo=True, rol="principal"):
     return {"rol": rol, "ultimo_ciclo": ciclo, "estado": estado, "aplica": True, "activo": activo}

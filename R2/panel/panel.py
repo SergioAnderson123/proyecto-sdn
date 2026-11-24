@@ -105,7 +105,7 @@ class Recolector:
             if err:
                 caidas.append(f"vigilante {elegido} /estado: {err}")
         topologia = (vig_estado or {}).get("topologia") if isinstance(vig_estado, dict) else None
-        res = datos.resumen(vistas, vigilantes, sesiones, mapper_ok, [x for x in caidas if x.startswith(("mapper /", "ONOS /hosts"))], ahora, topologia)
+        res = datos.resumen(vistas, vigilantes, sesiones, mapper_ok, [x for x in caidas if x.startswith(("mapper /", "ONOS /hosts"))], ahora, topologia, c.get("maestros_validos"))
         with self._cerrojo:
             self._estado = {"listo": True, "t": ahora, "resumen": res, "sesiones": sesiones, "vistas": vistas, "vigilantes": vigilantes, "caidas": caidas, "mapper_ok": mapper_ok, "hosts": hosts,
                             "vigilante": {"nombre": elegido, "estado": vig_estado} if elegido else None}
@@ -225,6 +225,8 @@ def main(argv=None) -> int:
     a.add_argument("--onos", required=True, metavar="ctrl1=http://IP:8181,...", help="nodos de ONOS")
     a.add_argument("--mapper", required=True, help="URL del Policy Mapper (gateway)")
     a.add_argument("--vigilantes", default="", metavar="ctrl3=http://IP:8098,...")
+    a.add_argument("--maestros-validos", default="", metavar="ctrl1,ctrl2", help="nodos de ONOS (con el nombre de --onos) que pueden mandar en los switches porque sirven 802.1X (RADIUS, LDAP, mapper); "
+                   "si otro nodo manda en un switch el panel avisa. Vacío = no se comprueba")
     a.add_argument("--roles-admin", default="superadmin", help="rol o roles (separados por comas) que pueden entrar y editar")
     a.add_argument("--db", default="panel.sqlite")
     a.add_argument("--intervalo", type=float, default=10.0, help="segundos entre rondas del recolector")
@@ -235,7 +237,7 @@ def main(argv=None) -> int:
     if not roles:
         log.error("NO ARRANCO: --roles-admin no puede quedar vacío (nadie podría entrar con el rol de administración).")
         return 2
-    cfg = {"onos": _pares(arg.onos), "mapper": arg.mapper.rstrip("/"), "vigilantes": _pares(arg.vigilantes),
+    cfg = {"onos": _pares(arg.onos), "mapper": arg.mapper.rstrip("/"), "vigilantes": _pares(arg.vigilantes), "maestros_validos": [n.strip() for n in arg.maestros_validos.split(",") if n.strip()],
            "onos_usuario": os.environ.get("PANEL_ONOS_USUARIO", ""), "onos_clave": os.environ.get("PANEL_ONOS_CLAVE", "")}
     historial = datos.Historial(arg.db, arg.maximo_eventos)
     rec = Recolector(cfg, historial)
