@@ -58,7 +58,7 @@ El portal está en `https://10.0.0.10:8443` y el puerto 1 llega a él. Pero entr
 
 Si las dos se cumplieran, el mapper crearía una sesión de portal para la MAC del atacante y su flujo `40001 in_port=1` pondría el rol que corresponda (por ejemplo `guest`, que solo llega a `university_portal`). **Por eso el borde lleva las tablas de rol**: tiene un puerto por el que entran equipos.
 
-Debilidad conocida: `PORTAL_TOKEN` está vacío en el portal y en el mapper (medido el 23-nov), así que quien llegue por la red de gestión a `192.168.201.254:5000` puede llamar a `/portal/login` con la MAC que quiera, si tiene credenciales LDAP.
+Estado del portal (`NOTA_DESPLIEGUE_MAPPER_PORTAL_24NOV.md`): el parche del mapper que identifica al cliente por IP ya está desplegado en las tres réplicas y el `PORTAL_TOKEN` quedó puesto el 24-nov (la nota del 23-nov lo daba por vacío; ya no lo está), así que llamar a `/portal/login` o a `/portal/estado?ip=` por la red de gestión exige ese token.
 
 Comprobación sin riesgo (desde `vm-atacante`, credenciales falsas como en la prueba de h2):
 

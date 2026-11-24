@@ -93,7 +93,6 @@ Registro del servicio: `journalctl -u panel-red` en el `server`.
 | 24-nov 04:10 | Prueba A: comando generado frente al switch real | mismos 6 flujos y mismos contadores |
 | 24-nov 04:29 | Despliegue de los comandos con `grep` y su explicación | el panel real sirve el comando y 6 partes explicadas |
 | 24-nov | Prueba B: dos `ofproto/trace` en sw-acc-1 | **8101** → sesión → tabla 10 (30000) → tabla 60 (prio 120) → `output:2`, TTL 64→63; **8102** → tabla 10 prio 0 → `drop`. Coincide con lo predicho |
-
 | 24-nov 05:21 | Prueba C: caída de `ens5` de acc-1 (puerto 2, cable a core-1) durante 60 s con `80_caida_cable.yml`, panel abierto y muestreado cada 6 s | Ver la tabla de abajo: 3 s sin servicio al caer, 1 s al volver, el panel lo vio todo |
 
 Línea de tiempo de la prueba C (hora UTC; bajada 05:21:50, subida 05:22:51):
