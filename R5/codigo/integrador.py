@@ -550,6 +550,20 @@ def reconciliar(st):
             log.info("LIBERADA %s: su flujo ya no existe en ONOS", ip)
 
 
+def purgar_vencidas(st, ahora=None):
+    """Olvida los bloqueos cuyo vencimiento estimado (`vence`) ya llegó y devuelve la lista de IPs olvidadas.
+
+    Es la otra forma de liberar una IP, junto a reconciliar(): si el atacante calla BLOCK_SEC segundos, ONOS retira el flujo por
+    inactividad y el integrador la olvida aquí; si vuelve, se le bloquea de nuevo. Un bloqueo que vence justo en `ahora` se olvida.
+    `ahora` (epoch) solo se pasa en las pruebas; por defecto es la hora actual."""
+    ahora = time.time() if ahora is None else ahora
+    vencidas = [ip for ip, v in st["bloqueadas"].items() if v["vence"] <= ahora]
+    for ip in vencidas:
+        del st["bloqueadas"][ip]
+        log.info("VENCIDA %s: el bloqueo cumplió su tiempo", ip)
+    return vencidas
+
+
 # ---------------- Estado ----------------
 def cargar_estado():
     """Carga el estado persistido, o uno nuevo si no existe o está corrupto.
@@ -605,7 +619,7 @@ def main():
                     reconciliar(st)
                 except (Reintentar, Descartar) as e:
                     log.warning("No se pudo reconciliar con ONOS: %s", e)
-            st["bloqueadas"] = {k: v for k, v in st["bloqueadas"].items() if v["vence"] > ahora}   # purga bloqueos vencidos
+            purgar_vencidas(st, ahora)                                # purga bloqueos vencidos
             try:
                 s = os.stat(EVE_PATH)
             except FileNotFoundError:                             # Suricata aún no creó el archivo

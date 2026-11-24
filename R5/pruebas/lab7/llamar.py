@@ -12,6 +12,11 @@ Subcomandos (desde la raiz del repositorio):
   llamar.py bloqueo SRC DST SEVERIDAD [DIRECCION] [IP=DEVICE ...]
                                         procesar(alerta) completo con un ONOS falso; IP=DEVICE indica donde ve ONOS a un host interno;
                                         la palabra sin-flowid hace que ONOS responda sin flowId. Con DRY_RUN=1 no se contacta con ONOS.
+  llamar.py secuencia PASO ...          varios pasos sobre el MISMO estado y un ONOS falso. Pasos: SRC>DST@SEV[#SID] (una alerta), reinicio (guarda y
+                                        recarga el estado), vencer (pasan BLOCK_SEC s sin actividad), liberar:IP (r5ctl desbloquear + reconciliacion)
+  llamar.py reconciliar BLOQUEADAS FLUJOS [onos-caido]
+                                        reconciliar(estado): BLOQUEADAS = IP:segundos_desde_el_201,... ; FLUJOS = IPs con flujo en ONOS (o -)
+  llamar.py purgar IP:DELTA,...         purgar_vencidas(estado) con ahora=1000: el bloqueo de cada IP vence en 1000+DELTA
   llamar.py regla IP [DEVICE]           build_perimeter_rule(IP, DEVICE): la regla DROP que se enviaria a ONOS (P_R5 y BLOCK_SEC del entorno)
   llamar.py incidente SRC DST SEVERIDAD procesar(alerta) y muestra el registro del incidente que queda guardado para SRC
   llamar.py lista-blanca IP             en_lista_blanca(IP) con LISTA_BLANCA del entorno (10.0.0.99/32 y 10.0.0.10/32 por defecto)
@@ -23,6 +28,8 @@ import json
 import logging
 import os
 import sys
+import tempfile
+import time
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))          # .../R5
 sys.path.insert(0, os.path.join(RAIZ, "codigo"))
@@ -46,12 +53,14 @@ class OnosFalso:
     """Doble de ONOS: registra las peticiones y responde lo minimo para que el integrador funcione."""
 
     def __init__(self, hosts=None, flowid=True):
-        self.llamadas, self.hosts, self.flowid, self.flujos = [], hosts or [], flowid, []
+        self.llamadas, self.hosts, self.flowid, self.flujos, self.activos = [], hosts or [], flowid, [], []
 
     def __call__(self, metodo, ruta, **kw):
         self.llamadas.append((metodo, ruta))
         if metodo == "GET" and ruta == "/hosts":
             return Resp({"hosts": self.hosts})
+        if metodo == "GET" and ruta.startswith("/flows/application"):
+            return Resp({"flows": self.activos})                      # los flujos que ONOS dice tener de R5
         if metodo == "POST" and ruta == "/flows":
             flujos = kw["json"]["flows"]
             self.flujos.extend(flujos)
@@ -115,9 +124,10 @@ def cmd_consumir(archivo, estado):
     return 0
 
 
-def evento(src, dst, severidad, direccion="to_server"):
+def evento(src, dst, severidad, direccion="to_server", sid=9000002):
+    firma = {9000002: "LOCAL Port scan SYN", 9000003: "LOCAL SYN flood"}.get(sid, "LOCAL prueba")
     return {"event_type": "alert", "timestamp": "2026-11-24T15:22:00.000000+0000", "src_ip": src, "dest_ip": dst, "direction": direccion,
-            "proto": "TCP", "alert": {"severity": severidad, "signature_id": 9000002, "signature": "LOCAL Port scan SYN"}}
+            "proto": "TCP", "alert": {"severity": severidad, "signature_id": sid, "signature": firma}}
 
 
 def cmd_classify(severidad):
@@ -154,6 +164,93 @@ def cmd_bloqueo(src, dst, severidad, *resto):
     print(f"flows_en_el_POST={len(onos.flujos)} dispositivos={','.join(f['deviceId'] for f in onos.flujos) or '(ninguno)'}")
     for ip, v in sorted(st["bloqueadas"].items()):
         print(f"registro: {ip} -> device={v['device']}, donde={v['donde']}, sid={v['sid']}, flow_id={v['flow_id']}")
+
+
+def lista(ips):
+    return ",".join(sorted(ips)) or "(ninguna)"
+
+
+def flujos_activos(ips):
+    return [{"selector": {"criteria": [{"type": "IPV4_SRC", "ip": f"{ip}/32"}]}} for ip in ips]
+
+
+def cmd_secuencia(*pasos):
+    onos = OnosFalso()
+    integ.onos = onos
+    integ.STATE_PATH = os.path.join(tempfile.mkdtemp(), "state.json")
+    st = {"bloqueadas": {}, "inode": None, "offset": 0}
+    alertas = 0
+    for i, paso in enumerate(pasos, 1):
+        if paso == "reinicio":
+            integ.guardar_estado(st)
+            st = integ.cargar_estado()
+            print(f"{i}) reinicio del integrador: estado guardado y recargado; bloqueadas={lista(st['bloqueadas'])}")
+        elif paso == "vencer":
+            olvidadas = integ.purgar_vencidas(st, ahora=time.time() + integ.BLOCK_SEC + 1)
+            print(f"{i}) pasan mas de {integ.BLOCK_SEC} s sin actividad: olvidadas={lista(olvidadas)}")
+        elif paso.startswith("liberar:"):
+            ip = paso.split(":", 1)[1]
+            if ip in st["bloqueadas"]:
+                st["bloqueadas"][ip]["t_201"] -= 60                    # ya paso el periodo de gracia
+            onos.activos = flujos_activos([x for x in st["bloqueadas"] if x != ip])     # r5ctl desbloquear borro el flujo de esa IP
+            antes = set(st["bloqueadas"])
+            integ.reconciliar(st)
+            print(f"{i}) r5ctl desbloquear {ip} y reconciliacion con ONOS: olvidadas={lista(antes - set(st['bloqueadas']))}")
+        else:
+            sid = 9000002
+            if "#" in paso:
+                paso, sid = paso.split("#", 1)
+                sid = int(sid)
+            origen, resto = paso.split(">", 1)
+            destino, sev = resto.split("@", 1)
+            antes = len(onos.posts())
+            integ.procesar(evento(origen, destino, int(sev), sid=sid), st)
+            alertas += 1
+            nuevo = len(onos.posts()) > antes
+            print(f"{i}) alerta {origen} -> {destino} severidad {sev} sid {sid}: {'nueva regla (POST a ONOS)' if nuevo else 'sin POST (ya estaba bloqueada o no corresponde)'}")
+    print(f"alertas={alertas}")
+    print(f"POST a ONOS={len(onos.posts())}")
+    print(f"bloqueadas={lista(st['bloqueadas'])}")
+
+
+def cmd_reconciliar(bloqueadas, flujos, *flags):
+    onos = OnosFalso()
+    consultas = []
+
+    def contado(metodo, ruta, **kw):
+        consultas.append((metodo, ruta))
+        if "onos-caido" in flags:
+            raise integ.Reintentar("ONOS caido")
+        return onos(metodo, ruta, **kw)
+
+    integ.onos = contado
+    ahora = time.time()
+    st = {"bloqueadas": {}, "inode": None, "offset": 0}
+    for item in bloqueadas.split(","):
+        if item and item != "-":
+            ip, edad = item.split(":")
+            st["bloqueadas"][ip] = {"vence": ahora + 100, "t_201": ahora - float(edad)}
+    onos.activos = flujos_activos([x for x in flujos.split(",") if x and x != "-"])
+    print(f"antes={lista(st['bloqueadas'])}")
+    try:
+        integ.reconciliar(st)
+    except integ.Reintentar as e:
+        print(f"Reintentar: {e}")
+    print(f"despues={lista(st['bloqueadas'])}")
+    print(f"consultas_a_onos={len(consultas)}")
+    return 0
+
+
+def cmd_purgar(items):
+    st = {"bloqueadas": {}, "inode": None, "offset": 0}
+    for item in items.split(","):
+        ip, delta = item.split(":")
+        st["bloqueadas"][ip] = {"vence": 1000 + int(delta)}
+    olvidadas = integ.purgar_vencidas(st, ahora=1000)
+    print(f"ahora=1000   vencimientos: {items}")
+    print(f"olvidadas={lista(olvidadas)}")
+    print(f"quedan={lista(st['bloqueadas'])}")
+    return 0
 
 
 def cmd_regla(ip, device="of:0000000000000001"):
@@ -218,6 +315,12 @@ def main(argv):
             cmd_decidir(*args)
         elif cmd == "bloqueo" and len(args) >= 3:
             cmd_bloqueo(*args)
+        elif cmd == "secuencia" and args:
+            cmd_secuencia(*args)
+        elif cmd == "reconciliar" and len(args) >= 2:
+            return cmd_reconciliar(*args)
+        elif cmd == "purgar" and len(args) == 1:
+            return cmd_purgar(*args)
         elif cmd == "regla" and len(args) in (1, 2):
             return cmd_regla(*args)
         elif cmd == "incidente" and len(args) == 3:

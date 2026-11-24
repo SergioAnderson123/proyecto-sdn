@@ -339,12 +339,30 @@ def test_R5_04_3_4_5_si_onos_no_devuelve_flowid_el_incidente_se_registra_igual(m
 
 
 # =====================================================================================================
-# R5-05 (3.5.x) Sin duplicar reglas y liberación (desbloqueo manual).  Criterio: mitigación sin saturar la TCAM.
+# R5-05 (3.5.x) Sin duplicar reglas y liberación (reconciliar, purgar_vencidas).  Criterio: mitigación sin saturar la TCAM.
 # =====================================================================================================
 def test_R5_05_3_5_1_una_ip_ya_bloqueada_no_genera_otra_regla(onos):
     st = estado()
     for _ in range(3):
         integ.procesar(alerta("203.0.113.7", "10.0.0.50"), st)
+    integ.procesar(alerta("203.0.113.7", "10.0.0.50", sev=1, sid=9000003, firma="LOCAL SYN flood"), st)   # otra firma, mismo atacante
+    assert len(onos.posts()) == 1
+
+
+def test_R5_05_3_5_1b_dos_ips_distintas_generan_una_regla_cada_una(onos):
+    st = estado()
+    integ.procesar(alerta("203.0.113.7", "10.0.0.50"), st)
+    integ.procesar(alerta("203.0.113.8", "10.0.0.50"), st)
+    assert len(onos.posts()) == 2 and set(st["bloqueadas"]) == {"203.0.113.7", "203.0.113.8"}
+
+
+def test_R5_05_3_5_1c_no_duplica_la_regla_tras_reiniciar_el_integrador(onos, tmp_path, monkeypatch):
+    monkeypatch.setattr(integ, "STATE_PATH", str(tmp_path / "state.json"))
+    st = estado()
+    integ.procesar(alerta("203.0.113.7", "10.0.0.50"), st)
+    integ.guardar_estado(st)
+    st = integ.cargar_estado()                                             # el integrador se reinicia y recupera su estado
+    integ.procesar(alerta("203.0.113.7", "10.0.0.50"), st)
     assert len(onos.posts()) == 1
 
 
@@ -365,12 +383,46 @@ def test_R5_05_3_5_3_reconciliar_respeta_el_periodo_de_gracia_y_los_flujos_vigen
     assert set(st["bloqueadas"]) == {"203.0.113.7", "203.0.113.8"}
 
 
-def test_R5_05_3_5_4_tras_liberar_la_ip_reincidente_se_vuelve_a_bloquear(onos):
+def test_R5_05_3_5_3b_reconciliar_sin_bloqueos_no_consulta_a_onos(onos):
+    integ.reconciliar(estado())
+    assert onos.llamadas == []
+
+
+def test_R5_05_3_5_3c_si_onos_cae_al_reconciliar_se_conserva_la_lista(monkeypatch):
+    def cae(*a, **k):
+        raise integ.Reintentar("ONOS caído")
+    monkeypatch.setattr(integ, "onos", cae)
+    st = estado()
+    st["bloqueadas"]["203.0.113.7"] = {"vence": time.time() + 100, "t_201": time.time() - 60}
+    with pytest.raises(integ.Reintentar):                                  # main() lo captura y reintenta más tarde
+        integ.reconciliar(st)
+    assert "203.0.113.7" in st["bloqueadas"]                               # sin datos de ONOS no se libera a nadie
+
+
+@pytest.mark.parametrize("delta,olvidada", [(-1, True), (0, True), (100, False)])      # vence = ahora + delta
+def test_R5_05_3_5_4_purgar_vencidas_olvida_solo_los_bloqueos_cumplidos(delta, olvidada):
+    st = estado()
+    st["bloqueadas"]["203.0.113.7"] = {"vence": 1000 + delta}
+    assert integ.purgar_vencidas(st, ahora=1000) == (["203.0.113.7"] if olvidada else [])
+    assert ("203.0.113.7" not in st["bloqueadas"]) is olvidada
+
+
+def test_R5_05_3_5_5_tras_liberar_la_ip_reincidente_se_vuelve_a_bloquear(onos):
     st = estado()
     integ.procesar(alerta("203.0.113.7", "10.0.0.50"), st)
-    st["bloqueadas"].pop("203.0.113.7")                                      # liberada
+    st["bloqueadas"]["203.0.113.7"]["t_201"] -= 60                           # ya pasó el periodo de gracia
+    onos.flujos = []                                                         # r5ctl desbloquear borró el flujo
+    integ.reconciliar(st)
     integ.procesar(alerta("203.0.113.7", "10.0.0.50"), st)
     assert len(onos.posts()) == 2 and "203.0.113.7" in st["bloqueadas"]
+
+
+def test_R5_05_3_5_5b_al_caducar_el_bloqueo_la_ip_reincidente_se_vuelve_a_bloquear(onos):
+    st = estado()
+    integ.procesar(alerta("203.0.113.7", "10.0.0.50"), st)
+    integ.purgar_vencidas(st, ahora=time.time() + integ.BLOCK_SEC + 1)       # pasan más de BLOCK_SEC segundos sin actividad
+    integ.procesar(alerta("203.0.113.7", "10.0.0.50"), st)
+    assert len(onos.posts()) == 2
 
 
 # =====================================================================================================
