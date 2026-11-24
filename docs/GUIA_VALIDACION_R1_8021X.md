@@ -4,6 +4,19 @@ Para repetir, con la interfaz web de los hosts, los casos de control de acceso p
 
 Las **expectativas** salen del código (`R1/shared/policy_mapper/policy_mapper.py`, `_procesar_webhook`) y de las pruebas unitarias; las que no se han visto en vivo están marcadas **(por confirmar)**: se anota lo que salga y se marca PASS o FAIL en la tabla de resultados del final.
 
+## 0. Numeración y relación con las pruebas ya escritas
+
+El grupo ya usa la numeración **X.Y.Z** con módulo 1 = autenticación (R1), 2 = autorización (R2) y 3 = integrador M09 (R5) (ver `test_lab7_r1.py`, `test_lab7_r2.py` y `test_lab7_r5.py`). En R1, las secciones 1.1, 1.2 y 1.3 ya tienen casos 1.1.1-1.1.5, 1.2.1-1.2.5 y 1.3.1-1.3.9 **para el portal (usuario y contraseña)**. Los casos de 802.1X de esta guía **continúan esa numeración** (1.1.6 en adelante, 1.2.6 en adelante y 1.3.10 en adelante) para no chocar:
+
+| Caso en vivo | Prueba unitaria que lo respalda (en `R1/shared/policy_mapper/tests/`) |
+|---|---|
+| 1.1.6, 1.1.7, 1.1.8 acceso válido | `test_rol_8021x.py` (roles de RADIUS a tabla y VLAN), `test_eapol_puerto.py` |
+| 1.2.6 MAC no coincide | `policy_mapper.py` (validación 1) |
+| 1.2.7, 1.2.8 sesión en otro dispositivo | `test_identidad_clonada.py` (`test_con_dos_puertos_a_la_vez_admite_el_correcto_y_bloquea_solo_el_otro`, `test_una_segunda_llamada_del_mismo_ganador_no_vuelve_a_bloquear_nada`) |
+| 1.2.9 MAC suplantada con certificado clonado | `test_identidad_clonada.py` (`test_una_mac_distinta_en_otro_puerto_sigue_siendo_conflicto_real`, `test_otra_identidad_con_la_misma_mac_y_puerto_no_se_confirma_como_sesion_propia`) |
+| 1.2.10 certificado de otra CA | sin prueba unitaria: lo rechaza FreeRADIUS (paso 1 de la cadena) |
+| 1.3.10, 1.3.11 lista negra | `test_revocacion.py` (lista negra y bitácora) |
+
 ## 1. Cadena de decisión del módulo (sirve para el diagrama de flujo del informe)
 
 Un host autentica con EAP-TLS. Estas son las decisiones, en orden, hasta dar o negar el acceso:
@@ -85,14 +98,14 @@ Para cada caso, las capturas son: **(a)** la interfaz del host con el estado y e
 
 ### R1-01 · Acceso válido: certificado, MAC y ubicación coinciden
 
-**1.1.1 · alumno02 en h1 (su equipo).**
+**1.1.6 · alumno02 en h1 (su equipo).**
 - Pasos: interfaz de h1 → elegir `alumno02` → *Conectar*.
 - Esperado: «Autenticado — Acceso concedido como Alumno (VLAN 20)», con switch `of:0000e6925d87354b` y puerto 1. Evento `admitido alumno02 … VLAN 20, tabla 20`. En *Sesiones* una fila de alumno02 con la MAC de h1. En *Flujos* de acc-1 (tabla 0, prioridad 40001) una regla `in_port=1, eth_src=fa:16:3e:b6:96:08` de `onos.rest` que pone VLAN 20 y salta a la tabla 20.
 - Tráfico (opcional): `nc … 8001` desde h1 llega; `8101` no (el alumno no tiene `grade_system`).
 
-**1.1.2 · alumno01 en h2 (su equipo).** Igual que el anterior con la interfaz de h2 y el switch acc-2 (`of:0000766a0c84c741`).
+**1.1.7 · alumno01 en h2 (su equipo).** Igual que el anterior con la interfaz de h2 y el switch acc-2 (`of:0000766a0c84c741`).
 
-**1.1.3 · profesor01 en h1 (el docente, sin equipo atado).**
+**1.1.8 · profesor01 en h1 (el docente, sin equipo atado).**
 - Antes, desde el borde, para que h1 ofrezca a profesor01 (no conecta a nadie; antes desconecta a alumno02 en la interfaz de h1):
 
 ```bash
@@ -105,23 +118,23 @@ cd ~/proyecto-sdn/R1/deploy/topologia14 && PLAYBOOK=72_suplicante.yml ./lanzar.s
 
 ### R1-02 · Rechazos (acceso inválido)
 
-**1.2.1 · La MAC no coincide con la de LDAP: alumno02 en h2.**
+**1.2.6 · La MAC no coincide con la de LDAP: alumno02 en h2.**
 - Pre: h2 desconectado. alumno02 está atado a la MAC de h1, no a la de h2.
 - Pasos: interfaz de h2 → `alumno02` → *Conectar*.
 - Esperado: «Acceso denegado» con «MAC registrada fa:16:3e:b6:96:08 distinta de la física; lista negra 300 s». Evento `rechazado alumno02` con la MAC de h2 y switch acc-2. En *Sesiones*, ninguna sesión nueva. En *Flujos* de acc-2 una regla de prioridad 45000 `in_port=1, eth_src=fa:16:3e:71:08:66` que descarta.
 - Limpieza: desconectar y quitar las listas negras.
 
-**1.2.2 · Usuario con sesión activa en otro dispositivo (a): alumno01 en h1 y luego en h2** (es el orden que ya probaste).
+**1.2.7 · Usuario con sesión activa en otro dispositivo (a): alumno01 en h1 y luego en h2** (es el orden que ya probaste).
 - Pasos: interfaz de h1 → `alumno01` → *Conectar*; después, interfaz de h2 → `alumno01` → *Conectar*.
 - Esperado (lo ya observado): h2 se admite (VLAN 20) y h1 queda rechazado: evento `conflicto alumno01` con la MAC de h1, switch acc-1, «Ubicación no autorizada (…354b:1); se esperaba …c741:1. Posible clonación; lista negra 600 s», y en acc-1 la regla de prioridad 45000 con la MAC de h1.
 - Limpieza: desconectar los dos y quitar las listas negras.
 
-**1.2.3 · Usuario con sesión activa en otro dispositivo (b): primero h2 y luego h1. (por confirmar)**
+**1.2.8 · Usuario con sesión activa en otro dispositivo (b): primero h2 y luego h1. (por confirmar)**
 - Pasos: interfaz de h2 → `alumno01` → *Conectar* (queda con sesión); luego interfaz de h1 → `alumno01` → *Conectar*.
 - Esperado: la sesión de h2 se conserva y h1 **no obtiene una segunda sesión** de alumno01. Anota qué evento sale (`conflicto` o `rechazado`) y si la MAC de h1 queda en lista negra; es lo que hay que comparar con el caso anterior.
 - Limpieza: igual.
 
-**1.2.4 · Suplantación de MAC con el certificado clonado.** Es el caso más invasivo; hazlo el último de R1-02.
+**1.2.9 · Suplantación de MAC con el certificado clonado.** Es el caso más invasivo; hazlo el último de R1-02.
 - Idea: h1 copia la MAC de h2 y presenta el certificado de alumno01 mientras h2 ya tiene su sesión legítima.
 - Pre: `alumno01` conectado en h2 (sesión activa). h1 desconectado.
 - Comandos en **h1** (`ssh ubuntu@192.168.201.21`):
@@ -140,7 +153,7 @@ sudo ip link set dev ens4 down; sudo ip link set dev ens4 address fa:16:3e:b6:96
 
 - Después: quitar las listas negras. Si h2 pierde conectividad un rato, es el efecto de que ONOS vio su MAC en otro puerto durante la prueba.
 
-**1.2.5 · Certificado que no emitió nuestra CA (identidad falsa).**
+**1.2.10 · Certificado que no emitió nuestra CA (identidad falsa).**
 - Comandos en **h1** para crear un certificado autofirmado y una configuración de suplicante:
 
 ```bash
@@ -157,8 +170,8 @@ printf 'network={\n    key_mgmt=IEEE8021X\n    eap=TLS\n    identity="falso01@ex
 
 ### R1-03 · Límite: bloqueo temporal y recuperación
 
-**1.3.1 · Mientras dura la lista negra, ni la identidad correcta tiene tráfico.**
-- Pre: repetir **1.2.1** (alumno02 rechazado en h2, MAC de h2 en lista negra 300 s) y **no** quitar la lista negra.
+**1.3.10 · Mientras dura la lista negra, ni la identidad correcta tiene tráfico.**
+- Pre: repetir **1.2.6** (alumno02 rechazado en h2, MAC de h2 en lista negra 300 s) y **no** quitar la lista negra.
 - Pasos: en h2, *Desconectar* y luego `alumno01` → *Conectar* (esta sí es la identidad de h2). Después, la prueba de tráfico desde h2:
 
 ```bash
@@ -168,9 +181,9 @@ IP=$(ip -4 -o addr show dev ens4 | awk '{print $4}' | cut -d/ -f1 | grep -E '^10
 - Esperado: la interfaz dice «Autenticado» y hay sesión, pero **`nc` da `timed out`**: el descarte de prioridad 45000 gana a la sesión (40001). Es el comportamiento diseñado de la lista negra temporal.
 - Recuperación: quitar las listas negras y repetir `nc`: debe dar `refused` o `succeeded`. Anota cuántos segundos pasaron entre una cosa y la otra.
 
-**1.3.2 · La lista negra caduca sola.** Con el contador de paquetes parado, a los 300 s (o 600 s) la regla desaparece de *Flujos*. Anota la hora en que se creó y la hora en que dejó de verse. (Si el host sigue mandando tráfico, el plazo se reinicia.)
+**1.3.11 · La lista negra caduca sola.** Con el contador de paquetes parado, a los 300 s (o 600 s) la regla desaparece de *Flujos*. Anota la hora en que se creó y la hora en que dejó de verse. (Si el host sigue mandando tráfico, el plazo se reinicia.)
 
-**1.3.3 · Opcional, portal cautivo:** el bloqueo por intentos fallidos (5 por cuenta y 15 por equipo, 15 minutos) tiene su propia prueba automatizada en `test_portal_intentos.py`.
+**Portal cautivo:** el bloqueo por intentos fallidos (5 por cuenta y 15 por equipo, 15 minutos) ya está documentado como 1.3.1 a 1.3.9 en `test_lab7_r1.py`; no se repite aquí.
 
 ## 5. Después de los casos
 
@@ -182,13 +195,13 @@ IP=$(ip -4 -o addr show dev ens4 | awk '{print $4}' | cut -d/ -f1 | grep -E '^10
 
 | Caso | Fecha y hora (UTC) | Resultado (PASS / FAIL / NT) | Qué salió | Capturas |
 |---|---|---|---|---|
-| 1.1.1 alumno02 en h1 | | | | |
-| 1.1.2 alumno01 en h2 | | | | |
-| 1.1.3 profesor01 en h1 | | | | |
-| 1.2.1 MAC no coincide | | | | |
-| 1.2.2 sesión en otro dispositivo (h1, luego h2) | | | | |
-| 1.2.3 sesión en otro dispositivo (h2, luego h1) | | | | |
-| 1.2.4 MAC suplantada con certificado clonado | | | | |
-| 1.2.5 certificado de otra CA | | | | |
-| 1.3.1 bloqueo con tráfico | | | | |
-| 1.3.2 caducidad de la lista negra | | | | |
+| 1.1.6 alumno02 en h1 | | | | |
+| 1.1.7 alumno01 en h2 | | | | |
+| 1.1.8 profesor01 en h1 | | | | |
+| 1.2.6 MAC no coincide | | | | |
+| 1.2.7 sesión en otro dispositivo (h1, luego h2) | | | | |
+| 1.2.8 sesión en otro dispositivo (h2, luego h1) | | | | |
+| 1.2.9 MAC suplantada con certificado clonado | | | | |
+| 1.2.10 certificado de otra CA | | | | |
+| 1.3.10 bloqueo con tráfico | | | | |
+| 1.3.11 caducidad de la lista negra | | | | |
