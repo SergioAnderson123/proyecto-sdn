@@ -27,6 +27,14 @@ def devs(disp):
     return {"devices": [{"id": i, "available": v, "role": "MASTER"} for i, v in disp.items()]}
 
 
+def _estado_vig(caidos=(), conexa=True, rol="principal", activo=True):
+    pares = [("core-1", 4, "core-2", 4), ("core-1", 2, "acc-1", 2), ("core-2", 3, "acc-1", 3)]
+    enlaces = [{"a": a, "b": b, "a_nombre": a, "b_nombre": b, "a_puerto": pa, "b_puerto": pb, "estado": "caido" if (a, b) in caidos else "arbol"} for a, pa, b, pb in pares]
+    return {"t": AHORA, "rol": rol, "activo": activo, "aplica": True, "estado": "sin cambios", "modo": "capa3",
+            "topologia": {"raiz": {"id": "core-1", "nombre": "core-1"}, "switches": [], "enlaces": enlaces, "aislados": [] if conexa else [{"id": "acc-1", "nombre": "acc-1"}], "conexa": conexa},
+            "historial": [{"t": AHORA - 5, "tipo": "aplicado", "detalle": "Recálculo aplicado", "cambios": {"borde": {"quitar": 0, "agregar": 4}}}]}
+
+
 HOSTS = {"hosts": [{"mac": MAC_ADMIN.upper(), "ipAddresses": [IP_ADMIN]}, {"mac": MAC_DOCENTE.upper(), "ipAddresses": [IP_DOCENTE]}]}
 
 
@@ -47,6 +55,7 @@ class Fuentes:
             "http://map/health/ha": ({"status": "ready"}, None),
             "http://v3/salud": ({"rol": "principal", "ultimo_ciclo": AHORA - 2, "estado": "sin cambios", "aplica": True, "activo": True}, None),
             "http://v2/salud": ({"rol": "respaldo", "ultimo_ciclo": AHORA - 3, "estado": "sin cambios", "aplica": True, "activo": False}, None),
+            "http://v3/estado": (_estado_vig(), None), "http://v2/estado": (_estado_vig(rol="respaldo", activo=False), None),
         }
         self.datos.update(cambios)
 
@@ -65,7 +74,7 @@ def recolector(**cambios):
 def test_una_ronda_lee_cada_fuente_una_vez_y_arma_el_resumen():
     rec, h, f = recolector()
     r = rec.ciclo()
-    assert len(f.llamadas) == len(set(f.llamadas)) == 9                                     # 3 de ONOS, 1 de hosts, 3 del mapper y 2 vigilantes: pocas peticiones
+    assert len(f.llamadas) == len(set(f.llamadas)) == 10                                    # 3 de ONOS, 1 de hosts, 3 del mapper, 2 /salud y 1 /estado (solo del vigilante que manda)
     assert r["switches"] == {"total": 2, "disponibles": 2} and r["sesiones"]["total"] == 2 and r["avisos"] == [] and r["mapper_ok"] is True
     est = rec.estado()
     assert est["listo"] and est["sesiones"][0]["usuario"] == "profesor01@example.org" and est["caidas"] == [] and est["hosts"] == HOSTS
@@ -82,6 +91,34 @@ def test_si_ningun_nodo_da_los_hosts_se_avisa_porque_nadie_podra_ser_identificad
     rec, _, _ = recolector(**{"http://c1/onos/v1/hosts": (None, "timeout")})
     r = rec.ciclo()
     assert rec.estado()["hosts"] is None and "FUENTE_CAIDA" in [a["codigo"] for a in r["avisos"]]
+
+
+def test_el_estado_se_pide_solo_al_vigilante_que_manda_y_se_guarda_con_su_nombre():
+    rec, _, f = recolector()
+    rec.ciclo()
+    assert [u for u in f.llamadas if u.endswith("/estado")] == ["http://v3/estado"]
+    assert rec.estado()["vigilante"]["nombre"] == "ctrl3" and rec.estado()["vigilante"]["estado"]["topologia"]["conexa"]
+
+
+def test_si_el_principal_calla_se_le_pide_el_estado_al_respaldo_que_asume_el_mando():
+    rec, _, f = recolector(**{"http://v3/salud": (None, "URLError"), "http://v2/salud": ({"rol": "respaldo", "ultimo_ciclo": AHORA - 1, "estado": "sin cambios", "aplica": True, "activo": True}, None)})
+    rec.ciclo()
+    assert [u for u in f.llamadas if u.endswith("/estado")] == ["http://v2/estado"] and rec.estado()["vigilante"]["nombre"] == "ctrl2"
+
+
+def test_un_vigilante_de_la_version_anterior_sin_estado_no_rompe_el_panel():
+    rec, _, _ = recolector(**{"http://v3/estado": (None, "HTTP 404")})
+    r = rec.ciclo()
+    assert rec.estado()["listo"] and rec.estado()["vigilante"] == {"nombre": "ctrl3", "estado": None} and "vigilante ctrl3 /estado: HTTP 404" in rec.estado()["caidas"]
+    assert r["avisos"] == []
+
+
+def test_un_cable_caido_o_la_red_partida_que_cuenta_el_vigilante_salen_como_avisos():
+    rec, _, _ = recolector(**{"http://v3/estado": (_estado_vig(caidos=[("core-1", "acc-1")]), None)})
+    a = rec.ciclo()["avisos"]
+    assert [(x["codigo"], x["gravedad"]) for x in a] == [("CABLE_CAIDO", "media")] and "core-1/2 ↔ acc-1/2" in a[0]["texto"]
+    rec2, _, _ = recolector(**{"http://v3/estado": (_estado_vig(conexa=False), None)})
+    assert [x["codigo"] for x in rec2.ciclo()["avisos"]] == ["RED_PARTIDA"]
 
 
 def test_las_pantallas_leen_la_cache_y_no_provocan_lecturas():
@@ -184,7 +221,7 @@ def pedir(url, metodo="GET", cab=None, cuerpo=None):
         return e.code, dict(e.headers), e.read()
 
 
-API = ("/api/resumen", "/api/sesiones", "/api/eventos", "/api/vistas")
+API = ("/api/resumen", "/api/sesiones", "/api/eventos", "/api/vistas", "/api/vigilante")
 
 
 def test_el_superadmin_entra_por_la_sesion_de_su_equipo_sin_contrasena_ni_token(servidor):
@@ -206,7 +243,7 @@ def test_un_docente_no_entra_aunque_tenga_sesion_y_se_le_dice_por_que(servidor):
 
 def test_un_equipo_sin_sesion_o_desconocido_no_entra(servidor):
     base, *_ = servidor(ip=IP_DESCONOCIDA)
-    assert [pedir(base + r)[0] for r in API] == [403] * 4
+    assert [pedir(base + r)[0] for r in API] == [403] * len(API)
 
 
 def test_si_la_ip_la_tienen_dos_mac_distintas_es_ambigua_y_no_entra_nadie(servidor):
@@ -230,7 +267,7 @@ def test_las_cabeceras_que_dicen_ser_otra_ip_se_ignoran(servidor):
 
 def test_el_tunel_local_solo_puede_leer(servidor):
     base, *_ = servidor(ip="127.0.0.1")
-    assert [pedir(base + r)[0] for r in API] == [200] * 4
+    assert [pedir(base + r)[0] for r in API] == [200] * len(API)
     ok, motivo = d.decidir_acceso("127.0.0.1", "editar", HOSTS, [], ["superadmin"])
     assert not ok and "no basta" in motivo
 
@@ -259,6 +296,14 @@ def test_las_respuestas_llevan_cabeceras_de_seguridad_y_no_se_guardan_en_cache(s
     assert cab["Cache-Control"] == "no-store" and cab["X-Content-Type-Options"] == "nosniff" and "default-src 'self'" in cab["Content-Security-Policy"]
     _, cab2, _ = pedir(base + "/")
     assert cab2["X-Frame-Options"] == "DENY" and "Server" in cab2 and "Python" not in cab2["Server"]
+
+
+def test_la_api_del_vigilante_entrega_la_topologia_y_el_historial_y_pide_el_mismo_rol(servidor):
+    base, *_ = servidor(ip=IP_ADMIN)
+    j = json.loads(pedir(base + "/api/vigilante")[2])
+    assert j["listo"] and j["vigilante"]["nombre"] == "ctrl3" and len(j["vigilante"]["estado"]["topologia"]["enlaces"]) == 3 and j["vigilante"]["estado"]["historial"][0]["tipo"] == "aplicado"
+    base2, *_ = servidor(ip=IP_DOCENTE)
+    assert pedir(base2 + "/api/vigilante")[0] == 403
 
 
 def test_las_api_devuelven_lo_que_hay_en_la_cache(servidor):

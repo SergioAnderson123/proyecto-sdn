@@ -36,3 +36,17 @@ tr.desigual td:first-child { border-left: 4px solid var(--alto); }
 .tag.rechazado, .tag.conflicto, .tag.revocado { color: var(--alto); border-color: var(--alto); }
 .tag.admitido { color: var(--ok); border-color: var(--ok); }
 @media (max-width: 700px) { .estado { position: static; padding-bottom: 6px; } th:nth-child(n+5), td:nth-child(n+5) { display: none; } }
+.topologia { background: var(--card); border: 1px solid var(--borde); border-radius: 8px; padding: 8px; }
+.svg-topologia { width: 100%; max-width: 760px; height: auto; display: block; margin: 0 auto; }
+.svg-topologia .enlace { stroke-width: 3; fill: none; }
+.svg-topologia .enlace.arbol { stroke: var(--ok); }
+.svg-topologia .enlace.reserva { stroke: var(--suave); stroke-dasharray: 7 5; }
+.svg-topologia .enlace.caido { stroke: var(--alto); stroke-dasharray: 3 6; }
+.svg-topologia .puerto { font: 11px ui-monospace, Consolas, monospace; fill: var(--suave); text-anchor: middle; }
+.svg-topologia .sw rect { fill: var(--fondo); stroke: var(--primario); stroke-width: 1.5; }
+.svg-topologia .sw.raiz rect { stroke-width: 4; }
+.svg-topologia .sw.nodisp rect { stroke: var(--alto); stroke-dasharray: 4 3; }
+.svg-topologia .sw.aislado rect { fill: color-mix(in srgb, var(--alto) 18%, transparent); }
+.svg-topologia .nombre { font: 600 13px system-ui, sans-serif; fill: var(--texto); }
+.svg-topologia .etiqueta { font: 11px system-ui, sans-serif; fill: var(--suave); }
+.svg-topologia .etiqueta.mala { fill: var(--alto); }

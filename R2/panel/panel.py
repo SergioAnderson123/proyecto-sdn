@@ -54,7 +54,7 @@ class Recolector:
     def __init__(self, cfg: dict, historial: "datos.Historial", leer=leer_json, reloj=time.time):
         self.cfg, self.historial, self.leer, self.reloj = cfg, historial, leer, reloj
         self._cerrojo = threading.Lock()
-        self._estado = {"listo": False, "t": None, "resumen": None, "sesiones": [], "vistas": None, "vigilantes": {}, "caidas": [], "mapper_ok": None, "hosts": None}
+        self._estado = {"listo": False, "t": None, "resumen": None, "sesiones": [], "vistas": None, "vigilantes": {}, "caidas": [], "mapper_ok": None, "hosts": None, "vigilante": None}
 
     def _onos(self, url):
         c = self.cfg
@@ -91,15 +91,24 @@ class Recolector:
         mapper_ok = True if err is None else (False if err.startswith("HTTP") else None)     # un 503 es «no listo»; un fallo de conexión es «no sé»
         if err and mapper_ok is None:
             caidas.append(f"mapper /health/ha: {err}")
-        vigilantes = {}
+        vigilantes, saludes = {}, {}
         for nombre, url in c["vigilantes"].items():
             salud, err = self.leer(f"{url}/salud")
+            saludes[nombre] = salud
             vigilantes[nombre] = datos.estado_vigilante(salud, ahora)
             if err:
                 caidas.append(f"vigilante {nombre}: {err}")
-        res = datos.resumen(vistas, vigilantes, sesiones, mapper_ok, [x for x in caidas if x.startswith(("mapper /", "ONOS /hosts"))], ahora)
+        elegido = datos.elegir_vigilante(saludes)                          # el /estado (topología e historial) se pide solo al vigilante que manda
+        vig_estado = None
+        if elegido:
+            vig_estado, err = self.leer(f"{c['vigilantes'][elegido]}/estado")
+            if err:
+                caidas.append(f"vigilante {elegido} /estado: {err}")
+        topologia = (vig_estado or {}).get("topologia") if isinstance(vig_estado, dict) else None
+        res = datos.resumen(vistas, vigilantes, sesiones, mapper_ok, [x for x in caidas if x.startswith(("mapper /", "ONOS /hosts"))], ahora, topologia)
         with self._cerrojo:
-            self._estado = {"listo": True, "t": ahora, "resumen": res, "sesiones": sesiones, "vistas": vistas, "vigilantes": vigilantes, "caidas": caidas, "mapper_ok": mapper_ok, "hosts": hosts}
+            self._estado = {"listo": True, "t": ahora, "resumen": res, "sesiones": sesiones, "vistas": vistas, "vigilantes": vigilantes, "caidas": caidas, "mapper_ok": mapper_ok, "hosts": hosts,
+                            "vigilante": {"nombre": elegido, "estado": vig_estado} if elegido else None}
         return res
 
     def estado(self) -> dict:
@@ -177,6 +186,8 @@ def hacer_manejador(rec: Recolector, historial: "datos.Historial", roles_admin, 
                 return self._json({"listo": est["listo"], "sesiones": est["sesiones"], "t": est["t"]})
             if ruta == "/api/vistas":
                 return self._json({"listo": est["listo"], "vistas": est["vistas"], "t": est["t"]})
+            if ruta == "/api/vigilante":
+                return self._json({"listo": est["listo"], "vigilante": est["vigilante"], "t": est["t"]})
             if ruta == "/api/eventos":
                 evs = historial.listar(tipo=q.get("tipo") or None, usuario=q.get("usuario") or None, mac=q.get("mac") or None, texto=q.get("texto") or None,
                                        desde=_num(q.get("desde")), hasta=_num(q.get("hasta")), limite=int(_num(q.get("limite")) or 100))

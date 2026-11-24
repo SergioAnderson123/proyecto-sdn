@@ -198,6 +198,28 @@ def test_el_vigilante_en_partida_o_con_ciclo_viejo_pide_atencion():
     assert not d.estado_vigilante({"estado": "sin cambios"}, AHORA)["ok"]
 
 
+# ---------- vigilante elegido y avisos de topología ----------
+def test_se_elige_el_vigilante_activo_o_el_primero_que_responda():
+    assert d.elegir_vigilante({"ctrl3": {"activo": True}, "ctrl2": {"activo": False}}) == "ctrl3"
+    assert d.elegir_vigilante({"ctrl3": None, "ctrl2": {"activo": True}}) == "ctrl2"
+    assert d.elegir_vigilante({"ctrl3": {"activo": False}, "ctrl2": {"activo": False}}) == "ctrl3"
+    assert d.elegir_vigilante({"ctrl3": None, "ctrl2": None}) is None and d.elegir_vigilante({}) is None
+
+
+def test_los_avisos_de_topologia_distinguen_cable_caido_y_red_partida():
+    top = {"conexa": True, "aislados": [], "enlaces": [{"estado": "arbol"}, {"estado": "caido", "a_nombre": "core-1", "a_puerto": 2, "b_nombre": "acc-1", "b_puerto": 2}]}
+    a = d.avisos_de_topologia(top)
+    assert [(x["codigo"], x["gravedad"]) for x in a] == [("CABLE_CAIDO", "media")] and a[0]["texto"] == "Cable caído: core-1/2 ↔ acc-1/2"
+    partida = {"conexa": False, "aislados": [{"nombre": "acc-1"}], "enlaces": []}
+    assert [(x["codigo"], x["gravedad"]) for x in d.avisos_de_topologia(partida)] == [("RED_PARTIDA", "alta")]
+    assert d.avisos_de_topologia(None) == [] and d.avisos_de_topologia({}) == [] and d.avisos_de_topologia({"conexa": True, "enlaces": [{"estado": "reserva"}]}) == []
+
+
+def test_la_red_partida_va_antes_que_los_cables_en_los_avisos():
+    top = {"conexa": False, "aislados": [{"nombre": "acc-1"}], "enlaces": [{"estado": "caido", "a_nombre": "a", "a_puerto": 1, "b_nombre": "b", "b_puerto": 1}]}
+    assert [x["codigo"] for x in d.avisos({"nodos": {}, "desiguales": []}, {}, True, topologia=top)] == ["RED_PARTIDA", "CABLE_CAIDO"]
+
+
 # ---------- avisos y resumen ----------
 def test_los_avisos_incluyen_la_vista_desigual_con_la_gravedad_mas_alta_primero():
     sw = ["s1", "s2"]

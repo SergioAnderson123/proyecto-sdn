@@ -179,9 +179,23 @@ def estado_vigilante(salud: Optional[dict], ahora: float) -> dict:
     return {"responde": True, "ok": motivo is None, "motivo": motivo, "rol": salud.get("rol"), "estado": estado, "edad_ciclo_s": edad, "aplica": salud.get("aplica"), "activo": salud.get("activo")}
 
 
-def avisos(vistas: dict, vigilantes: Dict[str, dict], mapper_ok: Optional[bool], fuentes_caidas: Iterable[str] = ()) -> List[dict]:
-    """Lista de avisos activos (gravedad «alta» o «media»), de lo más grave a lo menos."""
+def avisos_de_topologia(topologia: Optional[dict]) -> List[dict]:
+    """De la topología que publica el vigilante (`/estado`): red partida (alta) y un aviso por cada cable caído (media; la red sigue por el otro camino)."""
+    if not topologia:
+        return []
     out = []
+    if topologia.get("conexa") is False:
+        nombres = ", ".join(a.get("nombre", "?") for a in topologia.get("aislados", [])) or "algún switch"
+        out.append({"gravedad": "alta", "codigo": "RED_PARTIDA", "texto": f"La red está partida: sin camino a la raíz ({nombres})"})
+    for e in topologia.get("enlaces", []):
+        if e.get("estado") == "caido":
+            out.append({"gravedad": "media", "codigo": "CABLE_CAIDO", "texto": f"Cable caído: {e.get('a_nombre')}/{e.get('a_puerto')} ↔ {e.get('b_nombre')}/{e.get('b_puerto')}"})
+    return out
+
+
+def avisos(vistas: dict, vigilantes: Dict[str, dict], mapper_ok: Optional[bool], fuentes_caidas: Iterable[str] = (), topologia: Optional[dict] = None) -> List[dict]:
+    """Lista de avisos activos (gravedad «alta» o «media»), de lo más grave a lo menos."""
+    out = avisos_de_topologia(topologia)
     for i in vistas.get("desiguales", []):
         out.append({"gravedad": "alta", "codigo": "VISTA_DESIGUAL", "texto": f"Los nodos de ONOS no coinciden sobre si {i} está disponible"})
     for nodo, n in vistas.get("nodos", {}).items():
@@ -212,8 +226,14 @@ def sesiones_resumen(sesiones: List[dict]) -> dict:
     return {"total": len(sesiones), "por_rol": por_rol}
 
 
-def resumen(vistas: dict, vigilantes: Dict[str, dict], sesiones: List[dict], mapper_ok: Optional[bool], fuentes_caidas: Iterable[str], ahora: float) -> dict:
+def resumen(vistas: dict, vigilantes: Dict[str, dict], sesiones: List[dict], mapper_ok: Optional[bool], fuentes_caidas: Iterable[str], ahora: float, topologia: Optional[dict] = None) -> dict:
     ids = vistas.get("switches", [])
     disponibles = sum(1 for s in ids if any(v["disponible"] for v in s["por_nodo"].values()))
     return {"t": ahora, "switches": {"total": len(ids), "disponibles": disponibles}, "nodos_onos": vistas.get("nodos", {}), "vigilantes": vigilantes,
-            "sesiones": sesiones_resumen(sesiones), "mapper_ok": mapper_ok, "avisos": avisos(vistas, vigilantes, mapper_ok, fuentes_caidas)}
+            "sesiones": sesiones_resumen(sesiones), "mapper_ok": mapper_ok, "avisos": avisos(vistas, vigilantes, mapper_ok, fuentes_caidas, topologia)}
+
+
+def elegir_vigilante(saludes: Dict[str, Optional[dict]]) -> Optional[str]:
+    """Qué vigilante enseña el panel: el que está activo; si ninguno lo está, el primero que responda (el principal va primero en la configuración)."""
+    vivos = [n for n, s in saludes.items() if s]
+    return next((n for n in vivos if saludes[n].get("activo")), vivos[0] if vivos else None)

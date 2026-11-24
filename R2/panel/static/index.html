@@ -13,6 +13,7 @@
     <button data-v="resumen" class="activa">Resumen</button>
     <button data-v="sesiones">Sesiones</button>
     <button data-v="eventos">Eventos</button>
+    <button data-v="vigilante">Vigilante</button>
     <button data-v="vistas">Vistas de ONOS</button>
   </nav>
   <div id="estado" class="estado">cargando…</div>
@@ -53,6 +54,14 @@
       <button type="submit">Filtrar</button>
     </form>
     <table id="t-ev"><thead><tr><th>Hora</th><th>Tipo</th><th>Usuario</th><th>MAC</th><th>Rol</th><th>Switch / puerto</th><th>Detalle</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="v-vigilante" hidden>
+    <h2>Topología y recálculos <span id="vig-info" class="cuenta"></span></h2>
+    <p class="ayuda">Cada cable es verde si algún árbol de rutas lo usa, gris discontinuo si está vivo pero de reserva, y rojo si se cayó. El doble borde marca la raíz.</p>
+    <div id="topologia" class="topologia"></div>
+    <h2>Historial del vigilante</h2>
+    <table id="t-hist"><thead><tr><th>Hora</th><th>Evento</th><th>Detalle</th><th>Flujos por switch</th></tr></thead><tbody></tbody></table>
   </section>
 
   <section id="v-vistas" hidden>

@@ -35,6 +35,7 @@ import urllib.request
 
 import caminos
 import capa3
+import estado
 import flujos_proactivos as fp
 import hosts_fijos
 import recalculo as rc
@@ -51,10 +52,21 @@ def _nombre(d):
 
 
 # ---- respaldo: salud del principal ----
-def servir_salud(puerto, info):
-    """Servidor HTTP mínimo (GET /salud -> JSON de `info()`), en un hilo. Devuelve el servidor; `puerto=0` elige uno libre (para las pruebas)."""
+def servir_salud(puerto, info, estado_json=None):
+    """Servidor HTTP mínimo (GET /salud -> JSON de `info()`; GET /estado -> JSON de `estado_json()` si se da, para el panel), en un hilo. Devuelve el servidor; `puerto=0` elige uno libre (para las pruebas)."""
     class Manejador(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
+            if estado_json is not None and self.path.split("?")[0] == "/estado":
+                try:
+                    cuerpo, codigo = json.dumps(estado_json(), ensure_ascii=False).encode("utf-8"), 200
+                except Exception as e:  # noqa: BLE001  - el panel no debe poder romper al vigilante
+                    cuerpo, codigo = json.dumps({"error": repr(e)}).encode(), 500
+                self.send_response(codigo)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(cuerpo)))
+                self.end_headers()
+                self.wfile.write(cuerpo)
+                return
             cuerpo = json.dumps(info()).encode()
             self.send_response(200 if self.path.startswith("/salud") else 404)
             self.send_header("Content-Type", "application/json")
@@ -107,6 +119,8 @@ class Vigilante:
         self._ultimo_ok = None
         self.ultimo_ciclo = None                                           # hora (epoch) del último ciclo: lo publica /salud
         self.ultimo_estado = "iniciando"
+        self.historial = estado.Historial()                                # eventos para el panel (GET /estado): solo se registran, no deciden nada
+        self._conocidos, self._foto_prev, self._topologia, self._partida_vista = {}, None, None, False
 
     # ---- ayudas ----
     def _aviso(self, clave, texto):
@@ -182,12 +196,19 @@ class Vigilante:
 
         grafo = rc.grafo_vivo(links, dispositivos)
         raiz = rc.raiz_viva(grafo, self.preferidos)
+        self._registrar_topologia(grafo, dispositivos, raiz)
         if raiz is None or not rc.esta_conexa(grafo, raiz):
             aislados = sorted(self.nombre(d) for d in grafo if raiz is None or d not in set(caminos.niveles_hacia(grafo, raiz) if raiz is not None else {}))
             self._aviso("partida", f"AVISO: la red está partida (sin camino a la raíz: {', '.join(aislados) or 'todos'}). No se recalcula.")
+            if not self._partida_vista:
+                self._partida_vista = True
+                self.historial.agregar(time.time(), "red_partida", f"Red partida: sin camino a la raíz ({', '.join(aislados) or 'todos'}); no se recalcula")
             self._reiniciar_espera()
             return "partida"
         self._olvidar_avisos("partida")
+        if self._partida_vista:
+            self._partida_vista = False
+            self.historial.agregar(time.time(), "red_conexa", "La red volvió a estar conexa")
 
         enlaces = frozenset((d, vecino, puerto) for d, vecinos in grafo.items() for vecino, puerto in vecinos)
         if self._enlaces_prev is not None and self._enlaces_prev - enlaces:
@@ -223,6 +244,7 @@ class Vigilante:
             self._aplicar(dif)
             self._reiniciar_espera()
             self.log(f"ALTA RÁPIDA: {rc.resumen(dif, self.nombre)} (host nuevo; no cambia ninguna regla existente).")
+            self.historial.agregar(time.time(), "alta_rapida", f"Alta rápida de reglas de host: {rc.resumen(dif, self.nombre)}", estado.cambios_por_switch(dif, self.nombre))
             return "alta rápida"
 
         urgente = self._caida_pendiente
@@ -234,6 +256,8 @@ class Vigilante:
             self._huella, self._desde = huella, ahora
             self._olvidar_avisos("simulacion", "intervalo")
             self.log(f"CAMBIO DETECTADO ({rc.resumen(dif, self.nombre)}). Raíz: {self.nombre(raiz)}. Espero {estable:g}s a que se estabilice{' (hubo una caída: espera corta)' if urgente and estable != self.estable_s else ''}.")
+            self.historial.agregar(time.time(), "cambio_detectado", f"Cambio detectado ({rc.resumen(dif, self.nombre)}); raíz {self.nombre(raiz)}; espera {estable:g} s{' (tras una caída)' if urgente else ''}",
+                                   estado.cambios_por_switch(dif, self.nombre))
             for tipo, flujos in (("sobra", dif["borrar"]), ("falta", dif["agregar"])):          # qué flujos exactos difieren (máx. 6 de cada tipo)
                 for f in flujos[:6]:
                     self.log(f"    {tipo}: {rc.describir(f, self.nombre)}")
@@ -253,7 +277,30 @@ class Vigilante:
         self._ultimo_cambio = self.reloj()
         self._reiniciar_espera()
         self.log(f"APLICADO: {rc.resumen(dif, self.nombre)}. Raíz: {self.nombre(raiz)}.")
+        self.historial.agregar(time.time(), "aplicado", f"Recálculo aplicado ({rc.resumen(dif, self.nombre)}); raíz {self.nombre(raiz)}", estado.cambios_por_switch(dif, self.nombre))
         return "aplicado"
+
+    def _registrar_topologia(self, grafo, dispositivos, raiz):
+        """Para el panel: anota qué cables o switches cayeron o volvieron desde el ciclo anterior y deja la foto de la topología que publica /estado. Jamás debe afectar al ciclo: ante cualquier fallo solo avisa."""
+        try:
+            ahora = time.time()
+            foto = (set(grafo), estado.pares_de_enlaces(grafo))
+            for ev in estado.eventos_de_topologia(self._foto_prev, foto, self.nombre):
+                self.historial.agregar(ahora, ev["tipo"], ev["detalle"])
+            self._foto_prev = foto
+            estado.recordar_enlaces(self._conocidos, grafo)
+            top = estado.construir(grafo, self._conocidos, dispositivos, raiz, estado.destinos_de_arbol(self.plan, raiz), self.preferidos, self.nombre)
+            top["t"] = ahora
+            self._topologia = top
+            self._olvidar_avisos("estado")
+        except Exception as e:  # noqa: BLE001
+            self._aviso("estado", f"AVISO: no se pudo actualizar /estado ({e!r}); el vigilante sigue igual.")
+
+    def estado_json(self, limite=50):
+        """Lo que publica GET /estado: quién es, cómo está, la topología con el uso de cada cable y el historial de eventos (los nuevos primero). Sin hosts, MAC ni IP."""
+        return {"t": time.time(), "rol": "respaldo" if self.salud_principal is not None else "principal", "activo": self._activo, "aplica": self.aplicar, "estado": self.ultimo_estado,
+                "ultimo_ciclo": self.ultimo_ciclo, "modo": "capa3" if self.plan else "capa2", "estable_s": self.estable_s, "min_intervalo_s": self.min_intervalo_s,
+                "topologia": self._topologia, "historial": self.historial.recientes(limite)}
 
     def _olvidar_hosts(self, listados, ahora):
         """Quita de la memoria a los hosts que ONOS ya no lista Y (a) en capa 3, otro host listado reclama su IP, o (b) llevan `olvidar_host_s` sin aparecer. Los fijos nunca.
@@ -394,7 +441,7 @@ def main(argv=None):
     rol = f"RESPALDO de {arg.respaldo_de} (asume el mando tras {arg.muerto:g}s sin respuesta)" if arg.respaldo_de else "PRINCIPAL"
     if arg.salud_puerto:
         servir_salud(arg.salud_puerto, lambda: {"rol": "respaldo" if arg.respaldo_de else "principal", "ultimo_ciclo": v.ultimo_ciclo,
-                                                  "estado": v.ultimo_estado, "aplica": arg.aplicar, "activo": v._activo})
+                                                  "estado": v.ultimo_estado, "aplica": arg.aplicar, "activo": v._activo}, v.estado_json)
     log(f"Vigilante iniciado ({rol}): nodos {arg.onos}; {'APLICA CAMBIOS' if arg.aplicar else 'solo avisa'}; cada {arg.intervalo}s.")
     try:
         while True:

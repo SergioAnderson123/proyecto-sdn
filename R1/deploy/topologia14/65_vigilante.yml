@@ -49,6 +49,7 @@
       - instalar_proactivo.py
       - vista_previa.py
       - capa3.py
+      - estado.py
       - vigilante.py
   tasks:
     - name: Parar y deshabilitar el servicio

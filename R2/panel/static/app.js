@@ -124,12 +124,97 @@ function pintarVistas(d) {
   if (!v.switches.length) fila(tb, ["Sin datos de ONOS", "", "", "", ""]);
 }
 
+// ---------- vigilante: topología (SVG) e historial ----------
+const SVGNS = "http://www.w3.org/2000/svg";
+function s(tag, attrs, texto) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, String(v));
+  if (texto !== undefined) e.textContent = String(texto);
+  return e;
+}
+const ETIQUETAS = { enlace_caido: "cable caído", enlace_restaurado: "cable restaurado", switch_caido: "switch caído", switch_restaurado: "switch restaurado", cambio_detectado: "cambio detectado",
+  aplicado: "recálculo aplicado", alta_rapida: "alta rápida", red_partida: "red partida", red_conexa: "red conexa" };
+const MALOS = new Set(["enlace_caido", "switch_caido", "red_partida"]);
+
+function dibujarTopologia(top) {
+  const cont = $("topologia");
+  vaciar(cont);
+  if (!top) { cont.appendChild(el("p", "El vigilante aún no publicó la topología.", "ayuda")); return; }
+  const ancho = 720, alto_fila = 120, margen = 60;
+  const maxNivel = Math.max(0, ...top.switches.map((x) => (x.nivel === null ? 0 : x.nivel)));
+  const filas = new Map();
+  for (const sw of top.switches) {
+    const nivel = sw.nivel === null ? maxNivel + 1 : sw.nivel;      // los que no llegan a la raíz van en una fila aparte, abajo
+    if (!filas.has(nivel)) filas.set(nivel, []);
+    filas.get(nivel).push(sw);
+  }
+  const pos = {};
+  for (const [nivel, lista] of [...filas.entries()].sort((a, b) => a[0] - b[0])) {
+    lista.sort((a, b) => a.nombre.localeCompare(b.nombre));
+    lista.forEach((sw, k) => { pos[sw.id] = { x: (ancho * (k + 1)) / (lista.length + 1), y: margen + nivel * alto_fila }; });
+  }
+  const alto = margen * 2 + (Math.max(...filas.keys())) * alto_fila;
+  const svg = s("svg", { viewBox: "0 0 " + ancho + " " + alto, class: "svg-topologia", role: "img", "aria-label": "Topología de los switches" });
+  // Un cable que pasaría por encima de otro switch se curva hasta rodearlo (si no, parece que une a ese switch).
+  const bez = (a, c, b, t) => ({ x: (1 - t) * (1 - t) * a.x + 2 * (1 - t) * t * c.x + t * t * b.x, y: (1 - t) * (1 - t) * a.y + 2 * (1 - t) * t * c.y + t * t * b.y });
+  const control = (a, b, k) => { const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1; return { x: (a.x + b.x) / 2 - (dy / l) * l * k, y: (a.y + b.y) / 2 + (dx / l) * l * k }; };
+  const choca = (a, b, c, ids) => {
+    for (let t = 0.08; t <= 0.92; t += 0.04) {
+      const p = bez(a, c, b, t);
+      for (const [id, q] of Object.entries(pos)) if (!ids.includes(id) && Math.abs(p.x - q.x) < 58 && Math.abs(p.y - q.y) < 28) return true;
+    }
+    return false;
+  };
+  for (const e of top.enlaces) {
+    const a = pos[e.a], b = pos[e.b];
+    if (!a || !b) continue;
+    let c = control(a, b, 0);
+    for (const k of [0, 0.25, -0.25, 0.45, -0.45]) { c = control(a, b, k); if (!choca(a, b, c, [e.a, e.b])) break; }
+    svg.appendChild(s("path", { d: "M " + a.x + " " + a.y + " Q " + c.x + " " + c.y + " " + b.x + " " + b.y, class: "enlace " + e.estado }));
+    const pa = bez(a, c, b, 0.2), pb = bez(a, c, b, 0.8);
+    svg.appendChild(s("text", { x: pa.x, y: pa.y - 5, class: "puerto" }, e.a_puerto === null ? "?" : e.a_puerto));
+    svg.appendChild(s("text", { x: pb.x, y: pb.y - 5, class: "puerto" }, e.b_puerto === null ? "?" : e.b_puerto));
+  }
+  const aislados = new Set(top.aislados.map((x) => x.id));
+  for (const sw of top.switches) {
+    const p = pos[sw.id];
+    const g = s("g", { class: "sw" + (sw.es_raiz ? " raiz" : "") + (sw.disponible ? "" : " nodisp") + (aislados.has(sw.id) ? " aislado" : "") });
+    g.appendChild(s("rect", { x: p.x - 48, y: p.y - 20, width: 96, height: 40, rx: 8 }));
+    g.appendChild(s("text", { x: p.x, y: p.y + 5, "text-anchor": "middle", class: "nombre" }, sw.nombre));
+    if (sw.es_raiz) g.appendChild(s("text", { x: p.x, y: p.y - 26, "text-anchor": "middle", class: "etiqueta" }, "raíz"));
+    if (!sw.disponible) g.appendChild(s("text", { x: p.x, y: p.y + 36, "text-anchor": "middle", class: "etiqueta mala" }, "no disponible"));
+    svg.appendChild(g);
+  }
+  cont.appendChild(svg);
+}
+
+function pintarVigilante(d) {
+  const v = d.vigilante;
+  const info = $("vig-info");
+  const tb = $("t-hist").tBodies[0];
+  vaciar(tb);
+  if (!v || !v.estado) {
+    info.textContent = v ? "(" + v.nombre + ": sin /estado; ¿versión anterior del vigilante?)" : "(ningún vigilante responde)";
+    dibujarTopologia(null);
+    return;
+  }
+  const e = v.estado;
+  info.textContent = "(" + v.nombre + " · " + e.rol + (e.activo ? " · activo" : " · en espera") + " · estado: " + e.estado + " · " + e.modo + (e.aplica ? " · aplica cambios" : " · solo avisa") + ")";
+  dibujarTopologia(e.topologia);
+  for (const h of e.historial) {
+    const cambios = h.cambios ? Object.entries(h.cambios).map(([sw, c]) => sw + " −" + c.quitar + " +" + c.agregar).join(" · ") : "";
+    fila(tb, [hora(h.t), el("span", ETIQUETAS[h.tipo] || h.tipo, "tag " + (MALOS.has(h.tipo) ? "rechazado" : (h.tipo === "aplicado" || h.tipo === "enlace_restaurado" || h.tipo === "switch_restaurado" || h.tipo === "red_conexa" ? "admitido" : ""))), h.detalle, cambios]);
+  }
+  if (!e.historial.length) fila(tb, ["Sin eventos desde que arrancó el vigilante", "", "", ""]);
+}
+
 // ---------- ciclo ----------
 async function refrescar() {
   try {
     if (vista === "resumen") { const d = await api("/api/resumen"); quien = d.quien || ""; pintarResumen(d); }
     else if (vista === "sesiones") pintarSesiones(await api("/api/sesiones"));
     else if (vista === "vistas") pintarVistas(await api("/api/vistas"));
+    else if (vista === "vigilante") pintarVigilante(await api("/api/vigilante"));
     else if (vista === "eventos") await pintarEventos();
     $("estado").textContent = "actualizado " + new Date().toLocaleTimeString();
     if (vista === "resumen" && quien) $("estado").textContent += " · " + quien;
