@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Repeticiones de los ataques EXTERNOS de R5 desde vm-atacante, con tabla de resultados (tasa de detección, tiempos medios).
 
-Se ejecuta en switch-borde (como verificar_r5.py). Pide la contraseña de ubuntu una vez (no se guarda).
+Se ejecuta en switch-borde (como verificar_r5.py). Usa la contraseña de ubuntu de R5_PASS o de ~/.r5_pass; si no existen, la pregunta una vez (no se guarda).
 
     python3 R5/deploy/repeticiones.py                    # 10 repeticiones de cada escenario
     python3 R5/deploy/repeticiones.py -n 3 --solo scan   # prueba corta de un escenario
@@ -71,6 +71,23 @@ def resumen(valores):
     return f"{statistics.mean(valores):.0f}", f"{min(valores):.0f}", f"{max(valores):.0f}"
 
 
+def leer_clave():
+    """Contraseña de ubuntu (SSH y sudo de las VM). Se toma de R5_PASS, luego del archivo ~/.r5_pass (fuera del repositorio) y solo si no hay ninguno se pregunta.
+
+    Para no escribirla cada vez:  echo -n LA_CLAVE > ~/.r5_pass && chmod 600 ~/.r5_pass   (o  export R5_PASS=LA_CLAVE  en la sesion)."""
+    clave = os.environ.get("R5_PASS")
+    if clave:
+        return clave
+    try:
+        with open(os.path.expanduser("~/.r5_pass"), encoding="utf-8") as f:
+            clave = f.read().strip()
+        if clave:
+            return clave
+    except OSError:
+        pass
+    return getpass.getpass("Contraseña: ")
+
+
 class Remoto:
     def __init__(self, clave):
         self.clave = clave
@@ -128,7 +145,7 @@ def main():
         for k, (d, _, _) in ESCENARIOS.items():
             print(f"{k:6} {d}")
         return 0
-    clave = os.environ.get("R5_PASS") or getpass.getpass(f"Contraseña de {USUARIO} (SSH y sudo de las VM; no se guarda): ")
+    clave = leer_clave()
     rem = Remoto(clave)
     if not rem.sshpass:
         print("AVISO: falta sshpass (sudo apt-get install -y sshpass); se intentará con claves SSH.")

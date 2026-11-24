@@ -451,6 +451,15 @@ def prueba_activa(rem, vivo, dpid_borde, sensor="node-sec-1"):
 
 
 # ================================================================ principal
+def _clave_guardada():
+    """Contraseña guardada en ~/.r5_pass (fuera del repositorio), o None. Evita escribirla en cada ejecucion: echo -n LA_CLAVE > ~/.r5_pass && chmod 600 ~/.r5_pass"""
+    try:
+        with open(os.path.expanduser("~/.r5_pass"), encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sin-ssh", action="store_true", help="solo REST de ONOS/Mapper y OVS local del borde (sin contraseña)")
@@ -462,7 +471,7 @@ def main():
 
     clave = None
     if not a.sin_ssh:
-        clave = os.environ.get("R5_PASS") or getpass.getpass(f"Contraseña de {USUARIO} (SSH y sudo de las VM; no se guarda): ")
+        clave = os.environ.get("R5_PASS") or _clave_guardada() or getpass.getpass("Contraseña: ")
         if not shutil.which("sshpass"):
             print("AVISO: sshpass no está instalado (sudo apt-get install -y sshpass); se probará ssh con claves.")
     rem = Remoto(clave, not a.sin_ssh)

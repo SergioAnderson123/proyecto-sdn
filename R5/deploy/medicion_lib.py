@@ -97,6 +97,20 @@ def tasa_falsos_positivos(c):
 
 
 # ---------------------------------------------------------------- escalabilidad
+ORIGEN_INICIO = 104       # primer origen falso: 203.0.113.104 (la .103 es la IP real de vm-atacante y la .254, el gateway)
+MAX_ORIGENES = 150        # hasta 203.0.113.253
+
+
+def origenes_externos(k):
+    """K IPs de origen para los ataques simulados, dentro de 203.0.113.0/24.
+
+    Tienen que ser de ese rango (o de 10.0.0.0/16) porque es lo unico que el espejo del borde copia al IDS: un origen de otro rango nunca llegaria
+    a Suricata y el experimento daria 0 bloqueos. Se reutilizan entre corridas, por eso hay que desbloquearlas antes de cada una."""
+    if not 1 <= k <= MAX_ORIGENES:
+        raise ValueError(f"K debe estar entre 1 y {MAX_ORIGENES} (hay {MAX_ORIGENES} origenes disponibles en 203.0.113.0/24)")
+    return [f"203.0.113.{ORIGEN_INICIO + i}" for i in range(k)]
+
+
 def resumen_escala(bloqueos, esperadas, t0):
     """Resultado de una corrida con K origenes simultaneos.
 

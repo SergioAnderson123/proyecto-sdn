@@ -202,8 +202,7 @@ def test_cmd_escala_cuenta_los_bloqueos_de_los_dos_sensores(monkeypatch, capsys)
     monkeypatch.setattr(mr.time, "sleep", lambda s: None)
     t0 = _t.time()
     k = 4
-    tercero = 1 + (1 + 10 * (k % 20)) % 250
-    ips = [f"198.18.{tercero}.{i}" for i in range(1, k + 1)]
+    ips = m.origenes_externos(k)
     s1, s2 = mr.SENSORES["node-sec-1"], mr.SENSORES["node-sec-2"]
     bl1 = [linea_bloqueo(t0 + 0.2 + 0.1 * i, ip, 10.0 + i) for i, ip in enumerate(ips[:3])]
     bl2 = [linea_bloqueo(t0 + 0.9, ips[3], 30.0), linea_bloqueo(t0 + 1.5, ips[0], 11.0)]          # la 4.a la bloquea el otro sensor; la 1.a, ambos
@@ -220,3 +219,27 @@ def test_codigo_nat_es_un_python_valido():
     import medicion_r5 as mr
     cuerpo = mr.codigo_nat("10.0.0.10", 40, 6).split("<<'PY'\n")[1].rsplit("\nPY", 1)[0]
     compile(cuerpo, "nat", "exec")
+
+
+def test_los_origenes_falsos_estan_en_el_rango_que_el_espejo_copia_al_ids():
+    ips = m.origenes_externos(150)
+    assert ips[0] == "203.0.113.104" and ips[-1] == "203.0.113.253" and len(set(ips)) == 150
+    assert "203.0.113.103" not in ips and "203.0.113.254" not in ips          # ni la IP real del atacante ni el gateway
+    assert all(i.startswith("203.0.113.") for i in ips)
+    for k in (0, 151, -1):
+        with pytest.raises(ValueError):
+            m.origenes_externos(k)
+
+
+def test_leer_clave_prefiere_la_variable_luego_el_archivo_y_solo_al_final_pregunta(tmp_path, monkeypatch):
+    import repeticiones as rp
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("R5_PASS", raising=False)
+    preguntas = []
+    monkeypatch.setattr(rp.getpass, "getpass", lambda prompt="": preguntas.append(prompt) or "tecleada")
+    assert rp.leer_clave() == "tecleada" and preguntas == ["Contraseña: "]          # sin variable ni archivo: pregunta, con un aviso corto
+    (tmp_path / ".r5_pass").write_text("del-archivo" + chr(10))
+    assert rp.leer_clave() == "del-archivo" and len(preguntas) == 1                  # el archivo evita la pregunta
+    monkeypatch.setenv("R5_PASS", "de-la-variable")
+    assert rp.leer_clave() == "de-la-variable"                                       # la variable manda

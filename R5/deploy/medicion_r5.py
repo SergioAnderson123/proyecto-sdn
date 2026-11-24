@@ -13,7 +13,9 @@
     python3 R5/deploy/medicion_r5.py recursos --fase-s 60 --ifaces ens4
 
 Requisitos: sshpass en switch-borde, scapy y hping3 en vm-atacante, los sensores con los contenedores r5-suricata y r5-integrador activos.
-Los orígenes falsos de `escala` y `recursos` salen de 198.18.0.0/15 (rango de pruebas, sin ruta): no afectan a nadie y sus bloqueos caducan solos a los 300 s.
+Los orígenes falsos de `escala` y `recursos` son IPs de 203.0.113.104 en adelante (hasta 150): tienen que estar en el rango externo que el espejo copia al IDS, o Suricata
+no los vería. Se desbloquean solos antes de cada corrida y, si algo se interrumpe, sus bloqueos caducan a los 300 s.
+La contraseña de ubuntu se lee de R5_PASS o de ~/.r5_pass; solo se pregunta si no existe ninguno.
 """
 import argparse
 import csv
@@ -30,7 +32,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import medicion_lib as lib  # noqa: E402
-from repeticiones import ATACANTE, DESTINO, IP_ATACANTE, SENSORES, USUARIO, Remoto, limpiar, parsear_bloqueos  # noqa: E402
+from repeticiones import ATACANTE, DESTINO, IP_ATACANTE, SENSORES, USUARIO, Remoto, leer_clave, limpiar, parsear_bloqueos  # noqa: E402
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 EVE = "/var/log/suricata/eve-alerts.json"
@@ -174,15 +176,15 @@ def cmd_escala(rem, a):
     print(f"\n=== Escalabilidad de eventos: K orígenes simultáneos × 40 SYN, {a.n} corridas por K ===")
     filas = []
     for k in [int(x) for x in a.origenes.split(",")]:
-        if not 1 <= k <= 250:
-            sys.exit("--origenes: cada valor debe estar entre 1 y 250")
+        try:
+            ips = lib.origenes_externos(k)                                     # 203.0.113.104 ...: dentro del rango externo que el espejo copia al IDS
+        except ValueError as e:
+            sys.exit(f"--origenes: {e}")
         res = []
         for rep in range(1, a.n + 1):
-            tercero = 1 + (rep + 10 * (k % 20)) % 250                      # tercer octeto distinto por K y repeticion: nunca se reutiliza un origen bloqueado
-            ips = [f"198.18.{tercero}.{i}" for i in range(1, k + 1)]
-            limpiar(rem, ips)
-            rc, out = rem.correr(ATACANTE, f't0=$(date +%s.%N); for i in $(seq 1 {k}); do hping3 -S -p 8101 -a 198.18.{tercero}.$i -i u30000 -c 40 {DESTINO} '
-                                           f'>/dev/null 2>&1 & done; wait; echo T0=$t0', timeout=180)
+            limpiar(rem, ips)                                                  # se reutilizan los mismos origenes: hay que desbloquearlos antes de cada corrida
+            rc, out = rem.correr(ATACANTE, f't0=$(date +%s.%N); for i in $(seq {lib.ORIGEN_INICIO} {lib.ORIGEN_INICIO + k - 1}); do '
+                                           f'hping3 -S -p 8101 -a 203.0.113.$i -i u30000 -c 40 {DESTINO} >/dev/null 2>&1 & done; wait; echo T0=$t0', timeout=180)
             m = re.search(r"T0=([\d.]+)", out or "")
             if not m:
                 print(f"  K={k} #{rep}: no se obtuvo la hora de inicio ({(out or '')[-100:]})")
@@ -219,9 +221,12 @@ def cmd_recursos(rem, a):
     d = a.fase_s
     estimulos = {
         "reposo": None,
-        "espejo": f"timeout {d - 3} hping3 -S -p 8101 --rand-source -i u{int(1e6 / a.pps)} {DESTINO} >/dev/null 2>&1; true",
-        "ddos": (f"fin=$(( $(date +%s) + {d - 8} )); c=0; while [ $(date +%s) -lt $fin ]; do c=$((c+1)); "
-                 f"for i in $(seq 1 {a.origenes}); do hping3 -S -p 8101 -a 198.18.$((100+c)).$i -i u30000 -c 40 {DESTINO} >/dev/null 2>&1 & done; wait; sleep 2; done; true"),
+        # UDP al puerto 53 desde la IP real del atacante: el espejo lo copia al IDS (origen en 203.0.113.0/24) pero ninguna regla de R5 lo marca, asi que mide el espejo sin bloqueos
+        "espejo": f"timeout {d - 3} hping3 --udp -p 53 -d 200 -i u{int(1e6 / a.pps)} {DESTINO} >/dev/null 2>&1; true",
+        # ciclos de `origenes` orígenes nuevos cada vez (203.0.113.104 en adelante); se detiene al agotar el rango, porque un origen ya bloqueado no genera mas carga
+        "ddos": (f"fin=$(( $(date +%s) + {d - 8} )); c=0; while [ $(date +%s) -lt $fin ] && [ $c -lt {lib.MAX_ORIGENES // a.origenes} ]; do "
+                 f"base=$(( {lib.ORIGEN_INICIO} + c * {a.origenes} )); c=$((c+1)); "
+                 f"for i in $(seq $base $((base + {a.origenes} - 1))); do hping3 -S -p 8101 -a 203.0.113.$i -i u30000 -c 40 {DESTINO} >/dev/null 2>&1 & done; wait; sleep 2; done; true"),
         "mixto": f"cd /tmp && python3 trafico_mixto.py --destino {DESTINO} --duracion {d - 5} --pct-malo 20 --src-malo 203.0.113.190 --semilla 1 --csv /tmp/mixto_rec.csv >/dev/null 2>&1; true",
     }
     resultados = {}
@@ -268,7 +273,7 @@ def main():
     fp.add_argument("--clientes", type=int, default=40)
     fp.add_argument("--conexiones", type=int, default=6)
     es = sub.choices["escala"]
-    es.add_argument("--origenes", default="10,25,50,100", help="valores de K separados por coma (1 a 250)")
+    es.add_argument("--origenes", default="10,25,50,100", help="valores de K separados por coma (1 a 150)")
     es.add_argument("-n", type=int, default=3, help="corridas por K")
     es.add_argument("--pausa", type=float, default=5.0)
     rc = sub.choices["recursos"]
@@ -276,13 +281,12 @@ def main():
     rc.add_argument("--fases", default="reposo,espejo,ddos,mixto")
     rc.add_argument("--ifaces", default="ens4", help="NIC de espejo del sensor (IDS_IFACES de R5/deploy/.env)")
     rc.add_argument("--pps", type=int, default=1000, help="paquetes por segundo de la fase «espejo»")
-    rc.add_argument("--origenes", type=int, default=30, help="orígenes por ciclo en la fase «ddos»")
+    rc.add_argument("--origenes", type=int, default=30, help="orígenes por ciclo en la fase «ddos» (1 a 150)")
     a = ap.parse_args()
     if a.dry_run:
         rem = RemotoSimulado()
     else:
-        clave = os.environ.get("R5_PASS") or getpass.getpass(f"Contraseña de {USUARIO} (SSH y sudo de las VM; no se guarda): ")
-        rem = Remoto(clave)
+        rem = Remoto(leer_clave())
         if not rem.sshpass:
             print("AVISO: falta sshpass (sudo apt-get install -y sshpass); se intentará con claves SSH.")
     print(f"Medición R5 · {a.cmd} · {time.strftime('%Y-%m-%d %H:%M:%S')}")
