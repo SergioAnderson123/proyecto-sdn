@@ -1,4 +1,4 @@
-"""Pruebas de R5/codigo/topologia.py: lectura y validación de topologia.yaml (slice de 14 VM)."""
+"""Pruebas de apps/ids/integrador/topologia.py: lectura y validación de topologia.yaml (slice de 14 VM)."""
 import copy
 import os
 import sys

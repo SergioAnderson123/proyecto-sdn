@@ -1,4 +1,4 @@
-"""Pruebas unitarias del integrador M09 (R5/codigo/integrador.py).
+"""Pruebas unitarias del integrador M09 (apps/ids/integrador/integrador.py).
 
 No necesitan ONOS ni Suricata: la función `onos()` se sustituye por un doble.
 Ejecutar:  python -m pytest R5/tests -v

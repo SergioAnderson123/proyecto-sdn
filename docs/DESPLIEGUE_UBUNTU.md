@@ -138,7 +138,7 @@ Si `docker logs` dice `permission denied`, tu usuario no está en el grupo `dock
 
 En una PC real el suplicante lo lanza el sistema, no una persona: en Windows el servicio *Configuración automática de redes cableadas* y en Linux NetworkManager o `wpa_supplicant`, que autentican cuando el enlace sube (se conecta el cable) y, según el perfil, al arrancar o al iniciar sesión el usuario. El certificado no va en variables de entorno, sino en el almacén de certificados (Windows) o en el perfil de conexión (Linux).
 
-En los hosts de VNRT eso lo hace el **agente** (`R1/agente_802_1x/agente.py`, servicio `r1-agente`), instalado por `python3 slice.py hosts`:
+En los hosts de VNRT eso lo hace el **agente** (`apps/agents/802_1x/agente.py`, servicio `r1-agente`), instalado por `python3 slice.py hosts`:
 - **Arranque automático:** al arrancar el host (o al repetir `alta`), el agente se autentica solo con la identidad que asignaste a ese host en `slice.py`. Si la interfaz baja y sube (`sudo ip link set <iface> down && sudo ip link set <iface> up`), `wpa_supplicant` vuelve a autenticar.
 - **Interfaz web:** una página (identidad, Conectar y Desconectar, estado, VLAN, rol, switch y puerto, y el registro del suplicante) en el puerto 8080 del propio host, solo en `127.0.0.1`. Se ve desde tu PC con un túnel SSH; `python3 slice.py interfaz` imprime el de cada host (h1 en el puerto local 8081, h2 en el 8082...):
   ```bash
@@ -180,7 +180,7 @@ python3 slice.py alta       # portal reinicia el Policy Mapper: se pierden las s
 ```
 `slice.py portal` hace seis cosas:
 1. **IP fija del portal** en la interfaz que va al switch (servicio `r1-ip-datos`): `10.0.0.60`, la de `portal.ip` en `policy.yaml`, fuera del rango DHCP. Los demás hosts toman la suya por DHCP (sección 3e).
-2. **Servidor del portal** (`R2/portal_cautivo`) en `/opt/portal` del host, como servicio `r1-portal`, **por HTTPS en el puerto 8443**, con un certificado autofirmado que genera `slice.py` (`R1/deploy/hosts/portal-tls/`, no se versiona; `openssl` en el Controller), y un ARP gratuito para que ONOS lo ubique.
+2. **Servidor del portal** (`apps/portal`) en `/opt/portal` del host, como servicio `r1-portal`, **por HTTPS en el puerto 8443**, con un certificado autofirmado que genera `slice.py` (`R1/deploy/hosts/portal-tls/`, no se versiona; `openssl` en el Controller), y un ARP gratuito para que ONOS lo ubique.
 3. **Puertos de confianza.** El tráfico del portal y el que pasa de un switch al otro no tiene sesión 802.1X, así que R2 no debe aplicarle las tablas de rol. El paso lee de ONOS dónde está el portal y los enlaces entre switches, y escribe `R2/policy/policy.local.yaml` (no se versiona; `policy_tables.py` lo mezcla con `policy.yaml`): puertos `trusted` y `portal.switches`.
 4. **Fija el certificado en los demás hosts** (`/usr/local/share/r1/portal.crt`) y deja el comando `portal-curl`: es `curl` que solo acepta el certificado del portal. Sin esto, `curl https://10.0.0.60:8443` falla con un error de certificado, que es justo la defensa.
 5. **ARP estático del portal** en los demás hosts (servicio `r1-portal-arp`): su IP queda ligada a la MAC real del portal.
@@ -326,7 +326,7 @@ export VM_ACCESS_PORTS="of:<deviceId-del-switch>/<puerto>"      # ver python3 sl
 docker compose -f ~/proyecto-sdn/R2/mab_vm/compose.yml up -d --build      # MAB de VM (usa la red `sdn`)
 curl -u onos:rocks -X POST -H "Content-Type: application/octet-stream" --data-binary @$HOME/proyecto-sdn/R2/fallback/fallback-mab-1.0.0.oar "http://127.0.0.1:8181/onos/v1/applications?activate=true"
 ```
-El portal cautivo (`R2/portal_cautivo/`) y el panel (`R2/panel_accesos/`) están descritos en sus README.
+El portal cautivo (`apps/portal/`) y el panel (`R2/panel_accesos/`) están descritos en sus README.
 
 ## 8. Apagar
 
@@ -346,7 +346,7 @@ Mininet usa los datos del LDIF original (h1 con `00:00:00:00:00:11` en `of:00000
 
 ```bash
 pip install -r R1/policy_mapper/requirements.txt pytest requests
-python3 -m pytest R1/shared/policy_mapper/tests R2/policy/tests R2/portal_cautivo/tests R2/mab_vm/test_mab_vm.py R5/tests R5/deploy/tests R1/deploy/test_slice.py R1/agente_802_1x/test_agente.py -q
+python3 -m pytest R1/shared/policy_mapper/tests R2/policy/tests apps/portal/tests R2/mab_vm/test_mab_vm.py R5/tests R5/deploy/tests R1/deploy/test_slice.py apps/agents/802_1x/test_agente.py -q
 ```
 
 ## 10. Problemas conocidos
@@ -382,4 +382,4 @@ Otros avisos:
 - **Validado en el slice original, a mano y con el playbook y `ldap-ubicacion.sh`:** `profesor01` (VLAN 10) y `alumno01` (VLAN 20) en sw2; `alumno02` (VLAN 20) y `support01` (VLAN 40) en sw3.
 - **DHCP y cuarentena (sección 3e): sin probar en las VM.** Hay pruebas unitarias de las reglas (`R2/policy/tests`), de las prioridades, de la configuración de ONOS y del script de `dhclient` con un `ip` falso. No he comprobado: el nombre de la clave `dhcp` y la ruta REST `/onos/dhcp/dhcp/mappings` (las tomé del código de ONOS 2.7), que el switch mande el `DISCOVER` al controlador con la regla de 40500, que el perfil de AppArmor de `dhclient` deje ejecutar el script, ni que la cuarentena deje pasar el EAPOL.
 - **Sin probar todavía:** `slice.py` (solo con 26 pruebas unitarias en `R1/deploy/test_slice.py`: inventarios, tabla de usuarios, el asistente con respuestas simuladas y las funciones del portal; no se ha ejecutado contra las VM), el playbook `portal.yml`, el servidor del portal en un host y el ascenso a Docente de extremo a extremo (el Policy Mapper sí tiene 24 pruebas en `tests/test_ascenso.py`), los certificados regenerados contra FreeRADIUS real (se comprobó que las cadenas, las claves y los usos son correctos, pero no un EAP-TLS completo), esta guía en un slice limpio, las tablas de R2 con tráfico real y el IDS con este compose.
-- **Agente 802.1X (sección 3c):** probado solo con pruebas unitarias (`R1/agente_802_1x/test_agente.py`, 21 pruebas con un `wpa_supplicant` simulado y un servidor HTTP real en local) y viendo la página con datos simulados en un navegador. **No se ha ejecutado en un host de VNRT.** Lo que más depende de la VM real: que `wpa_cli status` devuelva `suppPortStatus` en el modo con cable, que el host alcance el Policy Mapper en el puerto 5000 de la red de gestión y que el EAPOL pase con el `tc`.
+- **Agente 802.1X (sección 3c):** probado solo con pruebas unitarias (`apps/agents/802_1x/test_agente.py`, 21 pruebas con un `wpa_supplicant` simulado y un servidor HTTP real en local) y viendo la página con datos simulados en un navegador. **No se ha ejecutado en un host de VNRT.** Lo que más depende de la VM real: que `wpa_cli status` devuelva `suppPortStatus` en el modo con cable, que el host alcance el Policy Mapper en el puerto 5000 de la red de gestión y que el EAPOL pase con el `tc`.

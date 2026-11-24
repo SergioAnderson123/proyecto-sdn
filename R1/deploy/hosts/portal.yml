@@ -58,7 +58,7 @@
   become: true
   gather_facts: false
   vars:
-    origen: "{{ playbook_dir }}/../../../R2/portal_cautivo"
+    origen: "{{ playbook_dir }}/../../../apps/portal"
     destino: /opt/portal
     mapper_url: "http://{{ controller_ip | default('192.168.0.10') }}:5000"
     tls_dir: "{{ playbook_dir }}/portal-tls"

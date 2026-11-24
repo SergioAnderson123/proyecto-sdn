@@ -64,7 +64,7 @@ Flujo:
 3. El Policy Mapper valida contra LDAP, comprueba que su grupo (`profesor`) permite subir ese equipo y **cambia el flujo de sesión de esa MAC al rol Docente** (VLAN 10, tabla 10).
 4. Al cerrar sesión en el portal, o al vencer el plazo, la PC **vuelve a Alumno**.
 
-**Cuándo se permite (todas a la vez).** `POST /portal/login` (R1/shared/policy_mapper/policy_mapper.py, `_validar_ascenso`) acepta el ascenso solo si:
+**Cuándo se permite (todas a la vez).** `POST /portal/login` (apps/onos/policy_mapper/policy_mapper.py, `_validar_ascenso`) acepta el ascenso solo si:
 - la MAC tiene una **sesión 802.1X** (no del portal) y **no es ya un ascenso**;
 - el **rol base** de esa sesión puede subir al rol del usuario, según la tabla `ascenso` de `R2/policy/policy.yaml` (hoy `alumno: [docente]`);
 - el usuario **no tiene otra sesión** (en ese equipo ni en otro);

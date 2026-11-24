@@ -56,7 +56,7 @@ Cierre en Paideia: miércoles 14-oct-2026, 14:59. Un solo PDF autocontenido por 
     ubicación fija en LDAP (`physicalDeliveryOfficeName`/`roomNumber`), algo que no todos los roles tienen.
     **Corregido:** si para el mismo usuario hay negociaciones en más de un `subscriberId` (puerto físico) a la
     vez, se rechaza explícitamente con 409 y un evento `conflicto` ("posible clonación"), en vez de resolver con
-    una heurística ciega. Pruebas en `R1/shared/policy_mapper/tests/test_identidad_clonada.py`.
+    una heurística ciega. Pruebas en `apps/onos/policy_mapper/tests/test_identidad_clonada.py`.
 
 15. **R2: caché de `/onos/aaa/app/users` con varios logins a la vez.** Se cachea esa tabla (compartida entre
     llamadas concurrentes, una sola petición HTTP real por ventana) por `AAA_CACHE_TTL_S` (50 ms por defecto).
