@@ -19,7 +19,7 @@ R2-03) F=R2/policy/tests/test_lab7_r2.py; T="R2-03  Traduccion de la politica a 
    E="Reglas con match, accion y prioridad por servicio permitido; si una politica permite y otra deniega, prevalece DENY." ;;
 R5-0[1-6]) F=R5/tests/test_lab7_r5.py; E=""; C="Seguridad perimetral (R5)"; T="$COD (3.${N#0}.x)"
    case "$COD" in
-   R5-01) T="R5-01  Lectura de la alerta del IDS (3.1.x)"; E="Alerta valida -> se procesa y guarda sid/firma/hora. Incompleta o corrupta -> se descarta sin excepcion." ;;
+   R5-01) T="R5-01  parse_ids_alert: lectura de la alerta del IDS (3.1.x)"; E="Alerta valida -> devuelve IP, puertos, protocolo, firma y severidad. Incompleta, corrupta o que no es alerta -> None sin excepcion. Linea a medio escribir -> no avanza el offset." ;;
    R5-02) T="R5-02  Decision segun severidad y direccion (3.2.x)"; E="Severidad 1-2 bloquea, 3-4 no. Externo->interno bloquea en cores; interno->externo en el borde." ;;
    R5-03) T="R5-03  Lista blanca (3.3.x)"; E="Una IP de la lista blanca nunca se bloquea; su vecina no listada si." ;;
    R5-04) T="R5-04  Regla DROP del perimetro (3.4.x)"; E="Prioridad 42000, timeout 300 s, solo ipv4_src de esa IP, en todos los cores; incidente con tiempos y flow_id." ;;
@@ -39,5 +39,11 @@ OUT=~/lab7_${COD}_$(hostname)_$(date +%Y%m%d_%H%M%S).txt
   echo "################################################################################"
   $PY -m pytest "$F" -v -rs -p no:cacheprovider -k "${R}_${N}_" 2>&1 | sed -E 's#^[A-Za-z0-9_/]+test_lab7_r[0-9]\.py::test_##'
   echo "RESULTADO $COD: exit=${PIPESTATUS[0]}"
+  # Salida caso por caso (entrada, esperado, obtenido y verificaciones) del archivo propio de la prueba, si existe: R5/pruebas/lab7/r5_01.py ...
+  if [ "$R" = "R5" ] && [ -f "R5/pruebas/lab7/r5_${N}.py" ]; then
+    echo; echo "=================== CASOS DE $COD ==================="
+    $PY "R5/pruebas/lab7/r5_${N}.py" 2>&1
+    echo "RESULTADO CASOS $COD: exit=$?"
+  fi
 } | tee "$OUT" | tee -a ~/r5_live.log
 echo "Evidencia: $OUT"

@@ -4,8 +4,8 @@
 N="$1"
 cd ~/proyecto-sdn || exit 1
 case "$N" in
-1) T="R5-01  Lectura de la alerta del IDS (1.1.x)"; C="Deteccion del ataque"
-   E="Alerta valida -> se procesa y guarda sid/firma/hora. Alerta incompleta o corrupta -> se descarta sin excepcion." ;;
+1) T="R5-01  parse_ids_alert: lectura de la alerta del IDS (3.1.x)"; C="Deteccion del ataque"
+   E="Alerta valida -> devuelve IP, puertos, protocolo, firma y severidad. Incompleta, corrupta o que no es alerta -> None sin excepcion. Linea a medio escribir -> no avanza el offset." ;;
 2) T="R5-02  Decision segun severidad y direccion (1.2.x)"; C="Mitigacion"
    E="Severidad 1-2 bloquea, 3-4 no (limite). Externo->interno bloquea en cores; interno->externo en el borde del host." ;;
 3) T="R5-03  Lista blanca (1.3.x)"; C="Falsos positivos"
