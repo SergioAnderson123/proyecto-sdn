@@ -66,6 +66,20 @@ h1 está autenticado ahora mismo por 802.1X (`profesor01`, sesión `922bf7cb`, f
 
 Al terminar: las tres réplicas `ready` con 2 sesiones (`profesor01`, `alumno01`), sus flujos 40001 `ADDED` vistos desde los tres ONOS, y `95` sin tormenta. Justo después de instalarse, ctrl-2 mostró el flujo nuevo de h2 en `PENDING_ADD` unos segundos aunque ya pasaba tráfico.
 
+## Ascenso en vivo (P4), 06:00–06:03
+
+Con h2 autenticado por 802.1X como `alumno01` y `profesor02` (cuenta de persona, sin MAC; su clave se cambió ese día en el LDAP de ctrl-1, solo esa cuenta) por el portal desde h2. El login con clave lo lanzó una persona; la verificación, el cierre y la comprobación final, el asistente.
+
+| Momento | Regla de sesión de h2 (ONOS y `sw-acc-2`) | Alcance desde h2 |
+|---|---|---|
+| Antes | VLAN 20 → `goto_table:20`, 802.1X | 8001 llega; 8101, 8102 y 8105 no |
+| Tras el ascenso (06:00:21, evento «Ascenso por el portal: Alumno → Docente (tabla 20 → 10)») | VLAN 10 → `goto_table:10`, sesión `profesor02` (Portal); el flujo de la tabla 20 desaparece | 8001 y 8101 llegan; 8102 y 8105 no |
+| Tras el cierre (06:01:46, «el equipo vuelve a Alumno») | VLAN 20 → `goto_table:20`, 802.1X otra vez | 8001 llega; 8101, 8102 y 8105 no |
+
+Confirma la petición de Dani: la regla de sesión pasa de la tabla 20 a la 10 y vuelve. Antes y después: tres réplicas `ready` con las mismas 2 sesiones y `95` sin tormenta.
+
+**Hallazgo: el cierre por el portal se pierde sin avisar.** El `POST /logout` desde h2 (06:00:59) respondió 302 pero la sesión siguió como Docente y ninguna réplica registró un `POST /portal/logout`; la sesión elevada se cerró solo al llamar a mano a `POST /portal/logout` por el gateway (06:01:46, `cerrada`, `vuelve_a: Alumno`). Causa probable, no demostrada: el portal llama al mapper con un tiempo máximo de 6 s (`llamar_mapper`) y descarta la respuesta, y en ese momento las transacciones del mapper esperaban entre 5 y 11 s (`wait_ms`, la lentitud de etcd todavía sin causa): la llamada vence, el portal redirige igual y la persona cree haber cerrado. Con un docente elevado, la sesión queda abierta hasta que vence (8 h). Para corregir: que el portal avise si el mapper no confirmó el cierre (y reintente), y reducir las esperas del mapper. El cierre del invitado de las 05:12 sí funcionó, con esperas menores.
+
 ## Pendiente
 
 - La lentitud de etcd y de las transacciones no cambió con este despliegue; la causa sigue sin conocerse.
