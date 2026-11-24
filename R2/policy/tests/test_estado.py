@@ -37,7 +37,7 @@ def _topologia(links, disp, plan, conocidos=None):
     raiz = rc.raiz_viva(g, pa.PREFERIDOS)
     con = {} if conocidos is None else conocidos
     es.recordar_enlaces(con, g)
-    return es.construir(g, con, disp, raiz, es.destinos_de_arbol(plan, raiz), pa.PREFERIDOS, N), g, con
+    return es.construir(g, con, disp, raiz, es.destinos_de_arbol(plan, raiz), pa.PREFERIDOS, N, plan.salida.dispositivo if plan.salida else None), g, con
 
 
 # ---------- topología con datos reales ----------
@@ -55,6 +55,23 @@ def test_cada_switch_trae_su_nivel_y_su_padre_en_el_arbol_hacia_la_raiz():
     assert s["core-1"]["es_raiz"] and s["core-1"]["nivel"] == 0 and s["core-1"]["padre"] is None
     for nombre in ("core-2", "acc-1", "acc-2", "borde"):
         assert s[nombre]["nivel"] == 1 and s[nombre]["padre"]["nombre"] == "core-1" and s[nombre]["disponible"]
+
+
+def test_cada_switch_trae_su_capa_para_dibujarlo_cores_arriba_accesos_abajo_y_el_borde_aparte():
+    top, _, _ = _topologia(*_real())
+    assert {s["nombre"]: s["capa"] for s in top["switches"]} == {"core-1": "nucleo", "core-2": "nucleo", "acc-1": "acceso", "acc-2": "acceso", "borde": "borde"}
+
+
+def test_la_capa_sale_de_la_configuracion_y_no_de_los_nombres_ni_de_la_raiz_viva():
+    links, disp, plan = _real()
+    g = rc.grafo_vivo(links, disp)
+    raiz = rc.raiz_viva(g, pa.PREFERIDOS)
+    renombrado = es.construir(g, {}, disp, raiz, [raiz], pa.PREFERIDOS, lambda d: "sw-" + d[-4:], plan.salida.dispositivo)
+    assert sorted(s["capa"] for s in renombrado["switches"]) == ["acceso", "acceso", "borde", "nucleo", "nucleo"]
+    sin_salida = es.construir(g, {}, disp, raiz, [raiz], pa.PREFERIDOS, N)                  # sin salida al exterior el borde es un acceso más
+    assert {s["nombre"]: s["capa"] for s in sin_salida["switches"]}["borde"] == "acceso"
+    top, _, _ = _topologia(links, [dict(d, available=N(d["id"]) != "core-1") for d in disp], plan)
+    assert {s["nombre"]: s["capa"] for s in top["switches"]}["core-1"] == "nucleo"             # aunque caiga, sigue siendo del núcleo: el dibujo no se mueve
 
 
 def test_un_cable_caido_sigue_apareciendo_como_caido_con_sus_puertos_gracias_a_la_memoria():
@@ -229,6 +246,13 @@ def test_el_estado_no_filtra_ni_las_mac_ni_las_ip_de_los_hosts():
     for h in onos.hosts:
         assert h["mac"].lower() not in texto.lower()
     assert "ipAddresses" not in texto
+
+
+def test_el_vigilante_publica_la_capa_de_cada_switch_segun_sus_preferidos():
+    v, *_ = nuevo()
+    v.ciclo()
+    capas = {s["id"]: s["capa"] for s in v.estado_json()["topologia"]["switches"]}
+    assert capas[C1] == capas[C2] == "nucleo" and capas[A1] == "acceso" and set(capas.values()) <= {"nucleo", "acceso", "borde"}
 
 
 def test_el_estado_dice_que_es_el_respaldo_y_que_no_esta_activo_si_el_principal_vive():

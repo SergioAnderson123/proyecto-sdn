@@ -63,9 +63,16 @@ def enlaces_en_uso(grafo: caminos.Grafo, destinos: Iterable[str], preferidos: It
     return uso
 
 
+def capa_de(switch: str, preferidos: Iterable[str], salida: Optional[str]) -> str:
+    """Dónde dibujar un switch: `nucleo` (las raíces preferidas, p. ej. core-1 y core-2), `borde` (el de la salida al exterior) o `acceso` (el resto). Se deduce de la configuración, no de los nombres."""
+    if switch in set(preferidos):
+        return "nucleo"
+    return "borde" if salida is not None and switch == salida else "acceso"
+
+
 def construir(grafo: caminos.Grafo, conocidos: Dict[FrozenSet[str], Dict[str, int]], dispositivos: Iterable[dict], raiz: Optional[str], destinos: Iterable[str],
-              preferidos: Iterable[str], nombre: Callable[[str], str] = lambda d: d) -> dict:
-    """La parte de topología del /estado."""
+              preferidos: Iterable[str], nombre: Callable[[str], str] = lambda d: d, salida: Optional[str] = None) -> dict:
+    """La parte de topología del /estado. `salida` = el switch por el que se sale al exterior (el borde), si lo hay."""
     preferidos = list(preferidos)
     niveles = caminos.niveles_hacia(grafo, raiz) if raiz in grafo else {}
     arbol = caminos.arbol_hacia(grafo, raiz, preferidos) if raiz in grafo else {}
@@ -74,7 +81,7 @@ def construir(grafo: caminos.Grafo, conocidos: Dict[FrozenSet[str], Dict[str, in
     switches = []
     for i in ids:
         padre = arbol.get(i)
-        switches.append({"id": i, "nombre": nombre(i), "disponible": i in disponibles, "nivel": niveles.get(i), "es_raiz": i == raiz,
+        switches.append({"id": i, "nombre": nombre(i), "capa": capa_de(i, preferidos, salida), "disponible": i in disponibles, "nivel": niveles.get(i), "es_raiz": i == raiz,
                          "padre": {"id": padre[0], "nombre": nombre(padre[0]), "puerto": padre[1]} if padre else None})
     vivos = pares_de_enlaces(grafo)
     uso = enlaces_en_uso(grafo, destinos, preferidos)

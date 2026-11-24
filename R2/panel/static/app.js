@@ -136,24 +136,43 @@ const ETIQUETAS = { enlace_caido: "cable caído", enlace_restaurado: "cable rest
   aplicado: "recálculo aplicado", alta_rapida: "alta rápida", red_partida: "red partida", red_conexa: "red conexa" };
 const MALOS = new Set(["enlace_caido", "switch_caido", "red_partida"]);
 
-function dibujarTopologia(top) {
-  const cont = $("topologia");
-  vaciar(cont);
-  if (!top) { cont.appendChild(el("p", "El vigilante aún no publicó la topología.", "ayuda")); return; }
+const porNombre = (a, b) => a.nombre.localeCompare(b.nombre);
+
+// Posiciones FIJAS por capa, como en el dibujo de VNRT: el núcleo (core-1, core-2) arriba, los accesos abajo y el borde a un lado. No dependen de qué cable cayó ni de quién es la raíz:
+// el dibujo no se mueve cuando algo cambia. Si el vigilante no informa la capa (versión anterior), se cae al orden por niveles.
+function posiciones(switches) {
+  const nucleo = switches.filter((x) => x.capa === "nucleo").sort(porNombre);
+  if (nucleo.length) {
+    const acceso = switches.filter((x) => x.capa === "acceso").sort(porNombre);
+    const borde = switches.filter((x) => x.capa === "borde").sort(porNombre);
+    const ancho = 720, alto = 330, x0 = borde.length ? 250 : 130, x1 = borde.length ? 610 : 590, pos = {};
+    const fila = (lista, y) => lista.forEach((sw, k) => { pos[sw.id] = { x: lista.length === 1 ? (x0 + x1) / 2 : x0 + ((x1 - x0) * k) / (lista.length - 1), y }; });
+    fila(nucleo, 70);
+    fila(acceso, 260);
+    borde.forEach((sw, k) => { pos[sw.id] = { x: 85, y: 165 + k * 75 }; });
+    return { pos, ancho, alto };
+  }
   const ancho = 720, alto_fila = 120, margen = 60;
-  const maxNivel = Math.max(0, ...top.switches.map((x) => (x.nivel === null ? 0 : x.nivel)));
+  const maxNivel = Math.max(0, ...switches.map((x) => (x.nivel === null ? 0 : x.nivel)));
   const filas = new Map();
-  for (const sw of top.switches) {
-    const nivel = sw.nivel === null ? maxNivel + 1 : sw.nivel;      // los que no llegan a la raíz van en una fila aparte, abajo
+  for (const sw of switches) {
+    const nivel = sw.nivel === null ? maxNivel + 1 : sw.nivel;
     if (!filas.has(nivel)) filas.set(nivel, []);
     filas.get(nivel).push(sw);
   }
   const pos = {};
   for (const [nivel, lista] of [...filas.entries()].sort((a, b) => a[0] - b[0])) {
-    lista.sort((a, b) => a.nombre.localeCompare(b.nombre));
+    lista.sort(porNombre);
     lista.forEach((sw, k) => { pos[sw.id] = { x: (ancho * (k + 1)) / (lista.length + 1), y: margen + nivel * alto_fila }; });
   }
-  const alto = margen * 2 + (Math.max(...filas.keys())) * alto_fila;
+  return { pos, ancho, alto: margen * 2 + Math.max(...filas.keys()) * alto_fila };
+}
+
+function dibujarTopologia(top) {
+  const cont = $("topologia");
+  vaciar(cont);
+  if (!top) { cont.appendChild(el("p", "El vigilante aún no publicó la topología.", "ayuda")); return; }
+  const { pos, ancho, alto } = posiciones(top.switches);
   const svg = s("svg", { viewBox: "0 0 " + ancho + " " + alto, class: "svg-topologia", role: "img", "aria-label": "Topología de los switches" });
   // Un cable que pasaría por encima de otro switch se curva hasta rodearlo (si no, parece que une a ese switch).
   const bez = (a, c, b, t) => ({ x: (1 - t) * (1 - t) * a.x + 2 * (1 - t) * t * c.x + t * t * b.x, y: (1 - t) * (1 - t) * a.y + 2 * (1 - t) * t * c.y + t * t * b.y });

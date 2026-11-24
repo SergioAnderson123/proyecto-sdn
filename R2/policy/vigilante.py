@@ -289,7 +289,8 @@ class Vigilante:
                 self.historial.agregar(ahora, ev["tipo"], ev["detalle"])
             self._foto_prev = foto
             estado.recordar_enlaces(self._conocidos, grafo)
-            top = estado.construir(grafo, self._conocidos, dispositivos, raiz, estado.destinos_de_arbol(self.plan, raiz), self.preferidos, self.nombre)
+            salida = self.plan.salida.dispositivo if self.plan is not None and getattr(self.plan, "salida", None) is not None else None
+            top = estado.construir(grafo, self._conocidos, dispositivos, raiz, estado.destinos_de_arbol(self.plan, raiz), self.preferidos, self.nombre, salida)
             top["t"] = ahora
             self._topologia = top
             self._olvidar_avisos("estado")
