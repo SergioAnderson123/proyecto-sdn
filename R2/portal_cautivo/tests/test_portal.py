@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import threading
+import time
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -126,15 +127,19 @@ class _MapperFalso:
         self.estado_pedidos, self.logins, self.logouts, self.tokens = [], [], [], []
         self.sesion = None                       # lo que devuelve /portal/estado
         self.login = (200, {"status": "ok", "usuario": "guest01", "rol": "Invitado", "tabla": 50})
+        self.logout_respuestas = []              # una por cierre, en orden: (codigo, cuerpo) o un numero de segundos que el mapper tarda en contestar
         mapper = self
 
         class H(BaseHTTPRequestHandler):
             def _j(self, codigo, cuerpo):
                 b = json.dumps(cuerpo).encode()
-                self.send_response(codigo)
-                self.send_header("Content-Length", str(len(b)))
-                self.end_headers()
-                self.wfile.write(b)
+                try:
+                    self.send_response(codigo)
+                    self.send_header("Content-Length", str(len(b)))
+                    self.end_headers()
+                    self.wfile.write(b)
+                except OSError:                  # el portal ya se rindió y cerró la conexión
+                    pass
 
             def do_GET(self):
                 mapper.estado_pedidos.append(dict(urllib.parse.parse_qsl(urllib.parse.urlparse(self.path).query, keep_blank_values=True)))
@@ -147,7 +152,11 @@ class _MapperFalso:
                     mapper.logins.append(cuerpo)
                     return self._j(*mapper.login)
                 mapper.logouts.append(cuerpo)
-                self._j(200, {"status": "cerrada"})
+                respuesta = mapper.logout_respuestas.pop(0) if mapper.logout_respuestas else (200, {"status": "cerrada"})
+                if isinstance(respuesta, (int, float)):          # tarda más de lo que el portal espera
+                    time.sleep(respuesta)
+                    respuesta = (200, {"status": "cerrada"})
+                self._j(*respuesta)
 
             def log_message(self, *a):
                 pass
@@ -215,6 +224,63 @@ def test_el_cierre_de_sesion_tambien_manda_la_ip(portal):
     mapper, pedir = portal
     pedir("/logout", {})
     assert mapper.logouts == [{"mac": "", "ip": "127.0.0.1"}]
+
+
+# ---- el cierre de sesion se confirma (24-nov: con el mapper lento el cierre se perdia y el portal redirigia como si nada)
+@pytest.fixture
+def cierre_rapido(monkeypatch):
+    monkeypatch.setattr(server, "CIERRE_ESPERA_S", 0.3)
+    monkeypatch.setattr(server, "CIERRE_PAUSA_S", 0)
+    monkeypatch.setattr(server, "CIERRE_INTENTOS", 3)
+
+
+def test_un_cierre_confirmado_vuelve_al_inicio_sin_reintentos(portal, cierre_rapido):
+    mapper, pedir = portal
+    codigo, pagina = pedir("/logout", {})
+    assert codigo == 200 and 'action="/login"' in pagina and "No se pudo confirmar" not in pagina
+    assert len(mapper.logouts) == 1
+
+
+def test_sin_sesion_tambien_cuenta_como_confirmado_porque_el_cierre_es_idempotente(portal, cierre_rapido):
+    mapper, pedir = portal
+    mapper.logout_respuestas = [(200, {"status": "sin_sesion"})]
+    codigo, pagina = pedir("/logout", {})
+    assert codigo == 200 and "No se pudo confirmar" not in pagina and len(mapper.logouts) == 1
+
+
+def test_si_el_mapper_tarda_mas_de_lo_que_espera_el_portal_reintenta_y_confirma(portal, cierre_rapido):
+    mapper, pedir = portal
+    mapper.logout_respuestas = [1.0, 1.0]                    # dos intentos que vencen; el tercero responde
+    codigo, pagina = pedir("/logout", {})
+    assert codigo == 200 and "No se pudo confirmar" not in pagina
+    assert len(mapper.logouts) == 3 and all(l == {"mac": "", "ip": "127.0.0.1"} for l in mapper.logouts)
+
+
+def test_si_el_mapper_nunca_confirma_el_portal_no_redirige_como_si_nada(portal, cierre_rapido):
+    mapper, pedir = portal
+    mapper.logout_respuestas = [1.0, 1.0, 1.0]
+    codigo, pagina = pedir("/logout", {})
+    assert codigo == 503 and "No se pudo confirmar el cierre" in pagina and 'action="/logout"' in pagina and "Reintentar" in pagina
+    assert len(mapper.logouts) == 3
+
+
+@pytest.mark.parametrize("respuesta", [(500, {"detail": "x"}), (503, {}), (403, {"detail": "token"}), (200, {}), (200, {"status": "otra_cosa"})])
+def test_un_error_o_una_respuesta_desconocida_del_mapper_no_cuenta_como_cierre(portal, cierre_rapido, respuesta):
+    mapper, pedir = portal
+    mapper.logout_respuestas = [respuesta] * 3
+    codigo, pagina = pedir("/logout", {})
+    assert codigo == 503 and "No se pudo confirmar el cierre" in pagina and len(mapper.logouts) == 3
+
+
+def test_con_el_mapper_caido_tambien_se_avisa(portal, cierre_rapido, monkeypatch):
+    mapper, pedir = portal
+    monkeypatch.setattr(server, "MAPPER", "http://127.0.0.1:1")
+    codigo, pagina = pedir("/logout", {})
+    assert codigo == 503 and "No se pudo confirmar el cierre" in pagina
+
+
+def test_el_valor_por_defecto_espera_mas_que_las_transacciones_lentas_del_mapper():
+    assert server.CIERRE_ESPERA_S >= 8 and server.CIERRE_INTENTOS >= 3      # el mapper llegó a tardar 5 a 11 s por transacción
 
 
 def test_el_motivo_que_da_el_mapper_se_muestra_al_usuario(portal):

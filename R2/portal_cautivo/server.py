@@ -25,6 +25,7 @@ import os
 import ssl
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -86,13 +87,13 @@ def mac_de(ip):
     return None
 
 
-def llamar_mapper(ruta, cuerpo=None):
-    """(código HTTP, JSON) de una llamada al Policy Mapper; (0, {}) si no responde."""
+def llamar_mapper(ruta, cuerpo=None, espera=6):
+    """(código HTTP, JSON) de una llamada al Policy Mapper; (0, {}) si no responde en `espera` segundos."""
     req = urllib.request.Request(MAPPER + ruta, method="POST" if cuerpo is not None else "GET",
                                  data=None if cuerpo is None else json.dumps(cuerpo).encode(),
                                  headers={"Content-Type": "application/json", "X-Portal-Token": TOKEN})
     try:
-        with urllib.request.urlopen(req, timeout=6) as r:
+        with urllib.request.urlopen(req, timeout=espera) as r:
             return r.status, json.load(r)
     except urllib.error.HTTPError as e:
         try:
@@ -101,6 +102,35 @@ def llamar_mapper(ruta, cuerpo=None):
             return e.code, {}
     except Exception:  # noqa: BLE001 - el mapper caído se muestra como error, no tumba el portal
         return 0, {}
+
+
+CIERRE_ESTADOS_OK = ("cerrada", "sin_sesion")      # lo que contesta el mapper cuando ya no queda sesión del portal para ese equipo (idempotente)
+CIERRE_INTENTOS = int(os.getenv("PORTAL_CIERRE_INTENTOS", "3"))
+CIERRE_ESPERA_S = float(os.getenv("PORTAL_CIERRE_ESPERA_S", "8"))   # por intento: el mapper llegó a tardar entre 5 y 11 s en una transacción (24-nov), más que los 6 s de antes
+CIERRE_PAUSA_S = float(os.getenv("PORTAL_CIERRE_PAUSA_S", "0.5"))
+
+
+def cerrar_sesion_en_mapper(quien):
+    """Pide al mapper cerrar la sesión del portal y devuelve True SOLO si lo confirmó (`cerrada` o `sin_sesion`).
+
+    Antes el portal ignoraba la respuesta: si el mapper tardaba más que el tiempo de espera, la llamada se perdía, el portal redirigía igual y la persona creía haber
+    cerrado cuando su sesión (un docente elevado, por ejemplo) seguía abierta hasta vencer (24-nov-2026). Ahora reintenta (el cierre es idempotente) y, si no hay
+    confirmación, lo dice. Cualquier otra cosa (timeout, error HTTP, respuesta sin `status` conocido) cuenta como no confirmada."""
+    for intento in range(1, max(1, CIERRE_INTENTOS) + 1):
+        codigo, r = llamar_mapper("/portal/logout", quien, CIERRE_ESPERA_S)
+        if codigo == 200 and r.get("status") in CIERRE_ESTADOS_OK:
+            return True
+        print(f"[portal] cierre de sesión sin confirmar (intento {intento}/{CIERRE_INTENTOS}, mapper: {codigo or 'sin respuesta'})", flush=True)
+        if intento < CIERRE_INTENTOS:
+            time.sleep(CIERRE_PAUSA_S)
+    return False
+
+
+def pagina_cierre_fallido():
+    return pagina("No se pudo cerrar la sesión", """<div class="card card-md"><div class="card-body text-center">
+<span class="badge bg-red-lt mb-3">Sin confirmar</span><h2 class="card-title">No se pudo confirmar el cierre de su sesión</h2>
+<p class="text-secondary">Su sesión puede seguir abierta. Reintente; si el problema continúa, avise al soporte de la red.</p>
+<form method="post" action="/logout"><button class="btn btn-primary w-100" type="submit">Reintentar cierre de sesión</button></form></div></div>""")
 
 
 def destino_seguro(d):
@@ -222,8 +252,9 @@ class Manejador(BaseHTTPRequestHandler):
         campos = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(min(largo, 4096)).decode()).items()}
         quien = self._quien()
         if self.path == "/logout":
-            llamar_mapper("/portal/logout", quien)
-            return self._redir("/")
+            if cerrar_sesion_en_mapper(quien):
+                return self._redir("/")
+            return self._enviar(503, pagina_cierre_fallido())      # no se redirige como si nada: la sesión puede seguir abierta
         if self.path != "/login":
             return self._enviar(404, "no encontrado", "text/plain")
         destino = destino_seguro(campos.get("destino"))
