@@ -1,0 +1,59 @@
+# MEDIR EL ACCESO AL SERVIDOR DESDE h1 Y h2 mientras se prueba otra cosa (por ejemplo mover el mando de los switches entre controladores). No cambia nada en la red.
+#   PLAYBOOK=100_medir_acceso.yml ./lanzar.sh -e accion=iniciar -e duracion_s=1500      # arranca la medicion en segundo plano en h1 y h2 y vuelve enseguida
+#   PLAYBOOK=100_medir_acceso.yml ./lanzar.sh -e accion=leer                             # resumen: segundos sin servicio y cuando ocurrieron (se puede leer con la medicion en marcha)
+# Cada segundo: h1 (docente) hace `nc -zv -w 1 -s <su IP 10.0.1.x> 10.0.0.10 8101` y h2 (alumno) `... -s <IP 10.0.2.x> 10.0.0.10 8001`.
+# "refused" o "succeeded" = el servidor contesta = OK; cualquier otra cosa = SIN_CAMINO. Las horas son las de cada host (UTC, igual que el panel).
+# Requiere la sesion 802.1X de cada uno (si no hay sesion, la cuarentena descarta y saldra SIN_CAMINO todo el rato).
+- name: Medir el acceso al servidor, paso 1 - h1 (docente) y h2 (alumno)
+  hosts: h1-profesor,h2-alumno
+  gather_facts: false
+  vars:
+    accion: leer
+    duracion_s: 1500
+    destino: 10.0.0.10
+    prueba:
+      h1-profesor: {subred: "10.0.1.", puerto: 8101}
+      h2-alumno: {subred: "10.0.2.", puerto: 8001}
+    datos: "{{ prueba[inventory_hostname] }}"
+  tasks:
+    - name: Arrancar la medicion en segundo plano
+      ansible.builtin.shell:
+        cmd: |
+          rm -f /tmp/medicion_acceso.txt
+          fin=$(( $(date +%s) + {{ duracion_s | int }} ))
+          while [ $(date +%s) -lt $fin ]; do
+            ip_h=$(ip -4 -o addr show dev ens4 | awk '{print $4}' | cut -d/ -f1 | grep '^{{ datos.subred | regex_replace("[.]", "[.]") }}' | head -1)
+            r=$(nc -zv -w 1 -s "$ip_h" {{ destino }} {{ datos.puerto }} 2>&1 | tr '\n' ' ')
+            case "$r" in
+              *refused*|*succeeded*|*open*) e=OK;;
+              *) e=SIN_CAMINO;;
+            esac
+            echo "$(date +%T) $e" >> /tmp/medicion_acceso.txt
+            sleep 1
+          done
+      async: "{{ (duracion_s | int) + 60 }}"
+      poll: 0
+      changed_when: true
+      when: accion == 'iniciar'
+
+    - name: Iniciada
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: midiendo {{ destino }}:{{ datos.puerto }} cada segundo durante {{ duracion_s }} s (resultado: accion=leer)"
+      when: accion == 'iniciar'
+
+    - name: Resumen de la medicion
+      ansible.builtin.shell:
+        cmd: |
+          if [ ! -s /tmp/medicion_acceso.txt ]; then echo "sin datos: ¿se arranco con accion=iniciar?"; exit 0; fi
+          echo "primera: $(head -1 /tmp/medicion_acceso.txt | cut -d' ' -f1)  ultima: $(tail -1 /tmp/medicion_acceso.txt | cut -d' ' -f1)"
+          echo "pruebas: $(wc -l < /tmp/medicion_acceso.txt); OK: $(grep -c ' OK$' /tmp/medicion_acceso.txt); SIN_CAMINO: $(grep -c SIN_CAMINO /tmp/medicion_acceso.txt)"
+          echo "cambios de estado (hora y estado al que pasa):"
+          awk 'NR==1 || $2!=prev {print $0} {prev=$2}' /tmp/medicion_acceso.txt | head -40
+      register: resumen
+      changed_when: false
+      when: accion == 'leer'
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ ['=== ' ~ inventory_hostname ~ ' ==='] + resumen.stdout_lines }}"
+      when: accion == 'leer'
