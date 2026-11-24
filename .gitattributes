@@ -1,2 +1,18 @@
+# Normalizar saltos de línea: Git los guarda como LF y los reexpande según el SO al hacer checkout.
+* text=auto eol=lf
+
 # Los scripts de shell corren en contenedores Linux: siempre LF, aunque se clonen en Windows
 *.sh text eol=lf
+
+# Binarios: nunca tocar saltos de línea
+*.png  binary
+*.pdf  binary
+*.pptx binary
+*.p12  binary
+*.pfx  binary
+*.pem  binary
+*.crt  binary
+*.csr  binary
+*.key  binary
+*.pcap binary
+*.drawio text eol=lf
