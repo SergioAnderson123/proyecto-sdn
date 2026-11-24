@@ -226,6 +226,22 @@ def test_el_cierre_de_sesion_tambien_manda_la_ip(portal):
     assert mapper.logouts == [{"mac": "", "ip": "127.0.0.1"}]
 
 
+# ---- bloqueo temporal por intentos fallidos (lo decide el mapper: 429)
+def test_un_bloqueo_temporal_del_mapper_se_muestra_con_su_mensaje_y_el_codigo_429(portal):
+    mapper, pedir = portal
+    mapper.login = (429, {"detail": "Demasiados intentos fallidos; espere unos minutos e intente de nuevo"})
+    codigo, pagina = pedir("/login", {"usuario": "profesor02", "clave": "x", "destino": ""})
+    assert codigo == 429 and "Demasiados intentos fallidos" in pagina and 'action="/login"' in pagina
+
+
+def test_el_bloqueo_tambien_se_muestra_en_un_equipo_con_sesion_802_1x_que_admite_ascenso(portal):
+    mapper, pedir = portal
+    mapper.sesion = {"usuario": "alumno01@example.org", "rol": "Alumno", "metodo": "802.1X", "ascenso_a": ["docente"], "base": None}
+    mapper.login = (429, {"detail": "Demasiados intentos fallidos; espere unos minutos e intente de nuevo"})
+    codigo, pagina = pedir("/login", {"usuario": "profesor02", "clave": "x", "destino": ""})
+    assert codigo == 429 and "Demasiados intentos fallidos" in pagina and "Subir de rol" in pagina
+
+
 # ---- el cierre de sesion se confirma (24-nov: con el mapper lento el cierre se perdia y el portal redirigia como si nada)
 @pytest.fixture
 def cierre_rapido(monkeypatch):

@@ -263,9 +263,10 @@ class Manejador(BaseHTTPRequestHandler):
             return self._enviar(200, sesion_activa({"usuario": r["usuario"], "rol": r["rol"], "metodo": "Portal"}, destino))
         mensaje = (r.get("detail") if codigo else "El servicio de acceso no responde; intente más tarde.") or "No se pudo iniciar sesión."
         _, estado = llamar_mapper("/portal/estado?" + urllib.parse.urlencode(quien))
+        http = codigo if codigo in (401, 429) else 200           # 429: bloqueo temporal por intentos fallidos (lo decide el mapper)
         if (estado.get("sesion") or {}).get("ascenso_a"):       # equipo con sesión 802.1X: se vuelve a ofrecer subir de rol
-            return self._enviar(401 if codigo == 401 else 200, pagina_ascenso(estado["sesion"], destino, mensaje))
-        self._enviar(401 if codigo == 401 else 200, formulario(destino, mensaje))
+            return self._enviar(http, pagina_ascenso(estado["sesion"], destino, mensaje))
+        self._enviar(http, formulario(destino, mensaje))
 
     def log_message(self, fmt, *a):
         print(f"[portal] {self.client_address[0]}:{self.server.server_address[1]} {fmt % a}", flush=True)

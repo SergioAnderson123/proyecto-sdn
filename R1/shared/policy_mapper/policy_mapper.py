@@ -19,6 +19,7 @@ import uvicorn
 from fastapi.responses import JSONResponse
 
 import eventos
+import intentos
 import policy_tables
 import portal_auth
 from session_manager import ActiveSession, session_store
@@ -297,6 +298,20 @@ async def _restaurar_base(ses: ActiveSession, motivo: str) -> None:
     eventos.registrar("logout", ses.username, ses.mac, ses.dpid, ses.port, f"Portal: sesión {ses.rol} {motivo}; el equipo vuelve a {base.rol}", ses.rol)
 
 
+# Límite de intentos fallidos del portal (requisito P5 de docs/DISENO_EXCEPCIONES_POR_SESION.md): 5 contraseñas incorrectas seguidas en 5 min bloquean la CUENTA 15 min;
+# además, 15 fallas desde un mismo EQUIPO (su MAC) bloquean ese equipo, que cubre probar muchos usuarios desde un sitio. Un bloqueo rechaza también la clave correcta.
+# El estado vive en la memoria de CADA réplica y no se comparte: con tres réplicas detrás del gateway, quien reparta sus intentos puede probar hasta tres veces más antes
+# de bloquearse en todas; y quien falle a propósito con una cuenta ajena la bloquea (denegación de servicio acotada a 15 min). Ajustable con PORTAL_MAX_INTENTOS,
+# PORTAL_MAX_INTENTOS_EQUIPO, PORTAL_VENTANA_S y PORTAL_BLOQUEO_S.
+def _limite_portal(max_env: str, max_defecto: str) -> "intentos.LimiteIntentos":
+    return intentos.LimiteIntentos(max_intentos=int(os.getenv(max_env, max_defecto)), ventana_s=float(os.getenv("PORTAL_VENTANA_S", "300")),
+                                   bloqueo_s=float(os.getenv("PORTAL_BLOQUEO_S", "900")))
+
+
+LIMITE_PORTAL_CUENTA = _limite_portal("PORTAL_MAX_INTENTOS", "5")
+LIMITE_PORTAL_EQUIPO = _limite_portal("PORTAL_MAX_INTENTOS_EQUIPO", "15")
+
+
 @app.post("/portal/login")
 async def portal_login(p: PortalLogin, x_portal_token: str = Header(default="")):
     """Portal cautivo: valida usuario y contraseña contra LDAP e instala la sesión (mismo flujo 40001 que 802.1X).
@@ -308,10 +323,16 @@ async def portal_login(p: PortalLogin, x_portal_token: str = Header(default=""))
     if not mac:
         eventos.registrar("rechazado", p.usuario, "", detalle="Portal: no se pudo identificar el equipo (sin MAC en el ARP del portal y la IP no figura en los hosts de ONOS)")
         raise HTTPException(status_code=409, detail="No se pudo identificar el equipo; reintente")
+    if LIMITE_PORTAL_CUENTA.is_locked(p.usuario) or LIMITE_PORTAL_EQUIPO.is_locked(mac):
+        # antes de consultar LDAP: un bloqueo no deja seguir probando claves, y el mensaje es el mismo exista o no la cuenta
+        eventos.registrar("rechazado", p.usuario, mac, detalle="Portal: bloqueado temporalmente por intentos fallidos")
+        raise HTTPException(status_code=429, detail="Demasiados intentos fallidos; espere unos minutos e intente de nuevo")
     grupos = await asyncio.to_thread(portal_auth.autenticar_ldap, p.usuario, p.clave)
     if grupos is None:
-        eventos.registrar("rechazado", p.usuario, mac, detalle="Portal: usuario o contraseña incorrectos")
+        bloqueo = LIMITE_PORTAL_CUENTA.register_failed_attempt(p.usuario) | LIMITE_PORTAL_EQUIPO.register_failed_attempt(mac)
+        eventos.registrar("rechazado", p.usuario, mac, detalle="Portal: usuario o contraseña incorrectos" + (" (bloqueo temporal activado)" if bloqueo else ""))
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
+    LIMITE_PORTAL_CUENTA.register_success(p.usuario)
     rol = portal_auth.rol_de_grupos(POLITICA, grupos)
     info = POLITICA["roles"].get(rol) if rol else None
     if not info:
