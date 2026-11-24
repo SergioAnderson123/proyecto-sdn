@@ -1,8 +1,0 @@
-{
-  "alertas": [
-    "ET SCAN Sqlmap SQL Injection Scan",
-    "LOCAL Herramienta de escaneo web (User-Agent)"
-  ],
-  "bloqueado": true,
-  "http_despues": "sin respuesta"
-}
