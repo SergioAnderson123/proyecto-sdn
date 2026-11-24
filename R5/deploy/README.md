@@ -191,3 +191,22 @@ Todo esto se probó con **pruebas unitarias y `docker compose config`**; **no se
 ## 9. Convivencia con R1 y R2
 
 El espejo se instala **solo en los cores**: un switch con sesiones de R2 (los accesos) lo saltaría (ver 4). Prioridades: espejo 41000, DROP de R5 42000, DROP temporal de R1 45000, sesión de R2 40001. `tests/test_prioridades.py` verifica este mapa contra el código. Cuando R5 bloquea a un host interno, el integrador pide al Policy Mapper `POST /sessions/revoke` (`MAPPER_URL`) para revocar también su sesión.
+
+## Medición de los criterios cuantitativos pendientes
+
+Tres criterios del proyecto tenían medida incompleta: tasa de falsos positivos (por alertas), escalabilidad de eventos y consumo de recursos (CPU, memoria y ancho de banda del espejo). Se miden con `medicion_r5.py`, que se ejecuta en **switch-borde** igual que `repeticiones.py` (pide la contraseña de `ubuntu` una vez y necesita `sshpass`). En `vm-atacante` hacen falta `scapy` y `hping3`.
+
+```bash
+python3 R5/deploy/medicion_r5.py fp --dry-run                       # muestra lo que haría, sin tocar ninguna VM (úsalo primero)
+python3 R5/deploy/medicion_r5.py fp -n 5 --duracion 120 --nat 3     # falsos positivos: 5 corridas de tráfico mixto + 3 ráfagas de 40 usuarios tras un NAT
+python3 R5/deploy/medicion_r5.py escala --origenes 10,25,50,100 -n 3
+python3 R5/deploy/medicion_r5.py recursos --fase-s 60 --ifaces ens4  # reposo, espejo, DDoS y tráfico mixto; IDS_IFACES de R5/deploy/.env
+```
+
+| Criterio | Qué mide | Cómo se calcula |
+|---|---|---|
+| Tasa de falsos positivos (%) | Alertas de Suricata sobre tráfico legítimo / alertas generadas | `fp`: cada alerta se atribuye a su atacante (el origen, o el destino si la firma salta sobre la respuesta); verdadera si es la IP maliciosa, falsa si es la IP del tráfico legítimo, «otra» si no es ninguna. Da la tasa estricta y la conservadora (con las «otras») |
+| Escalabilidad de eventos | Orígenes maliciosos simultáneos que se bloquean sin degradarse | `escala`: para cada K, bloqueadas/K, tiempo hasta el último bloqueo, bloqueos por segundo y mitigación p50/p95/máx |
+| Consumo de recursos | CPU y RAM de Suricata y del integrador, y Mbit/s y paquetes/s que llegan por las NIC de espejo | `recursos`: ejecuta `medir_recursos.py` en cada sensor (lee `/proc` y `/sys`, no necesita Docker) en las fases reposo, espejo, ddos y mixto |
+
+Los orígenes falsos de `escala` y `recursos` salen de `198.18.0.0/15` (rango de pruebas sin ruta): no afectan a nadie y sus bloqueos caducan solos a los 300 s. Los resultados quedan en CSV en el home del usuario (`~/r5_fp_*.csv`, `~/r5_escala_*.csv`, `/tmp/r5med/*.csv` en cada sensor). La lógica de cálculo está en `medicion_lib.py` y se prueba en `tests/test_medicion.py`.
