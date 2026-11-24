@@ -199,9 +199,10 @@ def cmd_escala(rem, a):
             print(f"  K={k:>3} #{rep}: bloqueadas {r['bloqueadas']}/{r['esperadas']} · primero a los {r['primero_s'] if r['primero_s'] is None else round(r['primero_s'], 2)} s, "
                   f"último a los {r['ultimo_s'] if r['ultimo_s'] is None else round(r['ultimo_s'], 2)} s · "
                   f"{'-' if r['bloqueos_por_s'] is None else round(r['bloqueos_por_s'], 1)} bloqueos/s · "
-                  f"mitigación p50/p95/máx {r['mitigacion_p50_ms']}/{r['mitigacion_p95_ms']}/{r['mitigacion_max_ms']} ms")
+                  f"mitigación p50/p95/máx " + "/".join("-" if r[c] is None else f"{r[c]:.1f}" for c in ("mitigacion_p50_ms", "mitigacion_p95_ms", "mitigacion_max_ms")) + " ms")
             filas.append(dict(r, origenes=k, rep=rep))
             time.sleep(a.pausa)
+    limpiar(rem, lib.origenes_externos(max(int(x) for x in a.origenes.split(","))))    # al terminar no debe quedar ningún DROP de la prueba
     print("\n=== RESUMEN (media de las corridas) ===")
     print(f"{'K':>4} {'bloqueadas':>11} {'último bloqueo (s)':>19} {'bloqueos/s':>11} {'mitigación p95 (ms)':>20}")
     for k in sorted({f["origenes"] for f in filas}):
@@ -248,6 +249,8 @@ def cmd_recursos(rem, a):
                     resultados[(fase, s)] = json.loads(m.group(0))
                 except ValueError:
                     pass
+        if fase == "ddos":                                          # quita los DROP que dejó la fase (hasta 150 orígenes)
+            limpiar(rem, lib.origenes_externos(lib.MAX_ORIGENES))
         time.sleep(3)
     print("\n=== RESUMEN (media / máximo) ===")
     print(f"{'fase':8} {'sensor':11} {'CPU Suricata %':>16} {'CPU integrador %':>18} {'RAM Suricata MB':>16} {'RAM integr. MB':>15} {'espejo Mbit/s':>14} {'espejo pps':>11}")
