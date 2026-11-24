@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
-"""M09 - Integrador IDS-SDN: eve-alerts.json (I09) -> ONOS REST (I10)."""
+"""M09 - Integrador IDS-SDN: traduce alertas de Suricata en bloqueos sobre ONOS.
+
+Flujo general:
+    eve-alerts.json (I09)  ->  decisión (¿a quién y dónde bloquear?)  ->  ONOS REST (I10)
+                                                                       ->  Policy Mapper (I11, opcional)
+
+El servicio sigue el archivo EVE que escribe Suricata, filtra las alertas por severidad, decide qué IP bloquear y en qué
+switch(es), e instala una regla DROP temporal mediante la API REST de ONOS. Para hosts internos pide además al Policy Mapper
+de R1/R2 que revoque la sesión del usuario.
+
+Garantías de diseño:
+    * Entrega al menos una vez: el offset de lectura solo avanza cuando la alerta se procesó (o se descartó de forma definitiva),
+      y el estado se persiste de forma atómica para sobrevivir a reinicios.
+    * Idempotencia: una IP ya bloqueada no se vuelve a enviar a ONOS.
+    * Tolerancia a fallos: reintento con espera exponencial ante caídas de ONOS y conmutación entre nodos del clúster.
+    * Autocorrección: el estado local se reconcilia periódicamente con los flujos reales de ONOS.
+
+Configuración: variables de entorno (ver sección "Configuración"), opcionalmente completadas desde TOPOLOGIA=<yaml>.
+"""
 import ipaddress
 import json
 import logging
@@ -12,75 +30,108 @@ import time
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import topologia  # noqa: E402
+import topologia  # noqa: E402  (debe importarse tras ajustar sys.path)
 
-# Con TOPOLOGIA=/ruta/topologia.yaml (slice de 14 VM) el archivo rellena lo que el entorno no defina: ONOS_URL (clúster), MAPPER_URL
-# (primario y réplica), HOME_NET, LISTA_BLANCA y CORE_DEVICES. Sin TOPOLOGIA todo sigue viniendo del entorno, como antes.
+# Si TOPOLOGIA=/ruta/topologia.yaml (slice de 14 VM), el archivo completa las variables que el entorno no defina:
+# ONOS_URL (clúster), MAPPER_URL (primario y réplica), HOME_NET, LISTA_BLANCA y CORE_DEVICES.
+# Sin TOPOLOGIA, todo proviene únicamente del entorno.
 topologia.aplicar_entorno()
 
 # ---------------- Configuración ----------------
-EVE_PATH   = os.getenv("EVE_PATH", "/var/log/suricata/eve-alerts.json")
-STATE_PATH = os.getenv("STATE_PATH", "/var/lib/integrador/state.json")
-# ONOS_URL admite varios nodos separados por coma (clúster): se usa el primero que responda y se recuerda cuál fue.
-ONOS_URL   = os.getenv("ONOS_URL")    # https://<host-onos>:8443/onos/v1 (8181 es HTTP; HTTPS se activa en ONOS)
+# Entrada y persistencia
+EVE_PATH   = os.getenv("EVE_PATH", "/var/log/suricata/eve-alerts.json")   # salida EVE de Suricata (una alerta JSON por línea)
+STATE_PATH = os.getenv("STATE_PATH", "/var/lib/integrador/state.json")    # estado persistente (offset de lectura e IPs bloqueadas)
+
+# Acceso a ONOS
+ONOS_URL   = os.getenv("ONOS_URL")    # https://<host-onos>:8443/onos/v1; admite varios nodos separados por coma (clúster).
+                                      # El puerto 8181 es HTTP plano: HTTPS debe habilitarse en ONOS.
 ONOS_USER  = os.getenv("ONOS_USER")
 ONOS_PASS  = os.getenv("ONOS_PASS")
-ONOS_CA    = os.getenv("ONOS_CA")     # ruta al CA; si no se define, usa el del sistema
-APP_ID     = os.getenv("APP_ID", "org.campus.r5")   # nombre propio: permite listar/borrar solo nuestras reglas
-DRY_RUN    = os.getenv("DRY_RUN") == "1"
-# Policy Mapper de R1/R2 (p. ej. http://192.168.100.11:5000), con réplica separada por coma; vacío = I11 desactivada
+ONOS_CA    = os.getenv("ONOS_CA")     # ruta al certificado de la CA; si no se define, se usa el almacén del sistema
+APP_ID     = os.getenv("APP_ID", "org.campus.r5")   # identifica nuestras reglas en ONOS: permite listarlas y borrarlas sin afectar a otras apps
+DRY_RUN    = os.getenv("DRY_RUN") == "1"            # modo simulación: registra las acciones pero no contacta con ONOS
+
+# Policy Mapper de R1/R2 (p. ej. http://192.168.100.11:5000); admite réplica separada por coma. Vacío = I11 desactivada.
 MAPPER_URL = os.getenv("MAPPER_URL", "")
-SENSOR     = os.getenv("SENSOR", socket.gethostname())   # nodo-sec-1 o nodo-sec-2: los dos reciben el mismo espejo y bloquean igual
+# Clave compartida con el Policy Mapper (su R5_TOKEN): se envía en X-R5-Token. Sin ella el mapper responde 403 y no se revocan sesiones.
+R5_TOKEN   = os.getenv("R5_TOKEN", "")
+# Nombre del sensor (nodo-sec-1 o nodo-sec-2). Ambos reciben el mismo tráfico espejado y aplican los mismos bloqueos.
+SENSOR     = os.getenv("SENSOR", socket.gethostname())
 
 
 def lista_urls(valor):
-    """'http://a:1/, http://b:1' -> ['http://a:1', 'http://b:1']."""
+    """Normaliza una lista de URL separadas por coma: descarta vacíos, espacios y la barra final.
+
+    Ejemplo: 'http://a:1/, http://b:1' -> ['http://a:1', 'http://b:1']."""
     return [u.strip().rstrip("/") for u in (valor or "").split(",") if u.strip()]
 
 
 def redes(var, defecto):
-    """Lista de prefijos separados por comas, p. ej. HOME_NET=10.0.0.0/24,10.0.1.0/24."""
+    """Lee de la variable de entorno `var` una lista de prefijos CIDR separados por coma y los devuelve como objetos de red.
+
+    Ejemplo: HOME_NET=10.0.0.0/24,10.0.1.0/24. Lanza ValueError si algún prefijo es inválido."""
     return [ipaddress.ip_network(x.strip()) for x in os.getenv(var, defecto).split(",") if x.strip()]
 
 
-HOME_NET     = redes("HOME_NET", "10.0.0.0/24")                    # = suricata.yaml
-LISTA_BLANCA = redes("LISTA_BLANCA", "10.0.0.40/32,10.0.0.50/32,10.0.0.250/32")  # servidores de recursos y servidor DHCP de ONOS
-# Cores donde se bloquea a un atacante externo. Con ECMP su tráfico puede entrar por cualquiera de los dos, así que el DROP va en todos.
+# Alcance de la protección
+HOME_NET     = redes("HOME_NET", "10.0.0.0/24")                    # red interna; debe coincidir con HOME_NET de suricata.yaml
+LISTA_BLANCA = redes("LISTA_BLANCA", "10.0.0.40/32,10.0.0.50/32,10.0.0.250/32")  # nunca se bloquean: servidores de recursos y DHCP de ONOS
+# Switches Core donde se bloquea a un atacante externo. Con ECMP su tráfico puede entrar por cualquiera de los dos,
+# por lo que el DROP se instala en todos a la vez.
 CORE_DEVICES = [d.strip() for d in os.getenv("CORE_DEVICES", "").split(",") if d.strip()] \
     or [os.getenv("CORE_DEVICE", "of:0000000000000001")]
-CORE_DEVICE  = CORE_DEVICES[0]                                    # compatibilidad: el primero (o el único)
-PRIORITY     = int(os.getenv("P_R5", "42000"))     # banda R5 41000-44999: sobre la sesión R2 (40001), bajo R1 (45000)
-MAX_SEVERITY = int(os.getenv("MAX_SEVERITY", "2"))
-INTRANET     = os.getenv("INTRANET_BLOCK", "1") == "1"   # bloquear también alertas interno -> interno (requiere espejo interno)
-BLOCK_SEC    = int(os.getenv("BLOCK_SEC", "300"))  # timeout de inactividad en ONOS
-POLL_SEC     = float(os.getenv("POLL_SEC", "0.05"))  # con 0.5 s la espera media alerta->POST era ~250 ms
-SAVE_EVERY   = 5
-RECONCILE_SEC = float(os.getenv("RECONCILE_SEC", "10"))   # cada cuánto compara su lista con los flujos reales de ONOS
-GRACIA_SEC   = 3            # un flujo recién creado puede tardar unos segundos en aparecer en ONOS
-BACKOFF_MIN, BACKOFF_MAX = 1, 30
+CORE_DEVICE  = CORE_DEVICES[0]                                    # compatibilidad con versiones anteriores: primer Core (o el único)
+
+# Política de bloqueo
+PRIORITY     = int(os.getenv("P_R5", "42000"))     # banda reservada a R5: 41000-44999 (por encima de la sesión R2, 40001; por debajo de R1, 45000)
+MAX_SEVERITY = int(os.getenv("MAX_SEVERITY", "2"))  # solo se actúa sobre alertas con severidad <= este valor (1 = más grave)
+INTRANET     = os.getenv("INTRANET_BLOCK", "1") == "1"   # también bloquea alertas interno -> interno (requiere espejo del tráfico interno)
+BLOCK_SEC    = int(os.getenv("BLOCK_SEC", "300"))  # timeout de inactividad de la regla en ONOS, en segundos
+
+# Anti-suplantación: antes de bloquear a un host INTERNO se contrasta la MAC origen de la alerta con la MAC que ONOS conoce para esa IP.
+# Un atacante externo que inventa una IP interna llega con su propia MAC (o la del router), distinta de la del dueño real de la IP.
+VERIFICAR_ORIGEN = os.getenv("VERIFICAR_ORIGEN", "1") == "1"      # 0 = comportamiento anterior (se confía en la IP origen)
+# MACs de gateways/routers internos: el tráfico enrutado entre subredes llega al sensor con esa MAC origen, no con la del host, así que
+# no sirve para verificar y se acepta (no se puede distinguir de un origen legítimo).
+MACS_GATEWAY = {m.strip().lower() for m in os.getenv("MACS_GATEWAY", "").split(",") if m.strip()}
+SUPLANTACION_TTL = 30    # segundos que se recuerda una suplantación detectada para no consultar a ONOS en cada alerta de la misma inundación
+
+# Temporización del bucle
+POLL_SEC      = float(os.getenv("POLL_SEC", "0.05"))       # periodo de sondeo del EVE; con 0.5 s la espera media alerta->POST era ~250 ms
+SAVE_EVERY    = 5                                          # segundos entre guardados del estado
+RECONCILE_SEC = float(os.getenv("RECONCILE_SEC", "10"))    # periodo de comparación entre el estado local y los flujos reales de ONOS
+GRACIA_SEC    = 3                                          # un flujo recién creado puede tardar unos segundos en aparecer en ONOS
+BACKOFF_MIN, BACKOFF_MAX = 1, 30                           # espera inicial y máxima (s) al reintentar tras un fallo de ONOS
 
 AUTH   = (ONOS_USER, ONOS_PASS)
-VERIFY = ONOS_CA if ONOS_CA else True
+VERIFY = ONOS_CA if ONOS_CA else True   # parámetro `verify` de requests: ruta a la CA o validación con el almacén del sistema
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("integrador")
 
 
 class Reintentar(Exception):
-    """Caída de red, 5xx, 401/403/408/429: se reintenta con espera creciente."""
+    """Fallo transitorio (caída de red, 5xx, 401/403/408/429): el llamador debe reintentar con espera creciente."""
 
 
 class Descartar(Exception):
-    """Error 4xx permanente: se registra y se salta la alerta."""
+    """Error 4xx permanente: reintentar no ayudaría. Se registra y se omite la alerta."""
 
 
 # ---------------- ONOS ----------------
-_nodo = 0        # índice del último nodo de ONOS que respondió: se sigue usando mientras funcione
+_nodo = 0        # índice del último nodo de ONOS que respondió; se reutiliza mientras siga funcionando
 
 
 def onos(metodo, ruta, **kw):
-    """Llama a la REST de ONOS. Con varios nodos prueba en orden, empezando por el último que funcionó, y pasa al siguiente si uno
-    no responde o devuelve 5xx (un nodo caído no debe frenar un bloqueo). Los 401/403/408/429 y los 4xx se tratan igual en todos."""
+    """Invoca la API REST de ONOS y devuelve la respuesta (`requests.Response`).
+
+    Con varios nodos configurados los prueba en orden, empezando por el último que funcionó, y pasa al siguiente si uno no
+    responde o devuelve 5xx: un nodo caído no debe retrasar un bloqueo.
+
+    Lanza:
+        Reintentar: ningún nodo respondió, o la respuesta fue 401/403/408/429 (fallo transitorio).
+        Descartar:  respuesta 4xx permanente (la petición es inválida).
+    El tratamiento de los códigos 4xx es el mismo sea cual sea el nodo que respondió."""
     global _nodo
     bases = lista_urls(ONOS_URL)
     ultimo, r = None, None
@@ -98,7 +149,7 @@ def onos(metodo, ruta, **kw):
             log.warning("ONOS: se pasa al nodo %s", bases[idx])
         _nodo = idx
         break
-    else:
+    else:                                     # ningún nodo dio una respuesta utilizable
         raise Reintentar(ultimo or "ONOS_URL sin nodos")
     if r.status_code in (401, 403, 408, 429):
         raise Reintentar(f"HTTP {r.status_code}")
@@ -108,7 +159,9 @@ def onos(metodo, ruta, **kw):
 
 
 def ubicar_host(ip):
-    """I10a: GET /hosts y buscar la IP en la respuesta. Devuelve el deviceId del borde, o None si ONOS no conoce al host."""
+    """I10a: localiza el switch de borde de un host consultando GET /hosts de ONOS.
+
+    Devuelve el deviceId del switch, o None si ONOS no conoce al host o aún no conoce su ubicación."""
     if DRY_RUN:
         return "of:0000000000000002"
     for h in onos("GET", "/hosts").json().get("hosts", []):
@@ -118,7 +171,10 @@ def ubicar_host(ip):
 
 
 def dispositivos_para(ip, donde):
-    """Switches donde se instala el DROP: todos los cores para un atacante externo; el borde del host para uno interno."""
+    """Devuelve los switches donde instalar el DROP.
+
+    `donde == "core"`: todos los Core (atacante externo). En otro caso, el switch de borde del host interno; si ONOS no lo
+    conoce, se recurre a los Core."""
     if donde == "core":
         return list(CORE_DEVICES)
     dev = ubicar_host(ip)
@@ -129,7 +185,7 @@ def dispositivos_para(ip, donde):
 
 
 def mac_de(ip):
-    """MAC de un host según ONOS (GET /hosts), o None."""
+    """MAC del host `ip` según ONOS (GET /hosts), en minúsculas, o None si ONOS no la conoce."""
     if DRY_RUN:
         return None
     for h in onos("GET", "/hosts").json().get("hosts", []):
@@ -139,10 +195,10 @@ def mac_de(ip):
 
 
 def mac_del_evento(ev, ip):
-    """MAC del host `ip` según la alerta de Suricata (eve-log con `ethernet: yes`), o None.
+    """MAC del host `ip` según la alerta de Suricata (eve-log con `ethernet: yes`), en minúsculas, o None.
 
-    Es la fuente preferida para I11: no depende de que ONOS haya aprendido al host, y en el espejo solo se reescribe la MAC
-    destino (IDS_MAC), por lo que la MAC origen de la copia es la real."""
+    Es la fuente preferida para I11: no depende de que ONOS haya aprendido al host. En el espejo solo se reescribe la MAC
+    destino (IDS_MAC), de modo que la MAC origen de la copia es la real."""
     ether = ev.get("ether") or {}
     if ev.get("src_ip") == ip:
         mac = ether.get("src_mac")
@@ -153,17 +209,52 @@ def mac_del_evento(ev, ip):
     return mac.lower() if mac else None
 
 
+_suplantadas = {}    # (ip, mac de la alerta) -> instante hasta el que se recuerda la suplantación
+
+
+def origen_suplantado(ev, ip):
+    """True si la MAC origen de la alerta contradice la MAC que ONOS tiene para `ip`: el origen está suplantado.
+
+    Evita que un atacante externo provoque el bloqueo (y la revocación de sesión) de un usuario legítimo inventando su IP.
+    Solo devuelve True con evidencia en contra; si no se puede verificar, devuelve False y el bloqueo sigue como antes. No se
+    puede verificar cuando: la verificación está desactivada, la alerta no trae MAC (eve-log sin `ethernet: yes`), la MAC es la de un
+    gateway (tráfico enrutado) o ONOS no conoce al host.
+
+    No cubre a un atacante que comparte el dominio L2 con la víctima y falsifica también la MAC: eso lo evitan la autenticación
+    802.1X y la lista negra por suplantación de R1. Propaga `Reintentar` si ONOS no responde, para reprocesar la alerta."""
+    if not VERIFICAR_ORIGEN or DRY_RUN:
+        return False
+    mac_alerta = mac_del_evento(ev, ip)
+    if not mac_alerta or mac_alerta in MACS_GATEWAY:
+        return False
+    clave, ahora = (ip, mac_alerta), time.time()
+    if _suplantadas.get(clave, 0) > ahora:
+        return True
+    try:
+        mac_onos = mac_de(ip)
+    except Descartar:                       # ONOS rechazó la consulta: sin dato no se descarta la alerta
+        return False
+    if not mac_onos or mac_onos == mac_alerta:
+        return False
+    _suplantadas[clave] = ahora + SUPLANTACION_TTL
+    return True
+
+
 def revocar_sesion(ip, mac=None):
     """I11: tras bloquear a un host interno, pide al Policy Mapper que revoque su sesión de R1/R2.
 
-    El DROP por IP de R5 solo aísla el tráfico IPv4; sin esto la sesión (flujo 40001) seguiría registrada y el usuario podría
-    volver a pasar en cuanto expire el DROP. Es opcional y no debe impedir el bloqueo: cualquier fallo solo se registra.
-    Devuelve el estado que responde el mapper ("revocada" o "sin_sesion") o None."""
-    mappers = lista_urls(MAPPER_URL)            # primario y réplica: se prueba el siguiente si uno no responde
+    El DROP por IP de R5 solo aísla el tráfico IPv4. Sin esta revocación, la sesión (flujo 40001) seguiría registrada y el
+    usuario podría volver a pasar en cuanto expire el DROP.
+
+    Es una operación opcional y de mejor esfuerzo: nunca impide el bloqueo, y cualquier fallo solo se registra.
+    Se prueban en orden el Policy Mapper primario y su réplica.
+
+    Devuelve el estado informado por el mapper ("revocada" o "sin_sesion"), o None si no se pudo revocar."""
+    mappers = lista_urls(MAPPER_URL)            # primario y réplica: se pasa a la siguiente si una no responde
     if not mappers:
         return None
     try:
-        mac = mac or mac_de(ip)
+        mac = mac or mac_de(ip)                 # la MAC de la alerta tiene prioridad; ONOS es el plan B
     except (Reintentar, Descartar, ValueError) as e:
         log.warning("I11: no se pudo revocar la sesión de %s: %s", ip, e)
         return None
@@ -172,11 +263,14 @@ def revocar_sesion(ip, mac=None):
         return None
     for base in mappers:
         try:
-            r = requests.post(f"{base}/sessions/revoke", json={"mac": mac, "motivo": "R5", "segundos": BLOCK_SEC}, timeout=3)
+            r = requests.post(f"{base}/sessions/revoke", json={"mac": mac, "motivo": "R5", "segundos": BLOCK_SEC},
+                              headers={"X-R5-Token": R5_TOKEN}, timeout=3)
             estado = r.json().get("status") if r.status_code == 200 else None
         except (requests.RequestException, ValueError) as e:
             log.warning("I11: el Policy Mapper %s no respondió para %s: %s", base, ip, e)
             continue
+        if r.status_code == 403:
+            log.warning("I11: el Policy Mapper %s rechazó la clave (403): revisar R5_TOKEN en el sensor y en el mapper", base)
         log.info("I11: sesión de %s (%s) -> %s", ip, mac, estado or f"HTTP {r.status_code}")
         if estado:
             return estado
@@ -184,21 +278,28 @@ def revocar_sesion(ip, mac=None):
 
 
 def regla_drop(device, ip):
+    """Construye el cuerpo JSON de ONOS para una regla que descarta el tráfico IPv4 cuyo origen es `ip` en `device`."""
     return {"flows": [{
         "priority": PRIORITY,
-        "timeout": BLOCK_SEC,
+        "timeout": BLOCK_SEC,                       # expira por inactividad
         "isPermanent": False,
         "deviceId": device,
         "treatment": {"instructions": []},          # sin instrucciones = DROP
         "selector": {"criteria": [
-            {"type": "ETH_TYPE", "ethType": "0x0800"},
+            {"type": "ETH_TYPE", "ethType": "0x0800"},     # solo IPv4
             {"type": "IPV4_SRC", "ip": f"{ip}/32"},
         ]},
     }]}
 
 
 def aplicar(ip, donde):
-    """Instala el DROP. Devuelve (device, flow_id, t_post, t_201); con varios switches, ambos van unidos por comas."""
+    """Instala el DROP para `ip` en los switches que correspondan (según `donde`).
+
+    Devuelve la tupla (device, flow_id, t_post, t_201):
+        device:  deviceId del switch, o varios unidos por coma.
+        flow_id: identificador(es) del flujo en ONOS, unidos por coma (None si ONOS no los devolvió o en simulación).
+        t_post:  instante (epoch) en que se envía el POST.
+        t_201:   instante (epoch) en que ONOS confirma la creación."""
     devices = dispositivos_para(ip, donde)                          # I10a / I10b
     payload = {"flows": [regla_drop(d, ip)["flows"][0] for d in devices]}
     device = ",".join(devices)
@@ -206,8 +307,8 @@ def aplicar(ip, donde):
     if DRY_RUN:
         log.info("[SIMULACIÓN] POST /flows (device %s)\n%s", device, json.dumps(payload, indent=2))
         return device, None, t_post, time.time()
-    # POST /flows recibe la lista {"flows": [...]}; el deviceId va dentro de cada regla. Una sola petición instala el DROP en todos
-    # los switches, así que un atacante externo queda cortado a la vez en los dos cores.
+    # POST /flows recibe la lista {"flows": [...]} y el deviceId va dentro de cada regla. Una sola petición instala el DROP en
+    # todos los switches, de modo que un atacante externo queda cortado a la vez en ambos Core.
     r = onos("POST", "/flows", params={"appId": APP_ID}, json=payload)
     t_201 = time.time()
     try:
@@ -219,8 +320,80 @@ def aplicar(ip, donde):
     return device, (",".join(ids) or None), t_post, t_201
 
 
+# ---------------- Lectura de alertas (I09) ----------------
+def parse_ids_alert(linea):
+    """Interpreta una línea del eve-alerts.json de Suricata. Devuelve un diccionario normalizado, o None si no es una alerta válida.
+
+    Campos devueltos: src_ip, dest_ip, src_port, dest_port, proto, sid, firma, severidad, direction, timestamp, mac_src, mac_dst
+    y `evento` (el objeto JSON original, que usa el resto del integrador). Los puertos, el protocolo, la MAC y la firma son opcionales
+    (None si faltan: ICMP no tiene puertos y `ether` solo aparece con `ethernet: yes`).
+
+    Una alerta es válida si es un objeto JSON con event_type "alert", un bloque `alert` con `severity` entera y direcciones IP de
+    origen y destino que sean IPs válidas (v4 o v6). Cualquier otra cosa (JSON truncado, texto, línea vacía, evento de otro tipo,
+    campos ausentes o de tipo incorrecto) devuelve None sin lanzar excepciones: una línea corrupta no debe detener al integrador."""
+    try:
+        ev = json.loads(linea)
+    except (TypeError, ValueError):                  # TypeError: la línea no es texto (p. ej. None); ValueError incluye JSONDecodeError
+        return None
+    if not isinstance(ev, dict) or ev.get("event_type") != "alert":
+        return None
+    detalle = ev.get("alert")
+    if not isinstance(detalle, dict):
+        return None
+    severidad = detalle.get("severity")
+    if not isinstance(severidad, int) or isinstance(severidad, bool):
+        return None
+    for campo in ("src_ip", "dest_ip"):
+        valor = ev.get(campo)
+        if not isinstance(valor, str):
+            return None
+        try:
+            ipaddress.ip_address(valor)
+        except ValueError:
+            return None
+    ether = ev.get("ether") if isinstance(ev.get("ether"), dict) else {}
+
+    def mac(v):
+        return v.lower() if isinstance(v, str) and v else None
+
+    return {
+        "src_ip": ev["src_ip"], "dest_ip": ev["dest_ip"], "src_port": ev.get("src_port"), "dest_port": ev.get("dest_port"),
+        "proto": ev.get("proto"), "sid": detalle.get("signature_id"), "firma": detalle.get("signature"), "severidad": severidad,
+        "direction": ev.get("direction"), "timestamp": ev.get("timestamp"),
+        "mac_src": mac(ether.get("src_mac")), "mac_dst": mac(ether.get("dest_mac")),
+        "evento": ev,
+    }
+
+
+def consumir_eve(st, espera=BACKOFF_MIN):
+    """Procesa las líneas completas nuevas del EVE a partir de st["offset"] y avanza el offset línea a línea.
+
+    - Una línea a medio escribir (sin salto de línea final) no se procesa ni avanza el offset: se retoma cuando Suricata la termine.
+    - Una línea corrupta o que no es una alerta se salta y el offset avanza.
+    - Si ONOS no está disponible (Reintentar), se detiene SIN avanzar el offset de esa alerta, para reprocesarla después.
+    Devuelve True si hubo que detenerse por un fallo transitorio de ONOS (el llamador espera y reintenta)."""
+    fallo = False
+    with open(EVE_PATH) as f:
+        f.seek(st["offset"])
+        for linea in iter(f.readline, ""):
+            if not linea.endswith("\n"):
+                break                                 # línea a medio escribir: se completa en la próxima vuelta
+            t_lectura = time.time()
+            alerta = parse_ids_alert(linea)
+            if alerta is not None:
+                try:
+                    procesar(alerta["evento"], st, t_lectura)
+                except Reintentar as e:
+                    log.warning("ONOS no disponible (%s); reintento en %ss", e, espera)
+                    fallo = True
+                    break                             # no avanza el offset: la alerta se reprocesará
+            st["offset"] = f.tell()                   # alerta procesada o línea descartada
+    return fallo
+
+
 # ---------------- Decisión ----------------
 def ip4(s):
+    """Convierte `s` en una dirección IPv4, o devuelve None si no es una IP válida o es IPv6 (que se ignora)."""
     try:
         a = ipaddress.ip_address(s)
     except ValueError:
@@ -229,11 +402,18 @@ def ip4(s):
 
 
 def en(a, lista):
+    """True si la dirección `a` pertenece a alguna de las redes de `lista`."""
     return any(a in n for n in lista)
 
 
 def decidir(ev):
-    """(ip, 'core'|'borde') o None."""
+    """Decide a quién bloquear y dónde, a partir de una alerta EVE.
+
+    Devuelve (ip, "core" | "borde"), o None si no hay que actuar. Según el sentido del tráfico:
+        externo -> interno : se bloquea al origen en los Core ("core").
+        interno -> externo : se bloquea al host interno (posible C2) en su borde ("borde").
+        interno -> interno : se bloquea al origen en su borde, si INTRANET está activo ("borde").
+    Las IPs de la lista blanca nunca se bloquean y el tráfico IPv6 se ignora."""
     src, dst = ip4(ev.get("src_ip", "")), ip4(ev.get("dest_ip", ""))
     if ev.get("direction") == "to_client":   # la firma disparó sobre la respuesta: el atacante es el destino
         src, dst = dst, src
@@ -255,13 +435,26 @@ def decidir(ev):
 
 
 def procesar(ev, st, t_lectura=None):
-    if ev.get("event_type") != "alert" or ev.get("alert", {}).get("severity", 99) > MAX_SEVERITY:
+    """Procesa una alerta EVE: si procede, instala el bloqueo y lo anota en el estado `st`.
+
+    Se ignora lo que no sea una alerta, supere MAX_SEVERITY, no requiera acción o corresponda a una IP ya bloqueada.
+    `t_lectura` es el instante en que se leyó la línea; se usa para medir la latencia lectura -> 201.
+    Propaga `Reintentar` si ONOS no está disponible, para que el bucle principal no avance el offset."""
+    detalle = ev.get("alert")
+    if ev.get("event_type") != "alert" or not isinstance(detalle, dict):
+        return
+    severidad = detalle.get("severity", 99)          # sin severidad se trata como la más baja (no se bloquea)
+    if not isinstance(severidad, int) or severidad > MAX_SEVERITY:
         return
     d = decidir(ev)
     if not d:
         return
     ip, donde = d
-    if ip in st["bloqueadas"]:
+    if ip in st["bloqueadas"]:                # idempotencia: no se reenvía una IP ya bloqueada
+        return
+    if donde == "borde" and origen_suplantado(ev, ip):     # no se castiga al dueño legítimo de una IP inventada
+        log.warning("SUPLANTACIÓN? %s: la alerta trae MAC %s y ONOS conoce otra; no se bloquea ni se revoca su sesión (%s)",
+                    ip, mac_del_evento(ev, ip), ev["alert"].get("signature"))
         return
     try:
         device, flow_id, t_post, t_201 = aplicar(ip, donde)
@@ -270,7 +463,7 @@ def procesar(ev, st, t_lectura=None):
         return
     t_lectura = t_lectura or t_post
     st["bloqueadas"][ip] = {
-        "vence": t_201 + BLOCK_SEC,   # estimado: el timeout real es de inactividad
+        "vence": t_201 + BLOCK_SEC,   # estimación: el timeout real de ONOS es de inactividad
         "device": device, "flow_id": flow_id, "donde": donde, "sensor": SENSOR,
         "sid": ev["alert"].get("signature_id"), "firma": ev["alert"].get("signature"),
         "t_alerta": ev.get("timestamp"),   # hora del paquete en el sensor (reloj de Suricata)
@@ -284,7 +477,9 @@ def procesar(ev, st, t_lectura=None):
 
 def reconciliar(st):
     """Olvida las IPs cuyo flujo ya no existe en ONOS (expiró por inactividad o se borró a mano con r5ctl).
-    Sin esto, una IP liberada seguiría en la lista del integrador y sus alertas nuevas se ignorarían."""
+
+    Sin esto, una IP liberada seguiría en la lista del integrador y sus alertas nuevas se ignorarían. Se respeta un periodo de
+    gracia (GRACIA_SEC) para no descartar flujos recién creados que ONOS aún no lista."""
     if DRY_RUN or not st["bloqueadas"]:
         return
     flujos = onos("GET", f"/flows/application/{APP_ID}").json().get("flows", [])
@@ -298,6 +493,10 @@ def reconciliar(st):
 
 # ---------------- Estado ----------------
 def cargar_estado():
+    """Carga el estado persistido, o uno nuevo si no existe o está corrupto.
+
+    Estructura: {"bloqueadas": {ip: datos}, "inode": int|None, "offset": int}. `inode` y `offset` indican hasta dónde se leyó
+    el EVE. Migra los formatos antiguos de "bloqueadas"."""
     try:
         with open(STATE_PATH) as f:
             st = json.load(f)
@@ -314,6 +513,7 @@ def cargar_estado():
 
 
 def guardar_estado(st):
+    """Guarda el estado de forma atómica (archivo temporal + rename), para que una interrupción no lo deje a medias."""
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
     tmp = STATE_PATH + ".tmp"
     with open(tmp, "w") as f:
@@ -323,9 +523,14 @@ def guardar_estado(st):
 
 # ---------------- Bucle principal ----------------
 def main():
+    """Bucle principal: sigue el EVE de Suricata, procesa cada alerta nueva y mantiene el estado.
+
+    En cada vuelta: (1) reconcilia con ONOS cada RECONCILE_SEC, (2) elimina bloqueos vencidos, (3) lee las líneas nuevas del EVE
+    y (4) guarda el estado cada SAVE_EVERY segundos. Si ONOS no está disponible, no avanza el offset y reintenta con espera
+    exponencial (BACKOFF_MIN..BACKOFF_MAX), de modo que no se pierde ninguna alerta."""
     if not DRY_RUN and not all((ONOS_URL, ONOS_USER, ONOS_PASS)):
         raise SystemExit("Faltan ONOS_URL, ONOS_USER u ONOS_PASS")
-    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit))
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit))   # SIGTERM -> salida limpia (se guarda el estado)
 
     st = cargar_estado()
     log.info("Integrador %s: %d nodo(s) ONOS, cores %s, Policy Mapper %s", SENSOR, len(lista_urls(ONOS_URL)), ",".join(CORE_DEVICES),
@@ -341,38 +546,20 @@ def main():
                     reconciliar(st)
                 except (Reintentar, Descartar) as e:
                     log.warning("No se pudo reconciliar con ONOS: %s", e)
-            st["bloqueadas"] = {k: v for k, v in st["bloqueadas"].items() if v["vence"] > ahora}
+            st["bloqueadas"] = {k: v for k, v in st["bloqueadas"].items() if v["vence"] > ahora}   # purga bloqueos vencidos
             try:
                 s = os.stat(EVE_PATH)
-            except FileNotFoundError:
+            except FileNotFoundError:                             # Suricata aún no creó el archivo
                 time.sleep(POLL_SEC)
                 continue
-            if st["inode"] != s.st_ino or s.st_size < st["offset"]:   # rotación o truncamiento
+            if st["inode"] != s.st_ino or s.st_size < st["offset"]:   # rotación o truncamiento: se relee desde el inicio
                 st["inode"], st["offset"] = s.st_ino, 0
 
-            fallo = False
-            with open(EVE_PATH) as f:
-                f.seek(st["offset"])
-                for linea in iter(f.readline, ""):
-                    if not linea.endswith("\n"):
-                        break                                 # línea a medio escribir
-                    t_lectura = time.time()
-                    try:
-                        ev = json.loads(linea)
-                    except json.JSONDecodeError:
-                        ev = None
-                    if ev is not None:
-                        try:
-                            procesar(ev, st, t_lectura)
-                        except Reintentar as e:
-                            log.warning("ONOS no disponible (%s); reintento en %ss", e, espera)
-                            fallo = True
-                            break                             # no avanza el offset
-                    st["offset"] = f.tell()
+            fallo = consumir_eve(st, espera)
 
             if fallo:
                 time.sleep(espera)
-                espera = min(espera * 2, BACKOFF_MAX)
+                espera = min(espera * 2, BACKOFF_MAX)         # espera exponencial acotada
             else:
                 espera = BACKOFF_MIN
                 time.sleep(POLL_SEC)

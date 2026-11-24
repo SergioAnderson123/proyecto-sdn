@@ -64,35 +64,82 @@ def estado():
 
 
 # =====================================================================================================
-# R5-01 (3.1.x) Lectura de la alerta del IDS: válida e inválida.  Criterio: detección del ataque.
+# R5-01 (3.1.x) parse_ids_alert(line): lectura de la alerta del IDS, válida e inválida.  Criterio: detección del ataque.
 # =====================================================================================================
-def test_R5_01_3_1_1_alerta_valida_se_procesa_y_guarda_sus_datos(onos):
-    st = estado()
-    integ.procesar(alerta("203.0.113.103", "10.0.0.10", sid=9000010, firma="LOCAL SYN flood"), st)
-    v = st["bloqueadas"]["203.0.113.103"]
-    assert (v["sid"], v["firma"]) == (9000010, "LOCAL SYN flood")
-    assert v["t_alerta"] == "2026-11-23T15:22:00.000000+0000"
+LINEA_VALIDA = json.dumps({
+    "timestamp": "2026-11-23T15:22:00.000000+0000", "event_type": "alert", "src_ip": "203.0.113.103", "src_port": 51234,
+    "dest_ip": "10.0.0.10", "dest_port": 80, "proto": "TCP", "direction": "to_server",
+    "ether": {"src_mac": "AA:BB:CC:00:00:01", "dest_mac": "AA:BB:CC:00:00:02"},
+    "alert": {"severity": 2, "signature_id": 9000002, "signature": "LOCAL Port scan SYN"}})
+
+
+def test_R5_01_3_1_1_alerta_valida_devuelve_direcciones_puertos_protocolo_firma_y_severidad():
+    a = integ.parse_ids_alert(LINEA_VALIDA)
+    assert (a["src_ip"], a["src_port"], a["dest_ip"], a["dest_port"], a["proto"]) == ("203.0.113.103", 51234, "10.0.0.10", 80, "TCP")
+    assert (a["sid"], a["firma"], a["severidad"]) == (9000002, "LOCAL Port scan SYN", 2)
+    assert a["timestamp"] == "2026-11-23T15:22:00.000000+0000" and a["direction"] == "to_server"
+    assert (a["mac_src"], a["mac_dst"]) == ("aa:bb:cc:00:00:01", "aa:bb:cc:00:00:02")        # en minúsculas
+    assert a["evento"]["alert"]["signature_id"] == 9000002                                     # el evento original sigue disponible
+
+
+def test_R5_01_3_1_1b_alerta_sin_puertos_ni_mac_es_valida(onos):
+    # ICMP no tiene puertos y el eve-log puede no traer `ether`: los campos opcionales quedan en None y la alerta sigue siendo válida.
+    linea = json.dumps({"event_type": "alert", "src_ip": "203.0.113.5", "dest_ip": "10.0.0.10", "proto": "ICMP",
+                        "alert": {"severity": 1, "signature_id": 9000021, "signature": "LOCAL R4 Inundacion ICMP interna"}})
+    a = integ.parse_ids_alert(linea)
+    assert a["src_port"] is None and a["dest_port"] is None and a["mac_src"] is None and a["mac_dst"] is None
 
 
 @pytest.mark.parametrize("ev", [
-    {},                                                                   # vacía
-    {"event_type": "alert"},                                              # sin bloque alert (severidad ausente)
-    {"event_type": "alert", "alert": {"severity": 1}},                    # sin src_ip ni dest_ip
-    {"event_type": "alert", "src_ip": "x", "dest_ip": "y", "alert": {"severity": 1}},   # IP inválidas
-    {"event_type": "alert", "src_ip": "203.0.113.5", "alert": {"severity": 1}},         # sin destino
-    {"event_type": "stats", "src_ip": "203.0.113.5", "dest_ip": "10.0.0.10"},           # no es alerta
+    {"event_type": "alert"},                                                                  # sin bloque alert
+    {"event_type": "alert", "alert": {"severity": 1}},                                        # sin src_ip ni dest_ip
+    {"event_type": "alert", "src_ip": "x", "dest_ip": "y", "alert": {"severity": 1}},         # IP inválidas
+    {"event_type": "alert", "src_ip": "203.0.113.5", "alert": {"severity": 1}},               # sin destino
+    {"event_type": "alert", "src_ip": "203.0.113.5", "dest_ip": "10.0.0.10"},                 # sin severidad
+    {"event_type": "alert", "src_ip": "203.0.113.5", "dest_ip": "10.0.0.10", "alert": {}},    # severidad ausente
+    {"event_type": "alert", "src_ip": "203.0.113.5", "dest_ip": "10.0.0.10", "alert": {"severity": "alta"}},   # severidad no numérica
+    {"event_type": "alert", "src_ip": "203.0.113.5", "dest_ip": "10.0.0.10", "alert": "texto"},               # alert no es objeto
 ])
 def test_R5_01_3_1_2_alerta_incompleta_se_descarta_sin_romper(onos, ev):
+    assert integ.parse_ids_alert(json.dumps(ev)) is None             # no lanza excepción
     st = estado()
-    integ.procesar(ev, st)                       # no debe lanzar excepción
+    integ.procesar(ev, st)                                           # y aunque llegara a procesar(), tampoco bloquea
     assert st["bloqueadas"] == {} and onos.posts() == []
 
 
-def test_R5_01_3_1_3_linea_json_corrupta_es_detectable():
-    # main() descarta estas líneas con `except json.JSONDecodeError`; aquí se verifica que json.loads las rechaza.
-    for linea in ('{"event_type": "alert", ', "no es json", ""):
-        with pytest.raises(json.JSONDecodeError):
-            json.loads(linea)
+@pytest.mark.parametrize("linea", ['{"event_type": "alert", ', "no es json", "", "   ", "[]", "5", "null", '"texto"', None])
+def test_R5_01_3_1_3_linea_corrupta_o_que_no_es_un_objeto_se_descarta(linea):
+    assert integ.parse_ids_alert(linea) is None
+
+
+@pytest.mark.parametrize("tipo", ["stats", "flow", "dns", "anomaly", ""])
+def test_R5_01_3_1_4_evento_que_no_es_alerta_se_descarta(tipo):
+    linea = json.dumps({"event_type": tipo, "src_ip": "203.0.113.5", "dest_ip": "10.0.0.10", "alert": {"severity": 1}})
+    assert integ.parse_ids_alert(linea) is None
+
+
+def test_R5_01_3_1_5_linea_a_medio_escribir_no_se_procesa_ni_avanza_el_offset(onos, tmp_path, monkeypatch):
+    eve = tmp_path / "eve-alerts.json"
+    monkeypatch.setattr(integ, "EVE_PATH", str(eve))
+    completa = LINEA_VALIDA + "\n"
+    mitad = json.dumps({"event_type": "alert", "src_ip": "203.0.113.9", "dest_ip": "10.0.0.10",
+                        "alert": {"severity": 1, "signature_id": 9000003, "signature": "LOCAL SYN flood"}})
+    eve.write_text(completa + mitad[:30], encoding="utf-8", newline="")          # Suricata aún está escribiendo la 2.ª línea
+    st = estado()
+    assert integ.consumir_eve(st) is False
+    assert list(st["bloqueadas"]) == ["203.0.113.103"] and st["offset"] == len(completa.encode())   # solo la completa
+    eve.write_text(completa + mitad + "\n", encoding="utf-8", newline="")        # Suricata termina de escribirla
+    assert integ.consumir_eve(st) is False
+    assert sorted(st["bloqueadas"]) == ["203.0.113.103", "203.0.113.9"]
+
+
+def test_R5_01_3_1_6_linea_corrupta_en_el_archivo_se_salta_y_las_siguientes_se_procesan(onos, tmp_path, monkeypatch):
+    eve = tmp_path / "eve-alerts.json"
+    monkeypatch.setattr(integ, "EVE_PATH", str(eve))
+    eve.write_text("basura que no es json\n" + LINEA_VALIDA + "\n", encoding="utf-8", newline="")
+    st = estado()
+    integ.consumir_eve(st)
+    assert list(st["bloqueadas"]) == ["203.0.113.103"] and st["offset"] == eve.stat().st_size
 
 
 # =====================================================================================================

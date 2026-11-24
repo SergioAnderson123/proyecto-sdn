@@ -47,6 +47,12 @@ class OnosFalso:
         return Resp()
 
 
+@pytest.fixture(autouse=True)
+def sin_suplantaciones_recordadas():
+    integ._suplantadas.clear()          # la caché de suplantaciones es global del módulo: cada prueba parte limpia
+    yield
+
+
 @pytest.fixture
 def onos(monkeypatch):
     falso = OnosFalso()
@@ -351,3 +357,102 @@ def test_i11_usa_la_mac_de_la_alerta_sin_consultar_a_onos(onos, mapper):
     integ.procesar(ev, st)
     assert st["bloqueadas"]["10.0.0.21"]["sesion"] == "revocada"
     assert mapper.llamadas[0][1]["mac"] == "00:00:00:00:00:ab"
+
+
+# ---------- Anti-suplantación: la MAC de la alerta debe coincidir con la que ONOS conoce para esa IP ----------
+MAC_REAL = "00:00:00:00:00:AB"           # la de HOST_INTERNO en ONOS
+MAC_ATACANTE = "de:ad:be:ef:00:01"
+
+
+def test_suplantacion_no_bloquea_ni_revoca_al_dueno_legitimo(onos, mapper):
+    onos.hosts = HOST_INTERNO
+    st = estado()
+    integ.procesar(con_ether(alerta("10.0.0.21", "10.0.1.50"), MAC_ATACANTE, "00:00:00:00:00:cd"), st)
+    assert st["bloqueadas"] == {}
+    assert [c for c in onos.llamadas if c[0] == "POST"] == [] and mapper.llamadas == []
+
+
+def test_origen_legitimo_con_su_misma_mac_se_bloquea(onos, mapper):
+    onos.hosts = HOST_INTERNO
+    st = estado()
+    integ.procesar(con_ether(alerta("10.0.0.21", "10.0.1.50"), MAC_REAL, "00:00:00:00:00:cd"), st)
+    assert "10.0.0.21" in st["bloqueadas"] and st["bloqueadas"]["10.0.0.21"]["sesion"] == "revocada"
+
+
+def test_sin_mac_en_la_alerta_no_se_puede_verificar_y_se_bloquea(onos):
+    onos.hosts = HOST_INTERNO
+    st = estado()
+    integ.procesar(alerta("10.0.0.21", "10.0.1.50"), st)           # eve-log sin ethernet
+    assert "10.0.0.21" in st["bloqueadas"]
+
+
+def test_host_desconocido_para_onos_no_se_puede_verificar_y_se_bloquea(onos):
+    st = estado()
+    integ.procesar(con_ether(alerta("10.0.0.21", "10.0.1.50"), MAC_ATACANTE, "00:00:00:00:00:cd"), st)
+    assert "10.0.0.21" in st["bloqueadas"]
+
+
+def test_mac_de_gateway_se_acepta_porque_es_trafico_enrutado(onos, monkeypatch):
+    monkeypatch.setattr(integ, "MACS_GATEWAY", {MAC_ATACANTE})
+    onos.hosts = HOST_INTERNO
+    st = estado()
+    integ.procesar(con_ether(alerta("10.0.0.21", "10.0.1.50"), MAC_ATACANTE.upper(), "00:00:00:00:00:cd"), st)
+    assert "10.0.0.21" in st["bloqueadas"]
+
+
+def test_verificacion_desactivable(onos, monkeypatch):
+    monkeypatch.setattr(integ, "VERIFICAR_ORIGEN", False)
+    onos.hosts = HOST_INTERNO
+    st = estado()
+    integ.procesar(con_ether(alerta("10.0.0.21", "10.0.1.50"), MAC_ATACANTE, "00:00:00:00:00:cd"), st)
+    assert "10.0.0.21" in st["bloqueadas"]
+
+
+def test_inundacion_suplantada_consulta_a_onos_una_sola_vez(onos):
+    onos.hosts = HOST_INTERNO
+    ev = con_ether(alerta("10.0.0.21", "10.0.1.50"), "de:ad:be:ef:00:02", "00:00:00:00:00:cd")
+    st = estado()
+    for _ in range(100):
+        integ.procesar(ev, st)
+    assert len([c for c in onos.llamadas if c[1] == "/hosts"]) == 1 and st["bloqueadas"] == {}
+
+
+def test_atacante_externo_no_pasa_por_la_verificacion(onos):
+    st = estado()
+    integ.procesar(con_ether(alerta("10.0.1.10", "10.0.0.50"), MAC_ATACANTE, "00:00:00:00:00:cd"), st)
+    assert "10.0.1.10" in st["bloqueadas"] and [c for c in onos.llamadas if c[1] == "/hosts"] == []
+
+
+def test_onos_caido_al_verificar_se_reintenta_y_no_se_pierde_la_alerta(onos):
+    onos.falla = integ.Reintentar("ONOS caído")
+    with pytest.raises(integ.Reintentar):
+        integ.procesar(con_ether(alerta("10.0.0.21", "10.0.1.50"), MAC_ATACANTE, "00:00:00:00:00:cd"), estado())
+
+
+# ---------- I11: autenticación con el Policy Mapper (X-R5-Token) ----------
+class PostConCabeceras(PostFalso):
+    def __call__(self, url, json=None, timeout=None, headers=None, **kw):
+        self.cabeceras = headers
+        return super().__call__(url, json=json, timeout=timeout, **kw)
+
+
+def test_i11_envia_la_clave_de_r5_en_la_cabecera(onos, monkeypatch):
+    falso = PostConCabeceras()
+    monkeypatch.setattr(integ, "MAPPER_URL", "http://mapper.test:5000")
+    monkeypatch.setattr(integ, "R5_TOKEN", "clave-r5")
+    monkeypatch.setattr(integ.requests, "post", falso)
+    onos.hosts = HOST_INTERNO
+    assert integ.revocar_sesion("10.0.0.21") == "revocada"
+    assert falso.cabeceras == {"X-R5-Token": "clave-r5"}
+
+
+def test_i11_clave_rechazada_no_rompe_el_bloqueo_y_avisa(onos, monkeypatch, caplog):
+    falso = PostConCabeceras(estado=None, codigo=403)
+    monkeypatch.setattr(integ, "MAPPER_URL", "http://mapper.test:5000")
+    monkeypatch.setattr(integ.requests, "post", falso)
+    onos.hosts = HOST_INTERNO
+    st = estado()
+    with caplog.at_level("WARNING"):
+        integ.procesar(alerta("10.0.0.21", "10.0.1.50"), st)
+    assert "10.0.0.21" in st["bloqueadas"] and st["bloqueadas"]["10.0.0.21"]["sesion"] is None
+    assert "R5_TOKEN" in caplog.text
