@@ -335,6 +335,13 @@ def parse_ids_alert(linea):
         ev = json.loads(linea)
     except (TypeError, ValueError):                  # TypeError: la línea no es texto (p. ej. None); ValueError incluye JSONDecodeError
         return None
+    return normalizar_alerta(ev)
+
+
+def normalizar_alerta(ev):
+    """Valida un evento EVE ya decodificado (diccionario) y devuelve la alerta normalizada de parse_ids_alert, o None si no es válida.
+
+    Es la mitad de parse_ids_alert que no depende del texto de la línea: procesar() la usa directamente sobre el evento que recibe."""
     if not isinstance(ev, dict) or ev.get("event_type") != "alert":
         return None
     detalle = ev.get("alert")
@@ -392,6 +399,23 @@ def consumir_eve(st, espera=BACKOFF_MIN):
 
 
 # ---------------- Decisión ----------------
+ACCION_BLOQUEAR, ACCION_REGISTRAR, ACCION_IGNORAR = "bloquear", "registrar", "ignorar"
+
+
+def classify_alert(alerta):
+    """Decide qué hacer con una alerta según su severidad (la de normalizar_alerta / parse_ids_alert). Devuelve:
+
+        "bloquear"  : severidad entre 1 y MAX_SEVERITY (1 = la más grave). Se busca a quién bloquear y dónde (decidir).
+        "registrar" : severidad mayor que MAX_SEVERITY (media-baja o ruido, p. ej. LLDP severidad 3): no se bloquea nada.
+        "ignorar"   : severidad menor que 1 (0 o negativa). Suricata no usa esos valores, así que se trata como dato inválido y no
+                      como "la más grave": un valor corrupto no debe provocar un bloqueo.
+    El límite MAX_SEVERITY es configurable (variable de entorno del mismo nombre, 2 por defecto)."""
+    severidad = alerta["severidad"]
+    if severidad < 1:
+        return ACCION_IGNORAR
+    return ACCION_BLOQUEAR if severidad <= MAX_SEVERITY else ACCION_REGISTRAR
+
+
 def ip4(s):
     """Convierte `s` en una dirección IPv4, o devuelve None si no es una IP válida o es IPv6 (que se ignora)."""
     try:
@@ -440,11 +464,12 @@ def procesar(ev, st, t_lectura=None):
     Se ignora lo que no sea una alerta, supere MAX_SEVERITY, no requiera acción o corresponda a una IP ya bloqueada.
     `t_lectura` es el instante en que se leyó la línea; se usa para medir la latencia lectura -> 201.
     Propaga `Reintentar` si ONOS no está disponible, para que el bucle principal no avance el offset."""
-    detalle = ev.get("alert")
-    if ev.get("event_type") != "alert" or not isinstance(detalle, dict):
+    alerta = normalizar_alerta(ev)
+    if alerta is None:                                # no es una alerta válida (otro tipo de evento, campos ausentes o mal tipados)
         return
-    severidad = detalle.get("severity", 99)          # sin severidad se trata como la más baja (no se bloquea)
-    if not isinstance(severidad, int) or severidad > MAX_SEVERITY:
+    accion = classify_alert(alerta)
+    if accion != ACCION_BLOQUEAR:
+        log.debug("alerta %s (severidad %s) no se bloquea: acción %s", alerta["sid"], alerta["severidad"], accion)
         return
     d = decidir(ev)
     if not d:

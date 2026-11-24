@@ -20,7 +20,7 @@ R2-03) F=R2/policy/tests/test_lab7_r2.py; T="R2-03  Traduccion de la politica a 
 R5-0[1-6]) F=R5/tests/test_lab7_r5.py; E=""; C="Seguridad perimetral (R5)"; T="$COD (3.${N#0}.x)"
    case "$COD" in
    R5-01) T="R5-01  parse_ids_alert: lectura de la alerta del IDS (3.1.x)"; E="Alerta valida -> devuelve IP, puertos, protocolo, firma y severidad. Incompleta, corrupta o que no es alerta -> None sin excepcion. Linea a medio escribir -> no avanza el offset." ;;
-   R5-02) T="R5-02  Decision segun severidad y direccion (3.2.x)"; E="Severidad 1-2 bloquea, 3-4 no. Externo->interno bloquea en cores; interno->externo en el borde." ;;
+   R5-02) T="R5-02  classify_alert y decidir: severidad y direccion (3.2.x)"; E="classify_alert: severidad 1-2 -> bloquear, 3 o mas -> registrar, menor que 1 -> ignorar. decidir: externo->interno bloquea en los cores; interno->externo en el borde." ;;
    R5-03) T="R5-03  Lista blanca (3.3.x)"; E="Una IP de la lista blanca nunca se bloquea; su vecina no listada si." ;;
    R5-04) T="R5-04  Regla DROP del perimetro (3.4.x)"; E="Prioridad 42000, timeout 300 s, solo ipv4_src de esa IP, en todos los cores; incidente con tiempos y flow_id." ;;
    R5-05) T="R5-05  Sin duplicar y liberacion (3.5.x)"; E="Misma IP 3 veces -> 1 regla. Flujo borrado -> se olvida la IP. Reincidente -> se vuelve a bloquear." ;;

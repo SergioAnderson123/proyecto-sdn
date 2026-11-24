@@ -143,13 +143,36 @@ def test_R5_01_3_1_6_linea_corrupta_en_el_archivo_se_salta_y_las_siguientes_se_p
 
 
 # =====================================================================================================
-# R5-02 (3.2.x) Decisión según severidad y dirección del tráfico.  Criterio: mitigación.
+# R5-02 (3.2.x) classify_alert(alerta) y decidir(evento): decisión según severidad y dirección del tráfico.  Criterio: mitigación.
 # =====================================================================================================
+def alerta_norm(sev):
+    """La alerta normalizada (la que devuelve parse_ids_alert) con la severidad indicada."""
+    return integ.normalizar_alerta(alerta("203.0.113.7", "10.0.0.10", sev=sev))
+
+
+@pytest.mark.parametrize("sev,accion", [(1, "bloquear"), (2, "bloquear"), (3, "registrar"), (4, "registrar"), (99, "registrar")])
+def test_R5_02_3_2_1_classify_alert_segun_la_severidad(sev, accion):
+    assert integ.classify_alert(alerta_norm(sev)) == accion          # límite: MAX_SEVERITY = 2
+
+
+@pytest.mark.parametrize("maximo,sev,accion", [(1, 1, "bloquear"), (1, 2, "registrar"), (3, 3, "bloquear"), (3, 4, "registrar")])
+def test_R5_02_3_2_1b_el_limite_es_configurable(monkeypatch, maximo, sev, accion):
+    monkeypatch.setattr(integ, "MAX_SEVERITY", maximo)
+    assert integ.classify_alert(alerta_norm(sev)) == accion
+
+
+@pytest.mark.parametrize("sev", [0, -1, -50])
+def test_R5_02_3_2_2_severidad_fuera_de_rango_se_ignora(sev):
+    # Suricata usa prioridades de 1 en adelante: 0 o negativo no es una severidad real y NO debe interpretarse como "la más grave".
+    assert integ.classify_alert(alerta_norm(sev)) == "ignorar"
+
+
 @pytest.mark.parametrize("sev,bloquea", [(1, True), (2, True), (3, False), (4, False)])
-def test_R5_02_3_2_1_severidad_en_el_limite(onos, sev, bloquea):
+def test_R5_02_3_2_3_procesar_solo_bloquea_si_classify_alert_lo_pide(onos, sev, bloquea):
     st = estado()
     integ.procesar(alerta("203.0.113.7", "10.0.0.10", sev=sev), st)
-    assert ("203.0.113.7" in st["bloqueadas"]) is bloquea      # límite: MAX_SEVERITY = 2
+    assert ("203.0.113.7" in st["bloqueadas"]) is bloquea
+    assert len(onos.posts()) == (1 if bloquea else 0)
 
 
 @pytest.mark.parametrize("ev,esperado", [
@@ -159,11 +182,11 @@ def test_R5_02_3_2_1_severidad_en_el_limite(onos, sev, bloquea):
     (alerta("10.0.0.50", "203.0.113.7", direction="to_client"), ("203.0.113.7", "core")),   # firma sobre la respuesta
     (alerta("198.51.100.1", "203.0.113.7"), None),                                     # externo <-> externo
 ])
-def test_R5_02_3_2_2_decide_a_quien_y_donde_bloquear(ev, esperado):
+def test_R5_02_3_2_4_decide_a_quien_y_donde_bloquear(ev, esperado):
     assert integ.decidir(ev) == esperado
 
 
-def test_R5_02_3_2_3_externo_se_bloquea_en_el_core_e_interno_en_su_borde(onos):
+def test_R5_02_3_2_5_externo_se_bloquea_en_el_core_e_interno_en_su_borde(onos):
     onos.hosts = [{"ipAddresses": ["10.0.0.21"], "locations": [{"elementId": "of:00000000000000a1"}]}]
     st = estado()
     integ.procesar(alerta("203.0.113.7", "10.0.0.50"), st)

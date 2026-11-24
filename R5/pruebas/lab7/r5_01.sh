@@ -4,41 +4,16 @@
 # No necesita ONOS ni Suricata. Uso, desde cualquier carpeta:   bash R5/pruebas/lab7/r5_01.sh
 # Guarda la salida en ~/r5_01_<nodo>_<fecha>.txt (evidencia); SIN_ARCHIVO=1 para no guardarla. PY=python para otro interprete.
 # Pruebas equivalentes con pytest:  python3 -m pytest R5/tests/test_lab7_r5.py -k R5_01_ -v
-cd "$(dirname "${BASH_SOURCE[0]}")/../../.." || exit 1          # raiz del repositorio
-PY="${PY:-python3}"
-L="R5/pruebas/lab7/llamar.py"
-SEP="----------------------------------------------------------------------------------------------------"
-CASOS=0; BIEN=0; MAL=""; FALLAS=0; SALIDA=""
-
-caso()  { COD="$1"; FALLAS=0; echo "$SEP"; echo "[$1] $2"; }
-dato()  { printf '  %-10s: %s\n' "$1" "$2"; }
-correr() {                                        # correr "texto del comando" cmd args...   (muestra el comando y guarda la salida en $SALIDA)
-  local texto="$1"; shift
-  dato "Comando" "\$ $texto"
-  SALIDA=$("$@" 2>&1)
-  echo "  Obtenido  :"; sed 's/^/      /' <<<"$SALIDA"
-}
-verif() { local d="$1"; shift; if "$@"; then echo "    [OK] $d"; else echo "    [FALLA] $d"; FALLAS=1; fi; }
-contiene() { grep -qF -- "$1" <<<"$SALIDA"; }
-es()       { [ "$SALIDA" = "$1" ]; }
-no_es()    { [ "$SALIDA" != "$1" ]; }
-contiene_todo() { local p; for p in "$@"; do contiene "$p" || return 1; done; }
-en_s1()    { grep -qxF -- "$1" <<<"$S1"; }                       # linea exacta dentro de la salida de la 1.a pasada
-fin() {
-  CASOS=$((CASOS+1))
-  if [ "$FALLAS" -eq 0 ]; then BIEN=$((BIEN+1)); echo "  RESULTADO $COD: PASS"; else MAL="$MAL $COD"; echo "  RESULTADO $COD: FAIL"; fi
-}
+source "$(dirname "${BASH_SOURCE[0]}")/comun.sh"                    # funciones comunes; ademas entra a la raiz del repositorio
+en_s1()    { grep -qxF -- "$1" <<<"$S1"; }                       # linea exacta dentro de la salida de la 1.a pasada (caso 3.1.5)
 
 LINEA_VALIDA='{"timestamp": "2026-11-23T15:22:00.000000+0000", "event_type": "alert", "src_ip": "203.0.113.103", "src_port": 51234, "dest_ip": "10.0.0.10", "dest_port": 80, "proto": "TCP", "direction": "to_server", "ether": {"src_mac": "AA:BB:CC:00:00:01", "dest_mac": "AA:BB:CC:00:00:02"}, "alert": {"severity": 2, "signature_id": 9000002, "signature": "LOCAL Port scan SYN"}}'
 LINEA_FLOOD='{"timestamp": "2026-11-24T15:22:00.000000+0000", "event_type": "alert", "src_ip": "203.0.113.9", "dest_ip": "10.0.0.10", "proto": "TCP", "alert": {"severity": 1, "signature_id": 9000003, "signature": "LOCAL SYN flood"}}'
 
 main() {
-  echo "################################################################################"
-  echo "  R5-01  parse_ids_alert(linea): lectura de la alerta del IDS (3.1.x)"
-  echo "  Nodo: $(hostname)   Fecha: $(date '+%F %T')   Commit: $(git rev-parse --short HEAD 2>/dev/null)"
-  echo "  Criterio que valida: deteccion del ataque. El integrador solo puede reaccionar a lo que entiende del IDS."
-  echo "  Esperado: alerta valida -> IP, puertos, protocolo, firma y severidad. Incompleta, corrupta o que no es alerta -> None sin excepcion."
-  echo "################################################################################"
+  cabecera "R5-01  parse_ids_alert(linea): lectura de la alerta del IDS (3.1.x)" \
+    "deteccion del ataque. El integrador solo puede reaccionar a lo que entiende del IDS." \
+    "alerta valida -> IP, puertos, protocolo, firma y severidad. Incompleta, corrupta o que no es alerta -> None sin excepcion."
 
   # ---- 3.1.1 alerta valida ----
   caso "3.1.1" "Alerta valida: devuelve direcciones, puertos, protocolo, firma y severidad"
@@ -168,17 +143,7 @@ main() {
   fin
   rm -f "$EVE" "$EST"
 
-  echo "===================================================================================================="
-  echo "RESUMEN R5-01: $BIEN de $CASOS casos PASS${MAL:+; FALLAN:$MAL}"
-  [ "$BIEN" -eq "$CASOS" ]
+  resumen R5-01
 }
 
-if [ -n "$SIN_ARCHIVO" ]; then
-  main 2>&1
-  exit $?
-fi
-OUT="${OUT:-$HOME/r5_01_$(hostname)_$(date +%Y%m%d_%H%M%S).txt}"
-main 2>&1 | tee "$OUT"
-RC=${PIPESTATUS[0]}
-echo "Evidencia: $OUT"
-exit $RC
+ejecutar R5-01
