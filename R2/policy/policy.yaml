@@ -8,6 +8,10 @@ roles:
   alumno:  {matriz: student,   tabla: 20}
   soporte: {matriz: administrator, tabla: 40}   # soporte TI (grupo LDAP soporteTI); la tabla 30 queda reservada a IoT/MAB
   invitado: {matriz: guest, tabla: 50}          # invitados y equipos sin 802.1X: entran por el portal cautivo con usuario y contraseña
+  # superadmin: UN equipo dedicado (grupo LDAP `superadmin`, 802.1X, NO entra por el portal) que administra el panel de la red y da de alta y de baja las excepciones por cuenta
+  # (docs/DISENO_EXCEPCIONES_POR_SESION.md 4.7, requisito P11). La tabla 45 es menor que 60 (un `goto` solo va hacia delante), distinta de la 30 (IoT/MAB) y de la 99 (cuarentena).
+  # Matriz propia: no se comparte la de `administrator`, así los administradores no heredan el acceso al panel. El nombre del rol debe coincidir con `roles_admin` del panel.
+  superadmin: {matriz: superadmin, tabla: 45}
 
 # Ascenso por el portal cautivo: un equipo autenticado por 802.1X con el rol {base} puede subir al rol {destino} cuando una persona
 # entra en el portal con SU usuario y contraseña de LDAP (grupo con ese rol), desde el mismo equipo (misma MAC) y en la ubicación que
@@ -60,6 +64,7 @@ services:
   research_database:  {ip: 10.0.0.50, tcp: 8103}
   print_server:       {ip: 10.0.0.50, tcp: 8104}
   network_management: {ip: 10.0.0.50, tcp: 8105}
+  admin_panel:        {ip: 10.0.0.50, tcp: 8480}   # panel de administración de la red (R2/panel): solo el rol `superadmin` llega a este puerto; la IP real es la del server (policy.local.yaml la reemplaza como a los demás)
 
 # Switches/puertos de confianza (servidores y troncales): no pasan por las tablas de rol.
 # `all` = todos los puertos. En s1 el puerto 4 es el enlace hacia s2 (tráfico de regreso de los servidores).
@@ -110,6 +115,24 @@ rules:
   - {src: professor,     dst: research_database, allow: true}
   - {src: student,       dst: research_database, allow: false}
   - {src: guest,         dst: research_database, allow: false}
+
+  # Panel de administración de la red: SOLO el superadmin (ni siquiera el administrador de soporte)
+  - {src: superadmin,    dst: admin_panel, allow: true}
+  - {src: administrator, dst: admin_panel, allow: false}
+  - {src: professor,     dst: admin_panel, allow: false}
+  - {src: student,       dst: admin_panel, allow: false}
+  - {src: guest,         dst: admin_panel, allow: false}
+
+  # El superadmin conserva lo del administrador (decisión 15 del diseño: «el panel y los servicios del administrador», para no necesitar otro equipo)
+  - {src: superadmin,    dst: grade_system, allow: true}
+  - {src: superadmin,    dst: virtual_library, allow: true}
+  - {src: superadmin,    dst: learning_platform, allow: true}
+  - {src: superadmin,    dst: student_records, allow: true}
+  - {src: superadmin,    dst: university_portal, allow: true}
+  - {src: superadmin,    dst: internet, allow: true}
+  - {src: superadmin,    dst: print_server, allow: true}
+  - {src: superadmin,    dst: research_database, allow: true}
+  - {src: superadmin,    dst: network_management, allow: true}
 
   # Infrastructure management
   - {src: administrator, dst: network_management, allow: true}

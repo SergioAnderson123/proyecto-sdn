@@ -100,7 +100,7 @@ def test_el_catalogo_cubre_todas_las_prioridades_del_mapa_de_r5():
     """Si alguien añade una prioridad a R5/deploy/prioridades.yaml y no al catálogo del panel, esta prueba lo dice."""
     texto = open(os.path.join(RAIZ, "..", "..", "R5", "deploy", "prioridades.yaml"), encoding="utf-8").read()
     prioridades = {int(m.group(2)) for m in re.finditer(r"^\s+(\w+):\s+(\d+)\s", texto, re.M) if m.group(1) not in ("tabla_cuarentena",)}
-    prioridades -= {int(v) for v in re.findall(r"(?:docente|alumno|soporte|invitado):\s*(\d+)", texto)}                      # las tablas de rol (10, 20, 40, 50) no son prioridades
+    prioridades -= {int(v) for v in re.findall(r"(?:docente|alumno|soporte|invitado|superadmin):\s*(\d+)", texto)}                      # las tablas de rol (10, 20, 40, 50) no son prioridades
     catalogo = {p for _, p, _ in fl.CATALOGO}
     assert prioridades and not (prioridades - catalogo), sorted(prioridades - catalogo)
 

@@ -72,7 +72,7 @@ def test_switch_de_acceso_lleva_puerto_de_confianza_y_las_tablas_de_rol(pol):
     f = pt.flujos_dispositivo(pol, S1)
     confianza = pt.flujos_confianza(pol, S1)
     assert len(confianza) == 1 and confianza[0]["selector"]["criteria"] == [{"type": "IN_PORT", "port": 4}]
-    assert {x["tableId"] for x in f} == {0, 10, 20, 40, 50, 99}      # 99 = cuarentena
+    assert {x["tableId"] for x in f} == {0, 10, 20, 40, 45, 50, 99}      # 45 = superadmin, 99 = cuarentena
 
 
 def test_switch_desconocido_no_recibe_nada(pol):
@@ -93,8 +93,9 @@ def test_los_flujos_con_pop_vlan_exigen_el_vlan_vid_de_su_rol(pol):
 
 def test_administrador_alcanza_todos_los_servicios_del_catalogo(pol):
     d = destinos(pt.flujos_tabla_rol(pol, S1, "soporte", 40))
-    assert d == {(s["ip"], int(s["tcp"])) for s in pol["services"].values()}
-    assert len(pt.flujos_tabla_rol(pol, S1, "soporte", 40)) == len(pol["services"]) + 3   # + ARP + portal + DROP
+    del_catalogo = {n: s for n, s in pol["services"].items() if n != "admin_panel"}      # el panel es solo del superadmin: el administrador de soporte no lo hereda
+    assert d == {(s["ip"], int(s["tcp"])) for s in del_catalogo.values()}
+    assert len(pt.flujos_tabla_rol(pol, S1, "soporte", 40)) == len(del_catalogo) + 3   # + ARP + portal + DROP
 
 
 def test_solo_los_flujos_de_sesion_se_consideran_huerfanos():

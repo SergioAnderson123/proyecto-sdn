@@ -18,7 +18,7 @@
 | **P8** | **Mapper HA estable y vistas de ONOS iguales** | Las excepciones se instalan por ONOS y se reconcilian con él | **Hecho** (el mapper con la reposición del flujo 40001, `6726bc4`, está desplegado según la nota de R1; las tres vistas de ONOS en 5 de 5 el 23-nov) | R1 + R2 | El registrador sin `VISTA_DESIGUAL`; `/health/ha` en `ready` |
 | **P9** | **Equipos y cuentas de la prueba** | El ascenso necesita un equipo con sesión 802.1X de alumno y una cuenta de profesor en LDAP | **Por confirmar** | R1 | h2 con `72 -e arrancar=true -e objetivo_host=h2-alumno` y sesión Alumno en `/sessions`; `profesor02` (cuenta de persona, sin MAC) en el grupo `profesor` |
 | **P10** | **La misma política en las tres réplicas** | Cada réplica del mapper lee su propio `policy.yaml`; con una lista de excepciones, una réplica distinta daría resultados distintos según quién atienda | **Por comprobar** | R1 | `sha256sum` del `policy.yaml` (y del archivo de excepciones) idéntico en las tres réplicas |
-| **P11** | **El rol `superadmin` y su equipo dedicado** (sección 4.7): grupo y equipo en LDAP, rama en el `post-auth` de RADIUS, rol y servicio `admin_panel` en `policy.yaml` y, además, **el webhook del mapper**, donde el mapeo rol → VLAN está escrito en el código y un rol nuevo se rechaza | Es quien entra al panel. **No hace falta antes de la fase 6**: hasta que exista el panel, las excepciones se dan de alta editando el archivo por el repositorio | **Por hacer** | R1 (LDAP, RADIUS, mapper) + R2 (`policy.yaml`) | El equipo dedicado autentica y `/sessions` lo muestra con el rol `superadmin` en la tabla elegida; un equipo de otro rol no alcanza el puerto del panel |
+| **P11** | **El rol `superadmin` y su equipo dedicado** (sección 4.7): grupo y equipo en LDAP, rama en el `post-auth` de RADIUS, rol y servicio `admin_panel` en `policy.yaml` y, además, **el webhook del mapper**, donde el mapeo rol → VLAN está escrito en el código y un rol nuevo se rechaza | Es quien entra al panel. **No hace falta antes de la fase 6**: hasta que exista el panel, las excepciones se dan de alta editando el archivo por el repositorio | **Código y política hechos (24-nov); falta cargarlo en LDAP y RADIUS en vivo y elegir el equipo** (4.7.1) | R1 (LDAP, RADIUS, mapper) + R2 (`policy.yaml`) | El equipo dedicado autentica y `/sessions` lo muestra con el rol `superadmin` en la tabla elegida; un equipo de otro rol no alcanza el puerto del panel |
 
 **Cuándo se puede pasar a cada fase:**
 - **Fase 1:** ya. **Fase 2:** P6 hecho y decisiones 1 a 3 tomadas. **Fase 3:** fase 2 terminada. **Fase 4 (despliegue):** P3, P8 y P10, y la fase 3.
@@ -139,6 +139,25 @@ La purga de huérfanos existente (`purgar_sesiones_huerfanas`) solo conoce los f
 | 2 | RADIUS (`R1/radius/raddb/sites-available/default`, `post-auth`) | Una rama `elsif (LDAP-Group == "superadmin")` con `Tunnel-Private-Group-Id = "superadmin"` |
 | 3 | `R2/policy/policy.yaml` (y `policy.local.yaml` en la slice) | `roles: superadmin: {matriz: superadmin, tabla: 45}`, el servicio `admin_panel` (IP y puerto) y las filas de `rules` del rol nuevo |
 | 4 | **El webhook del mapper** (`policy_mapper.py`, asignación de política y rol) | Hoy es `if "docente" in rol: 10 / "alumno": 20 / "soporte": 40 / else: rechazo`. Un rol que no esté ahí se rechaza con «Rol sin acceso autorizado», aunque esté en los otros tres sitios. **Recomendación:** que la tabla salga de `POLITICA["roles"][rol]["tabla"]` con coincidencia **exacta** del nombre (no por subcadena): es un cambio de R1 con pruebas que sirve a cualquier rol futuro |
+
+### 4.7.1 Estado de la implementación (24-nov)
+
+| # | Sitio | Estado |
+|---|---|---|
+| 1 | LDAP (`estructura.ldif`) | **Plantilla comentada** del grupo `superadmin` y de la entrada del equipo; **falta elegir el equipo** (MAC, switch, puerto y certificado con su CN) y hacer `ldapadd` en ctrl-1 |
+| 2 | RADIUS (`sites-available/default`) | **Hecho en el repo**: rama `elsif (LDAP-Group == "superadmin")` → `Tunnel-Private-Group-Id = "superadmin"`, la última a propósito: un equipo en dos grupos recibe el de menos privilegio. Falta desplegarlo en los tres RADIUS |
+| 3 | `policy.yaml` | **Hecho**: rol `superadmin` (matriz propia, tabla 45), servicio `admin_panel` (puerto **8480**, el del panel; no el 8444 de este diseño) y reglas: solo el superadmin llega al panel, y conserva lo del administrador (decisión 15) |
+| 4 | Webhook del mapper | **Hecho**: `rol_de_802_1x` saca tabla y rol de `roles` de `policy.yaml` con coincidencia exacta; `invitado` sigue sin entrar por 802.1X. Los roles de siempre dan lo mismo que los `if` de antes (docente 10, alumno 20, soporte 40 «Administrador») |
+
+Además: `prioridades.yaml` (`tablas`) y el catálogo del panel conocen la tabla 45. La sesión del superadmin se llama `Superadmin` (el panel compara `roles_admin` sin distinguir mayúsculas). 46 pruebas nuevas (`test_rol_8021x.py`, `test_superadmin.py`), con la tubería completa en el simulador: solo la tabla 45 llega al panel y los demás roles no.
+
+**Para ponerlo en vivo, en este orden** (hasta que el mapper conozca el rol, un equipo `superadmin` sería rechazado con 403):
+1. Desplegar el mapper con el código nuevo y el **mismo `policy.yaml` en las tres réplicas** (P10).
+2. **`policy.local.yaml` de cada réplica**: la mezcla de la política pisa `services` clave por clave, así que `admin_panel` conservaría la IP del `policy.yaml` del repositorio (10.0.0.50) y no la del server; hay que regenerarlo o añadir `admin_panel` con la IP del server (10.0.0.10). Sin esto la regla de la tabla 45 apuntaría a otro host.
+3. R2 instala la tabla 45 en los switches de acceso al sincronizar (`faltantes`), antes del primer login del superadmin.
+4. Elegir el equipo y cargar el grupo y la entrada en LDAP (ctrl-1; replica a ctrl-2).
+5. Desplegar la rama de RADIUS en los tres nodos, de uno en uno.
+6. Instalar el panel con `-e escuchar=10.0.0.10` (hoy solo escucha en 127.0.0.1) y comprobar que otro rol no alcanza el 8480.
 
 **La tabla del rol** debe ser **menor que 60** (las tablas de rol terminan en `goto` a la tabla 60 con el reenvío proactivo, y un `goto` solo puede ir hacia una tabla mayor), distinta de la 30 (IoT/MAB) y de la 99. Propongo la **45**.
 

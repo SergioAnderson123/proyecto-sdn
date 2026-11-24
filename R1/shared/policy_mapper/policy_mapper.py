@@ -859,6 +859,26 @@ async def _confirmar_flujo_sesion(sesion: ActiveSession) -> None:
 
 
 # -----------------------------------------------------------------------------
+# ROL DE UNA SESIÓN 802.1X: sale de policy.yaml, no de un if por rol
+# -----------------------------------------------------------------------------
+ROLES_SOLO_PORTAL = ("invitado",)                  # no entran por 802.1X (el invitado entra por el portal): RADIUS no los manda y, si llegaran, se rechazan
+NOMBRES_DE_ROL = {"soporte": "Administrador"}      # lo que muestra /sessions; el resto, el rol con mayúscula inicial (el panel compara `superadmin` sin distinguir mayúsculas)
+
+
+def rol_de_802_1x(politica: dict, x_rol_ldap: str):
+    """(tabla, nombre) del rol que RADIUS manda en `X-Rol-LDAP`, o None si no tiene acceso por 802.1X.
+
+    Antes eran tres `if "docente" in rol`, `"alumno"` y `"soporte"` escritos en el código: un rol nuevo se rechazaba con «Rol sin acceso autorizado» aunque estuviera en LDAP, RADIUS y
+    policy.yaml (cuarto sitio de docs/DISENO_EXCEPCIONES_POR_SESION.md 4.7). Ahora la tabla (= VLAN) y el rol salen de `roles` en policy.yaml, con coincidencia EXACTA del nombre
+    (no por subcadena: `superadmin` no debe casar con otro rol que lo contenga). Lo que no figura en la política se rechaza."""
+    rol = (x_rol_ldap or "").strip().lower()
+    info = (politica.get("roles") or {}).get(rol)
+    if not info or rol in ROLES_SOLO_PORTAL:
+        return None
+    return int(info["tabla"]), info.get("nombre") or NOMBRES_DE_ROL.get(rol) or rol.capitalize()
+
+
+# -----------------------------------------------------------------------------
 # WEBHOOK PRINCIPAL (EAP-TLS - R1 y R2)
 # -----------------------------------------------------------------------------
 @app.post("/webhook")
@@ -1012,20 +1032,12 @@ async def _procesar_webhook(identidad_ldap: str, mac_esperada: str, mac_fisica: 
     # -------------------------------------------------------------------------
     # ASIGNACIÓN DE POLÍTICA Y ROL (R1 -> R2)
     # -------------------------------------------------------------------------
-    rol_lower = x_rol_ldap.lower()
-    if "docente" in rol_lower:
-        vlan_final = 10  # VLAN 10 y Tabla 10 (Acceso a Sistema de Notas)
-        rol_nombre = "Docente"
-    elif "alumno" in rol_lower:
-        vlan_final = 20  # VLAN 20 y Tabla 20 (Bloqueo a Sistema de Notas)
-        rol_nombre = "Alumno"
-    elif "soporte" in rol_lower:
-        vlan_final = 40  # VLAN 40 y Tabla 40 (Administrador: acceso total; la 30 queda para IoT/MAB)
-        rol_nombre = "Administrador"
-    else:
+    asignado = rol_de_802_1x(POLITICA, x_rol_ldap)
+    if asignado is None:
         print("  [X] RECHAZO: Rol institucional sin permisos")
         eventos.registrar("rechazado", identidad_ldap, mac_fisica, dpid, port, "Rol institucional sin permisos", x_rol_ldap)
         raise HTTPException(status_code=403, detail="Rol sin acceso autorizado")
+    vlan_final, rol_nombre = asignado     # la VLAN es la tabla del rol en policy.yaml (10 docente, 20 alumno, 40 soporte, 45 superadmin; la 30 queda para IoT/MAB)
 
     # R2: las tablas de rol deben existir antes de que el flujo de sesión mande tráfico a ellas
     if await policy_tables.faltantes(POLITICA, [dpid], ONOS_BASE_URL, ONOS_AUTH):

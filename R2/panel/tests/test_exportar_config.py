@@ -111,14 +111,14 @@ def pol(carpeta):
 def test_se_interpreta_la_politica_de_la_replica_del_mapper_con_su_overlay_local(carpeta):
     p = pol(carpeta)
     assert p["origen"] == "ctrl-1" and p["reenvio"] == "proactivo" and "error" not in p
-    assert {r["rol"]: (r["matriz"], r["tabla"]) for r in p["roles"]} == {"docente": ("professor", 10), "alumno": ("student", 20), "soporte": ("administrator", 40), "invitado": ("guest", 50)}
+    assert {r["rol"]: (r["matriz"], r["tabla"]) for r in p["roles"]} == {"docente": ("professor", 10), "alumno": ("student", 20), "soporte": ("administrator", 40), "invitado": ("guest", 50), "superadmin": ("superadmin", 45)}
 
 
 def test_la_matriz_dice_permitido_denegado_o_sin_regla_con_lo_real_del_policy_yaml(carpeta):
     m = pol(carpeta)["matriz"]
     assert m["professor"]["grade_system"] is True and m["student"]["grade_system"] is False and m["guest"]["university_portal"] is True
     assert m["administrator"]["network_management"] is True and m["student"]["network_management"] is False
-    assert set(m) == {"professor", "student", "administrator", "guest"} and "internet" in m["student"]
+    assert set(m) == {"professor", "student", "administrator", "guest", "superadmin"} and "internet" in m["student"]
 
 
 def test_el_catalogo_y_los_servicios_sin_host_se_distinguen(carpeta):

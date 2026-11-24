@@ -4,7 +4,7 @@
 # Las pestañas Politicas y Configuracion necesitan ademas la foto de la configuracion estatica: PLAYBOOK=panel_config.yml ./lanzar.sh (solo lee; hay que repetirlo cuando cambie algo).
 #   PLAYBOOK=panel_instalar.yml ./lanzar.sh -e accion=quitar      # para y quita el servicio y el programa (el historial en /var/lib/panel-red se conserva)
 # ACCESO (decision del equipo, 23-nov): SOLO el rol `superadmin` entra y edita, sin contrasena ni token: el panel mira de que IP llega la conexion, busca ese equipo en ONOS y su sesion 802.1X en el mapper,
-# y deja pasar solo si su rol es el de administracion. Ese rol AUN NO EXISTE en la red (docs/DISENO_EXCEPCIONES_POR_SESION.md 4.7, requisito P11), asi que hoy el panel solo escucha en 127.0.0.1 del server y
+# y deja pasar solo si su rol es el de administracion. Ese rol ya esta en el codigo y en policy.yaml (tabla 45, puerto 8480) pero AUN NO esta cargado en LDAP y RADIUS en vivo (docs/DISENO_EXCEPCIONES_POR_SESION.md 4.7.1, requisito P11), asi que hoy el panel solo escucha en 127.0.0.1 del server y
 # la unica via es de EMERGENCIA y de SOLO LECTURA: un tunel SSH por el reenvio del borde (editar exigira siempre el rol, tambien por el tunel). Desde tu PC:
 #   ssh -L 8480:127.0.0.1:8480 -p 5823 ubuntu@10.20.11.14     y luego abrir  http://localhost:8480
 # Cuando exista el rol y R2 abra el puerto solo a el:  -e escuchar=10.0.0.10   (la IP de servicios del server). La pagina muestra usuarios, MAC e IP (datos personales).

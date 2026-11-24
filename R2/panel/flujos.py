@@ -56,7 +56,7 @@ CATALOGO: List[Tuple[Optional[int], int, str]] = [
     (None, 1, "Tabla 60: descarte por defecto (lo que ninguna regla reconoció)"),
     (None, 0, "Tabla de rol o de cuarentena: DROP explícito de todo lo demás"),
 ]
-_TABLAS_ROL = {10: "docente", 20: "alumno", 40: "soporte", 50: "invitado", 99: "cuarentena"}
+_TABLAS_ROL = {10: "docente", 20: "alumno", 40: "soporte", 45: "superadmin", 50: "invitado", 99: "cuarentena"}
 
 
 SESION_8021X = "Sesión 802.1X de un usuario (puerto + MAC de origen): pone la VLAN de su rol y salta a la tabla de ese rol"

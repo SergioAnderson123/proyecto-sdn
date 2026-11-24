@@ -119,6 +119,28 @@ objectClass: groupOfNames
 cn: soporteTI
 member: uid=support01,ou=users,dc=example,dc=org
 
+# Superadmin (PLANTILLA, no se carga): UN equipo dedicado que se autentica por 802.1X (NO entra por el portal) y es el unico que entra al panel de la red y da de alta y de baja las
+# excepciones por cuenta (docs/DISENO_EXCEPCIONES_POR_SESION.md 4.7, requisito P11). Su identidad es el EQUIPO, no una persona: lleva MAC, switch y puerto fijos como los demas equipos.
+# Falta elegir cual es ese equipo. Este archivo solo se carga con el directorio LDAP vacio: en vivo se agrega con `ldapadd` (en ctrl-1; replica a ctrl-2) y el certificado del equipo
+# debe tener ese CN. Descomentar y completar <equipo>, <MAC>, <DPID> y <puerto>. El grupo debe ser DISTINTO de los demas: RADIUS da el rol del primer grupo que coincide.
+#
+# dn: uid=<equipo>,ou=users,dc=example,dc=org
+# objectClass: inetOrgPerson
+# uid: <equipo>
+# sn: Superadmin
+# cn: <equipo>@example.org
+# mail: <equipo>@example.org
+# userPassword: <clave inicial; cambiarla al cargarlo>
+# description: <MAC>
+# physicalDeliveryOfficeName: <DPID del switch de acceso>
+# roomNumber: <puerto>
+# departmentNumber: 1
+#
+# dn: cn=superadmin,ou=groups,dc=example,dc=org
+# objectClass: groupOfNames
+# cn: superadmin
+# member: uid=<equipo>,ou=users,dc=example,dc=org
+
 # Invitados (entran por el portal cautivo; sin MAC ni puerto asignados)
 
 dn: uid=guest01,ou=users,dc=example,dc=org

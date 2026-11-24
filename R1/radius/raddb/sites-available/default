@@ -833,6 +833,15 @@ post-auth {
 			Tunnel-Private-Group-Id = "soporte"
 		}
 	}
+	#  R1: superadmin (UN equipo dedicado que administra el panel; docs/DISENO_EXCEPCIONES_POR_SESION.md 4.7). Va el ULTIMO a proposito: si un equipo
+	#  figurara por error en otro grupo ademas de `superadmin`, gana el otro (menos privilegio) y no el superadmin.
+	elsif (LDAP-Group == "superadmin") {
+		update reply {
+			Tunnel-Type = VLAN,
+			Tunnel-Medium-Type = IEEE-802,
+			Tunnel-Private-Group-Id = "superadmin"
+		}
+	}
 	#  R1: rol, MAC, DPID y puerto autorizados (LDAP, por CN del certificado)
 	#  como cabeceras HTTP para el webhook del Policy Mapper
 	update control {
