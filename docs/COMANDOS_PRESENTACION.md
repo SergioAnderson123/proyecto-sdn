@@ -140,6 +140,64 @@ En h2:
 nc -zv -w 2 -s 10.0.2.100 10.0.0.10 8101
 ```
 
+# COMANDOS HA
+
+Todos los comandos se ejecutan desde CTRL-3.
+
+## Prueba 1 — Policy Mapper HA (0:15 – 1:25)
+
+```bash
+for n in 1 2 3; do
+  echo "===== CTRL-$n ====="
+  curl -fsS --max-time 5 \
+    http://192.168.201.$n:15002/health/ha
+  echo
+  curl -fsS --max-time 5 \
+    http://192.168.201.$n:15002/sessions \
+    | python3 -m json.tool --sort-keys | sha256sum
+done
+```
+
+**Segundo comando:**
+
+```bash
+for i in $(seq 1 6); do
+  curl -fsS --max-time 5 \
+    http://192.168.201.254:5000/health/ha
+  echo
+done
+```
+
+## Prueba 2 — Eventos distribuidos (1:25 – 2:00)
+
+```bash
+for n in 1 2 3; do
+  echo "===== EVENTOS CTRL-$n ====="
+  curl -fsS --max-time 5 \
+    http://192.168.201.$n:15002/events \
+    | python3 -m json.tool --sort-keys | sha256sum
+done
+```
+
+## Prueba 3 — R2 MAB (2:00 – 2:40)
+
+```bash
+for n in 1 2 3; do
+  echo "===== MAB CTRL-$n ====="
+  curl -fsS --max-time 5 \
+    http://192.168.201.$n:5001/sessions
+  echo
+done
+```
+
+## Prueba 4 — Clúster ONOS (2:40 – 3:10)
+
+```bash
+curl -fsS --max-time 5 -u onos:rocks \
+  http://192.168.201.3:8181/onos/v1/cluster \
+  | python3 -m json.tool
+```
+
 ## 5. R2: servicios por rol
 
 Definir la función de sondeo en h1 (una vez):
