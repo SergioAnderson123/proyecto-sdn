@@ -1,0 +1,295 @@
+# EQUIPO SUPERADMIN (docs/PUESTA_EN_VIVO_SUPERADMIN.md, opcion A aprobada por Dani el 24-nov): una identidad dedicada, `superadmin01`, que corre como un NAMESPACE de red con una
+# MACVLAN sobre la interfaz de datos de h1 (sw-acc-1, puerto 1). Tiene su propia MAC, su propio certificado y su propio suplicante: no toca la identidad de h1 ni su agente 802.1X.
+# ESTADO: BORRADOR hasta probarlo en VNRT (se quita esta linea cuando haya evidencia). Ver la bitacora del runbook.
+#
+#   PLAYBOOK=110_superadmin_equipo.yml ./lanzar.sh                                          # accion=estado: SOLO LECTURA
+#   PLAYBOOK=110_superadmin_equipo.yml ./lanzar.sh -e accion=preparar -e confirmar=true     # instala archivos y unidades; NO autentica ni arranca nada
+#   PLAYBOOK=110_superadmin_equipo.yml ./lanzar.sh -e accion=arrancar -e confirmar=true     # crea el namespace, hace el EAP-TLS y, solo si autentica, pone la IP
+#   PLAYBOOK=110_superadmin_equipo.yml ./lanzar.sh -e accion=parar    -e confirmar=true     # avisa del cierre al mapper, para el suplicante y borra el namespace
+#   PLAYBOOK=110_superadmin_equipo.yml ./lanzar.sh -e accion=quitar   -e confirmar=true     # parar + borrar unidades y archivos del equipo
+#
+# REQUISITOS ANTES DE `arrancar` (si faltan, el equipo es rechazado y NO se instala ningun flujo, pero no se debe intentar):
+#   1. el certificado de superadmin01 en el borde, FUERA del repositorio: /home/ubuntu/superadmin-certs/superadmin01@example.org.{pem,pass} (R1/radius/raddb/certs/emitir_cliente_nuevo.sh);
+#   2. el mapper desplegado con el rol (policy.yaml con `superadmin`, tabla 45) y `admin_panel` con la IP del server en policy.local.yaml de cada replica;
+#   3. LDAP: el grupo `superadmin` y la entrada superadmin01 con MAC = sa_mac, switch of:0000e6925d87354b y puerto 1; y RADIUS con la rama `superadmin`.
+#
+# POR QUE LA IP VA DESPUES DEL EAP: el puerto 1 manda el ARP de un equipo SIN sesion al controlador (fallback MAB, prioridad 40004). Un ARP o un gratuito antes de autenticar haria que el
+# mapper lo tratara como un dispositivo sin 802.1X y lo admitiera como hijo de h1. Por eso la interfaz sube sin IP y sin IPv6, y la IP se pone solo cuando el 802.1X termino bien.
+# El certificado vive en /etc/r1-superadmin (0700, solo root), NO en /home/ubuntu/supp: hosts.yml borra de ahi los certificados que no son de las identidades del host.
+- name: Equipo superadmin (namespace y macvlan sobre h1)
+  hosts: h1-profesor
+  become: true
+  gather_facts: false
+  vars:
+    accion: estado
+    confirmar: false
+    sa_usuario: superadmin01
+    sa_ns: sa
+    sa_if: sa0
+    sa_mac: "02:5a:d0:00:00:01"
+    sa_ip: "10.0.1.220/24"
+    sa_gw: "10.0.1.254"
+    sa_dir: /etc/r1-superadmin
+    sa_ctrl: /run/r1-superadmin
+    sa_iface: "{{ iface | default('ens4') }}"
+    cert_origen: /home/ubuntu/superadmin-certs
+    ca_origen: "{{ playbook_dir }}/../../radius/raddb/certs/ca.pem"
+    mapper_url_sa: "http://192.168.201.254:5000"
+    espera_eap_s: 40
+  tasks:
+    - name: Accion conocida
+      ansible.builtin.assert:
+        that: accion in ['estado', 'preparar', 'arrancar', 'parar', 'quitar']
+        fail_msg: "accion debe ser estado, preparar, arrancar, parar o quitar"
+        quiet: true
+
+    - name: Las acciones que cambian algo piden confirmar=true
+      ansible.builtin.assert:
+        that: confirmar | bool
+        fail_msg: "accion={{ accion }} cambia h1: repetir con -e confirmar=true"
+        quiet: true
+      when: accion != 'estado'
+
+    - name: Leer el estado del equipo superadmin (solo lectura)
+      when: accion == 'estado'
+      changed_when: false
+      failed_when: false
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          echo "namespaces: $(ip netns list 2>&1 | tr '\n' ' ')"
+          echo "unidades: ns=$(systemctl is-active r1-superadmin-ns 2>&1) supp=$(systemctl is-active r1-superadmin-supp 2>&1)"
+          echo "archivos en {{ sa_dir }}: $(ls {{ sa_dir }} 2>&1 | tr '\n' ' ')"
+          ip netns exec {{ sa_ns }} ip -br addr 2>&1 | sed 's/^/  ns: /'
+          wpa_cli -p {{ sa_ctrl }} -i {{ sa_if }} status 2>&1 | grep -E "PAE state|EAP state|address|identity" | sed 's/^/  wpa: /'
+          echo "agente de h1 (no se toca): $(systemctl is-active r1-agente 2>&1); filtro EAPOL: $(systemctl is-active r1-eapol-bcast 2>&1)"
+      register: estado
+
+    - name: Mostrar el estado
+      when: accion == 'estado'
+      ansible.builtin.debug:
+        msg: "{{ estado.stdout_lines }}"
+
+    - name: Comprobar que el certificado esta en el borde
+      when: accion == 'preparar'
+      delegate_to: localhost
+      become: false
+      ansible.builtin.stat:
+        path: "{{ cert_origen }}/{{ sa_usuario }}@example.org.{{ item }}"
+      loop: [pem, pass]
+      register: cert_en_borde
+
+    - name: Faltan archivos del certificado
+      when: accion == 'preparar'
+      ansible.builtin.assert:
+        that: cert_en_borde.results | map(attribute='stat.exists') | min
+        fail_msg: "falta {{ cert_origen }}/{{ sa_usuario }}@example.org.pem o .pass (emitirlo con R1/radius/raddb/certs/emitir_cliente_nuevo.sh)"
+        quiet: true
+
+    - name: Preparar los archivos y las unidades
+      when: accion == 'preparar'
+      block:
+        - name: Carpeta privada del equipo (solo root)
+          ansible.builtin.file: {path: "{{ sa_dir }}", state: directory, mode: "0700", owner: root, group: root}
+
+        - name: CA (parte publica)
+          ansible.builtin.copy: {src: "{{ ca_origen }}", dest: "{{ sa_dir }}/ca.pem", mode: "0644", owner: root, group: root}
+
+        - name: Certificado y clave cifrada del equipo
+          ansible.builtin.copy:
+            src: "{{ cert_origen }}/{{ sa_usuario }}@example.org.pem"
+            dest: "{{ sa_dir }}/{{ sa_usuario }}@example.org.pem"
+            mode: "0600"
+            owner: root
+            group: root
+
+        - name: Configuracion del suplicante (lleva la clave del certificado)
+          no_log: true
+          ansible.builtin.copy:
+            dest: "{{ sa_dir }}/wpa_{{ sa_usuario }}.conf"
+            mode: "0600"
+            owner: root
+            group: root
+            content: |
+              ctrl_interface={{ sa_ctrl }}
+              eapol_version=2
+              ap_scan=0
+              network={
+                  key_mgmt=IEEE8021X
+                  eap=TLS
+                  identity="{{ sa_usuario }}@example.org"
+                  ca_cert="{{ sa_dir }}/ca.pem"
+                  client_cert="{{ sa_dir }}/{{ sa_usuario }}@example.org.pem"
+                  private_key="{{ sa_dir }}/{{ sa_usuario }}@example.org.pem"
+                  private_key_passwd="{{ lookup('file', cert_origen ~ '/' ~ sa_usuario ~ '@example.org.pass') }}"
+              }
+
+        - name: Script que crea y borra el namespace
+          ansible.builtin.copy:
+            dest: /usr/local/sbin/r1-superadmin-ns.sh
+            mode: "0755"
+            content: |
+              #!/bin/bash
+              # R1: namespace {{ sa_ns }} con una macvlan sobre {{ sa_iface }} (MAC {{ sa_mac }}). Sube SIN IP y SIN IPv6: la IP la pone `arrancar` cuando el 802.1X termina bien.
+              set -e
+              case "$1" in
+              up)
+                ip netns add {{ sa_ns }}
+                ip link add link {{ sa_iface }} name {{ sa_if }} address {{ sa_mac }} type macvlan mode bridge
+                ip link set {{ sa_if }} netns {{ sa_ns }}
+                ip netns exec {{ sa_ns }} sysctl -qw net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1
+                ip netns exec {{ sa_ns }} ip link set lo up
+                ip netns exec {{ sa_ns }} ip link set {{ sa_if }} up ;;
+              down)
+                ip netns del {{ sa_ns }} 2>/dev/null || true ;;
+              *) echo "uso: $0 up|down"; exit 2 ;;
+              esac
+
+        - name: Unidad del namespace
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/r1-superadmin-ns.service
+            mode: "0644"
+            content: |
+              [Unit]
+              Description=R1: namespace del equipo superadmin ({{ sa_usuario }}, macvlan sobre {{ sa_iface }})
+              After=network-online.target
+              [Service]
+              Type=oneshot
+              RemainAfterExit=yes
+              ExecStart=/usr/local/sbin/r1-superadmin-ns.sh up
+              ExecStop=/usr/local/sbin/r1-superadmin-ns.sh down
+
+        - name: Unidad del suplicante (sin Install, NO arranca con el host)
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/r1-superadmin-supp.service
+            mode: "0644"
+            content: |
+              [Unit]
+              Description=R1: suplicante 802.1X del equipo superadmin ({{ sa_usuario }})
+              Requires=r1-superadmin-ns.service
+              After=r1-superadmin-ns.service
+              [Service]
+              ExecStart=/bin/sh -c 'exec ip netns exec {{ sa_ns }} wpa_supplicant -D wired -i {{ sa_if }} -c {{ sa_dir }}/wpa_{{ sa_usuario }}.conf'
+              Restart=no
+
+        - name: Recargar systemd (las unidades NO se habilitan ni se arrancan)
+          ansible.builtin.systemd:
+            daemon_reload: true
+
+    - name: Arrancar el equipo superadmin
+      when: accion == 'arrancar'
+      block:
+        - name: Los archivos ya estan preparados
+          ansible.builtin.stat:
+            path: "{{ sa_dir }}/wpa_{{ sa_usuario }}.conf"
+          register: conf_lista
+
+        - name: Primero accion=preparar
+          ansible.builtin.assert:
+            that: conf_lista.stat.exists
+            fail_msg: "primero accion=preparar"
+            quiet: true
+
+        - name: Crear el namespace (sin IP)
+          ansible.builtin.systemd:
+            name: r1-superadmin-ns
+            state: started
+
+        - name: Arrancar el suplicante (aqui empieza el EAP-TLS)
+          ansible.builtin.systemd:
+            name: r1-superadmin-supp
+            state: started
+
+        - name: Esperar el resultado del 802.1X
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: "wpa_cli -p {{ sa_ctrl }} -i {{ sa_if }} status 2>&1 | grep -E 'PAE state|EAP state'"
+          register: eap
+          until: "'EAP state=SUCCESS' in eap.stdout or 'EAP state=FAILURE' in eap.stdout or 'HELD' in eap.stdout"
+          retries: "{{ ((espera_eap_s | int) / 2) | int }}"
+          delay: 2
+          changed_when: false
+          failed_when: false
+
+        - name: Resultado del 802.1X
+          ansible.builtin.debug:
+            msg: "{{ eap.stdout_lines | default([]) }}"
+
+        - name: Si NO autentico, parar todo sin IP ni ARP
+          when: "'EAP state=SUCCESS' not in eap.stdout"
+          block:
+            - name: Parar el suplicante
+              ansible.builtin.systemd:
+                name: r1-superadmin-supp
+                state: stopped
+            - name: Borrar el namespace
+              ansible.builtin.systemd:
+                name: r1-superadmin-ns
+                state: stopped
+            - name: Avisar
+              ansible.builtin.fail:
+                msg: "El equipo superadmin NO autentico. Se paro y se borro el namespace. Mirar /events del mapper y los logs de RADIUS."
+
+        - name: Autentico, ahora si la IP y la ruta dentro del namespace
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              ip netns exec {{ sa_ns }} ip addr replace {{ sa_ip }} dev {{ sa_if }}
+              ip netns exec {{ sa_ns }} ip route replace default via {{ sa_gw }}
+              ip netns exec {{ sa_ns }} ip -br addr show {{ sa_if }}
+          register: ip_puesta
+
+        - name: Mostrar la IP
+          ansible.builtin.debug:
+            msg: "{{ ip_puesta.stdout_lines }}"
+
+    - name: Parar el equipo superadmin
+      when: accion in ['parar', 'quitar']
+      block:
+        - name: Leer AGENTE_TOKEN del .env de ctrl-1 (sin mostrarla)
+          ansible.builtin.shell: grep '^AGENTE_TOKEN=' {{ repo_dir }}/R1/deploy/.env | head -1 | cut -d= -f2 | tr -d '\n'
+          delegate_to: node-ctrl-1
+          register: tok
+          changed_when: false
+          failed_when: false
+          no_log: true
+
+        - name: Avisar al mapper del cierre ANTES de parar, como hace el agente (el EAPOL-Logoff no basta para retirar el flujo de sesion)
+          no_log: true
+          changed_when: false
+          failed_when: false
+          environment:
+            T: "{{ tok.stdout | default('') }}"
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              curl -s -m 12 -w ' [HTTP %{http_code}]' -X POST {{ mapper_url_sa }}/sessions/logout \
+                -H 'Content-Type: application/json' -H "X-Agente-Token: $T" -d '{"mac": "{{ sa_mac }}"}'
+          register: aviso
+
+        - name: Resultado del aviso
+          ansible.builtin.debug:
+            msg: "{{ aviso.stdout | default('sin respuesta') }}"
+
+        - name: Parar el suplicante y borrar el namespace
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+            state: stopped
+          loop: [r1-superadmin-supp, r1-superadmin-ns]
+          failed_when: false
+
+    - name: Quitar unidades y archivos del equipo
+      when: accion == 'quitar'
+      block:
+        - name: Borrar archivos y unidades
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/systemd/system/r1-superadmin-supp.service
+            - /etc/systemd/system/r1-superadmin-ns.service
+            - /usr/local/sbin/r1-superadmin-ns.sh
+            - "{{ sa_dir }}"
+        - name: Recargar systemd
+          ansible.builtin.systemd:
+            daemon_reload: true

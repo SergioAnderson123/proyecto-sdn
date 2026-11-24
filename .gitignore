@@ -14,3 +14,10 @@ R1/deploy/hosts/portal-tls/
 
 # LDAP persistente: datos y configuracion privados
 /R1/shared/ldap/persistent-*/
+
+# claves privadas del equipo superadmin (docs/PUESTA_EN_VIVO_SUPERADMIN.md): nunca al repositorio
+R1/radius/raddb/certs/superadmin*.pem
+R1/radius/raddb/certs/superadmin*.p12
+R1/radius/raddb/certs/superadmin*.key
+R1/radius/raddb/certs/superadmin*.pass
+superadmin-certs/
