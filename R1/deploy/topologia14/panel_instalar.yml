@@ -1,6 +1,7 @@
 # Panel de administracion de la red (v1, SOLO LECTURA) en la VM `server` (R2/panel, docs/DISENO_PANEL_ADMIN.md). Un recolector lee cada 10 s ONOS (/devices de cada nodo), el Policy Mapper (por el gateway)
 # y el /salud de los dos vigilantes; la pagina muestra resumen con avisos, sesiones, eventos con filtros y las vistas de ONOS por nodo. NO escribe nada en la red ni en ONOS.
 #   PLAYBOOK=panel_instalar.yml ./lanzar.sh                       # instala y arranca (servicio `panel-red`)
+# Las pestañas Politicas y Configuracion necesitan ademas la foto de la configuracion estatica: PLAYBOOK=panel_config.yml ./lanzar.sh (solo lee; hay que repetirlo cuando cambie algo).
 #   PLAYBOOK=panel_instalar.yml ./lanzar.sh -e accion=quitar      # para y quita el servicio y el programa (el historial en /var/lib/panel-red se conserva)
 # ACCESO (decision del equipo, 23-nov): SOLO el rol `superadmin` entra y edita, sin contrasena ni token: el panel mira de que IP llega la conexion, busca ese equipo en ONOS y su sesion 802.1X en el mapper,
 # y deja pasar solo si su rol es el de administracion. Ese rol AUN NO EXISTE en la red (docs/DISENO_EXCEPCIONES_POR_SESION.md 4.7, requisito P11), asi que hoy el panel solo escucha en 127.0.0.1 del server y
@@ -91,13 +92,14 @@
             - {src: "{{ origen }}/panel.py", dest: panel.py}
             - {src: "{{ origen }}/datos.py", dest: datos.py}
             - {src: "{{ origen }}/flujos.py", dest: flujos.py}
+            - {src: "{{ origen }}/configuracion.py", dest: configuracion.py}
             - {src: "{{ origen }}/static/index.html", dest: static/index.html}
             - {src: "{{ origen }}/static/app.js", dest: static/app.js}
             - {src: "{{ origen }}/static/style.css", dest: static/style.css}
           register: programa
 
         - name: Comprobar que el programa es Python valido
-          ansible.builtin.command: python3 -c "import ast; [ast.parse(open('{{ destino }}/' + f, encoding='utf-8').read()) for f in ('panel.py', 'datos.py', 'flujos.py')]"
+          ansible.builtin.command: python3 -c "import ast; [ast.parse(open('{{ destino }}/' + f, encoding='utf-8').read()) for f in ('panel.py', 'datos.py', 'flujos.py', 'configuracion.py')]"
           changed_when: false
 
         - name: Configuracion (credenciales de ONOS; solo la lee root)
@@ -120,7 +122,7 @@
 
               [Service]
               EnvironmentFile=/etc/panel-red.env
-              ExecStart=/usr/bin/python3 {{ destino }}/panel.py --escuchar {{ escuchar }} --puerto {{ puerto }} --onos {{ ['ctrl' ~ 1, 'ctrl' ~ 2, 'ctrl' ~ 3] | zip(nodos_onos) | map('join', '=') | join(',') }} --mapper {{ mapper_url }} --vigilantes {{ vigilantes }} --roles-admin {{ roles_admin }} --maestros-validos "{{ maestros_validos }}" --vm-switch "{{ vm_switch }}" --acceso-ssh {{ acceso_ssh }} --db /var/lib/panel-red/panel.sqlite --intervalo {{ intervalo }}
+              ExecStart=/usr/bin/python3 {{ destino }}/panel.py --escuchar {{ escuchar }} --puerto {{ puerto }} --onos {{ ['ctrl' ~ 1, 'ctrl' ~ 2, 'ctrl' ~ 3] | zip(nodos_onos) | map('join', '=') | join(',') }} --mapper {{ mapper_url }} --vigilantes {{ vigilantes }} --roles-admin {{ roles_admin }} --maestros-validos "{{ maestros_validos }}" --vm-switch "{{ vm_switch }}" --acceso-ssh {{ acceso_ssh }} --config-estatica /etc/panel-red/config.json --db /var/lib/panel-red/panel.sqlite --intervalo {{ intervalo }}
               Restart=always
               RestartSec=5
               DynamicUser=yes

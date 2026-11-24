@@ -426,3 +426,25 @@ class LectorFlujos:
         if previo and previo.get("flujos") is not None:
             return dict(previo, antiguo=True, error=motivo)
         return {"flujos": [], "nodo": None, "t": None, "antiguo": False, "error": motivo}
+
+
+# ---------- política esperada frente a lo instalado ----------
+def comparar(esperados: List[dict], instalados: List[dict]) -> dict:
+    """Compara los flujos que R2 ESPERA en un switch (calculados con policy_tables) con los que ONOS tiene bajo el appId de R2. Ambos ya normalizados. Dos flujos son el mismo si coinciden
+    tabla, prioridad, campos y acciones (un multiconjunto: si la política espera dos iguales y hay uno, falta uno). Devuelve {coinciden, faltan, sobran}: `faltan` = esperados que no están
+    instalados (R2 no los instaló o ONOS los perdió); `sobran` = instalados que la política ya no pide (una política vieja, o a medio aplicar)."""
+    clave = lambda x: (x["tabla"], x["prioridad"], x["coincide_texto"], x["acciones_texto"])      # noqa: E731
+    exp: Dict[tuple, List[dict]] = {}
+    ins: Dict[tuple, List[dict]] = {}
+    for x in esperados:
+        exp.setdefault(clave(x), []).append(x)
+    for x in instalados:
+        ins.setdefault(clave(x), []).append(x)
+    faltan, sobran, coinciden = [], [], 0
+    for k in set(exp) | set(ins):
+        e, i = exp.get(k, []), ins.get(k, [])
+        coinciden += min(len(e), len(i))
+        faltan += e[len(i):]
+        sobran += i[len(e):]
+    orden = lambda x: (x["tabla"], -x["prioridad"], x["coincide_texto"])                         # noqa: E731
+    return {"esperados": len(esperados), "instalados": len(instalados), "coinciden": coinciden, "faltan": sorted(faltan, key=orden), "sobran": sorted(sobran, key=orden)}

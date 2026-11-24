@@ -312,6 +312,139 @@ async function pintarFlujos(actualizar) {
   $("fl-sig").disabled = d.pagina + 1 >= paginas;
 }
 
+// ---------- políticas de R2 ----------
+let politicaCache = null;
+
+function irAFlujos(app, tabla, switchId) {
+  for (const c of CAMPOS_FL) $("fl-" + c).value = "";
+  $("fl-con_paquetes").checked = false;
+  if (app) $("fl-app").value = app;
+  if (tabla) $("fl-tabla").value = tabla;
+  flPagina = 0;
+  cambiar("flujos");
+  if (switchId) $("fl-switch").value = switchId;
+}
+
+async function llenarSwitches(sel) {
+  const d = await api("/api/switches");
+  const actual = sel.value;
+  vaciar(sel);
+  for (const s of d.switches) { const o = el("option", s.nombre + (s.maestro ? " (manda " + s.maestro + ")" : "")); o.value = s.id; sel.appendChild(o); }
+  if (actual) sel.value = actual;
+}
+
+function pintarReglasDeRol() {
+  const tb = $("t-rol").tBodies[0];
+  vaciar(tb);
+  const rol = $("rol-sel").value;
+  const lista = politicaCache && politicaCache.flujos_por_rol ? politicaCache.flujos_por_rol[rol] || [] : [];
+  for (const x of lista) fila(tb, [x.tabla, x.prioridad, el("span", x.coincide_texto, "mono"), x.acciones_texto, x.explicacion]);
+  if (!lista.length) fila(tb, ["Sin reglas", "", "", "", ""]);
+}
+
+async function pintarPoliticas() {
+  const d = await api("/api/politica");
+  const pol = d.politica;
+  politicaCache = pol;
+  $("pol-info").textContent = d.disponible ? "(foto de hace " + duracion(d.edad_s) + (pol && pol.origen ? ", de la copia de " + pol.origen : "") + ")" : "";
+  const err = $("pol-error");
+  err.textContent = !d.disponible ? (d.error || "Todavía no hay foto de la configuración.") : (pol && pol.error ? "No se pudo interpretar la política: " + pol.error : "");
+  for (const id of ["t-roles", "t-servicios", "t-rol"]) vaciar($(id).tBodies[0]);
+  vaciar($("t-matriz").tHead); vaciar($("t-matriz").tBodies[0]); vaciar($("pol-otros"));
+  if (!pol || pol.error) return;
+  const matriz = pol.matriz;
+  for (const r of pol.roles) {
+    const m = matriz[r.matriz] || {};
+    fila($("t-roles").tBodies[0], [r.rol, r.matriz, r.tabla, Object.keys(m).filter((s) => m[s] === true && pol.servicios[s]).join(", ") || "—", Object.keys(m).filter((s) => m[s] !== true).join(", ") || "—"]);
+  }
+  const matrices = Object.keys(matriz);
+  const cab = document.createElement("tr");
+  for (const h of ["Servicio"].concat(matrices)) cab.appendChild(el("th", h));
+  $("t-matriz").tHead.appendChild(cab);
+  const servicios = Object.keys(matriz[matrices[0]] || {});
+  for (const s of servicios) fila($("t-matriz").tBodies[0], [s].concat(matrices.map((m) => (matriz[m][s] === true ? "permitido" : matriz[m][s] === false ? "denegado" : "sin regla (denegado)"))));
+  for (const [n, s] of Object.entries(pol.servicios)) fila($("t-servicios").tBodies[0], [n, s.ip, s.tcp, ""]);
+  for (const n of pol.sin_host) fila($("t-servicios").tBodies[0], [n, "—", "—", "tiene reglas pero ningún host: no se instala"]);
+  const li = (t) => $("pol-otros").appendChild(el("li", t));
+  li("Reenvío: " + pol.reenvio + (pol.reenvio === "proactivo" ? " (lo permitido sale por la tabla 60, sin NORMAL)" : " (OUTPUT NORMAL)"));
+  li("Ascenso por el portal: " + (Object.keys(pol.ascenso).length ? Object.entries(pol.ascenso).map(([a, b]) => a + " → " + b.join(", ")).join("; ") : "ninguno") + (pol.ascenso_exigir_ubicacion ? " (exige la ubicación de ONOS AAA)" : ""));
+  li("Cuarentena: " + (pol.cuarentena ? "tabla y VLAN " + pol.cuarentena.tabla : "desactivada"));
+  const po = pol.portal || {};
+  li("Portal: " + (po.ip ? po.ip + ":" + po.puerto : "sin portal") + (po.login_directo ? " · entran directo: " + po.login_directo.join(", ") : "") + (po.grupos ? " · grupos: " + Object.entries(po.grupos).map(([g, r]) => g + " → " + r).join(", ") : "")
+     + (po.duracion_s ? " · duración (s): " + Object.entries(po.duracion_s).map(([k, v]) => k + " " + v).join(", ") : ""));
+  li("Puertos de confianza: " + (Object.keys(pol.trusted).length ? Object.entries(pol.trusted).map(([sw, p]) => (pol.nombres_switch[sw] || sw) + ": " + (Array.isArray(p) ? p.join(",") : p)).join("; ") : "ninguno"));
+  li("Switches sin usuarios (sin tablas de rol): " + (pol.sin_usuarios.length ? pol.sin_usuarios.map((s) => pol.nombres_switch[s] || s).join(", ") : "ninguno"));
+  const sel = $("rol-sel");
+  const previo = sel.value;
+  vaciar(sel);
+  for (const r of pol.roles) { const o = el("option", r.rol + " (tabla " + r.tabla + ")"); o.value = r.rol; sel.appendChild(o); }
+  if (previo) sel.value = previo;
+  pintarReglasDeRol();
+  await llenarSwitches($("cmp-switch"));
+}
+
+async function compararConSwitch() {
+  const sel = $("cmp-switch");
+  const cont = $("cmp-resultado");
+  vaciar(cont);
+  cont.appendChild(el("p", "Leyendo del maestro…", "ayuda"));
+  const r = await fetch("/api/politica/comparar?" + new URLSearchParams({ switch: sel.value }).toString(), { credentials: "same-origin", cache: "no-store" });
+  const d = await r.json();
+  vaciar(cont);
+  if (!r.ok) { cont.appendChild(el("p", d.error || "error", "error")); return; }
+  if (!d.comparacion) { cont.appendChild(el("p", d.error || "sin datos", "error")); return; }
+  const c = d.comparacion;
+  const ok = c.n_faltan === 0 && c.n_sobran === 0;
+  cont.appendChild(el("p", d.switch.nombre + ": la política espera " + c.esperados + " flujos de R2; hay " + c.instalados + " instalados; coinciden " + c.coinciden + ". Faltan " + c.n_faltan + " y sobran " + c.n_sobran + "." + (d.antiguo ? " (lectura anterior: " + d.error + ")" : ""), ok ? "ok" : "alto"));
+  for (const [titulo, lista, n] of [["Faltan (la política los pide y no están instalados)", c.faltan, c.n_faltan], ["Sobran (están instalados y la política ya no los pide)", c.sobran, c.n_sobran]]) {
+    if (!n) continue;
+    cont.appendChild(el("h4", titulo + (n > lista.length ? " — se muestran " + lista.length + " de " + n : "")));
+    const t = document.createElement("table");
+    const th = document.createElement("thead"); const trh = document.createElement("tr");
+    for (const h of ["Tabla", "Prio.", "Coincide", "Acciones", "Qué es"]) trh.appendChild(el("th", h));
+    th.appendChild(trh); t.appendChild(th);
+    const tb = document.createElement("tbody"); t.appendChild(tb);
+    for (const x of lista) fila(tb, [x.tabla, x.prioridad, el("span", x.coincide_texto, "mono"), x.acciones_texto, x.explicacion]);
+    cont.appendChild(t);
+  }
+}
+
+// ---------- archivos de configuración ----------
+const ESTADOS_CFG = { igual: "igual en todas las copias", diverge: "DIVERGE", una_copia: "una sola copia (nada con qué comparar)", sin_datos: "sin copias" };
+
+async function mostrarArchivo(id) {
+  const d = await api("/api/config/archivo?id=" + encodeURIComponent(id));
+  const a = d.archivo;
+  $("cfg-detalle").hidden = false;
+  $("cfg-titulo").textContent = a.titulo;
+  const sel = $("cfg-copia");
+  vaciar(sel);
+  for (const c of a.copias.filter((x) => x.existe)) { const o = el("option", c.fuente + " · " + c.sha256.slice(0, 10) + " · " + c.bytes + " bytes"); o.value = c.sha256; sel.appendChild(o); }
+  const verContenido = () => { $("cfg-contenido").textContent = a.contenidos[sel.value] || "(sin contenido)"; };
+  sel.onchange = verContenido;
+  verContenido();
+  const dif = $("cfg-diffs");
+  vaciar(dif);
+  for (const x of a.diferencias) { dif.appendChild(el("h4", "Diferencias: " + x.base + " frente a " + x.con.join(", "))); dif.appendChild(el("pre", x.diff, "cmd")); }
+  $("cfg-detalle").scrollIntoView();
+}
+
+async function pintarConfig() {
+  const d = await api("/api/config");
+  $("cfg-info").textContent = d.disponible ? "(foto de hace " + duracion(d.edad_s) + ")" : "";
+  $("cfg-error").textContent = d.error && !d.disponible ? d.error : (d.error || "");
+  const tb = $("t-cfg").tBodies[0];
+  vaciar(tb);
+  for (const a of d.archivos) {
+    const copias = a.copias.map((c) => c.fuente + (c.existe ? " ✔" : " —")).join("   ");
+    const b = el("button", "Ver");
+    b.type = "button";
+    b.addEventListener("click", () => mostrarArchivo(a.id));
+    const tr = fila(tb, [el("span", a.id, "mono"), el("span", ESTADOS_CFG[a.estado] || a.estado, "tag " + (a.estado === "diverge" ? "rechazado" : a.estado === "igual" ? "admitido" : "")), copias, a.descripcion, b]);
+    if (a.estado === "diverge") tr.className = "desigual";
+  }
+}
+
 // ---------- ciclo ----------
 async function refrescar() {
   try {
@@ -320,6 +453,8 @@ async function refrescar() {
     else if (vista === "vistas") pintarVistas(await api("/api/vistas"));
     else if (vista === "vigilante") pintarVigilante(await api("/api/vigilante"));
     else if (vista === "flujos") await pintarFlujos(false);
+    else if (vista === "politicas") await pintarPoliticas();
+    else if (vista === "config") await pintarConfig();
     else if (vista === "eventos") await pintarEventos();
     $("estado").textContent = "actualizado " + new Date().toLocaleTimeString();
     if (vista === "resumen" && quien) $("estado").textContent += " · " + quien;
@@ -339,7 +474,13 @@ $("f-fl").addEventListener("submit", (ev) => { ev.preventDefault(); flPagina = 0
 $("fl-switch").addEventListener("change", () => { flPagina = 0; });
 $("fl-releer").addEventListener("click", () => pintarFlujos(true));
 $("fl-limpiar").addEventListener("click", () => { for (const c of CAMPOS_FL) $("fl-" + c).value = ""; $("fl-con_paquetes").checked = false; flPagina = 0; pintarFlujos(false); });
+$("f-rol").addEventListener("submit", (ev) => { ev.preventDefault(); pintarReglasDeRol(); });
+$("rol-ver-switches").addEventListener("click", () => {
+  const rol = politicaCache && politicaCache.roles ? politicaCache.roles.find((r) => r.rol === $("rol-sel").value) : null;
+  if (rol) irAFlujos("campus.r2", String(rol.tabla), $("cmp-switch").value);
+});
+$("f-cmp").addEventListener("submit", (ev) => { ev.preventDefault(); compararConSwitch(); });
 $("fl-ant").addEventListener("click", () => { flPagina = Math.max(0, flPagina - 1); pintarFlujos(false); });
 $("fl-sig").addEventListener("click", () => { flPagina += 1; pintarFlujos(false); });
 refrescar();
-temporizador = setInterval(() => { if (vista !== "eventos" && vista !== "flujos") refrescar(); }, 5000);   // eventos y flujos se actualizan al filtrar: no se pierde lo que se lee ni se lee a ONOS en bucle
+temporizador = setInterval(() => { if (!["eventos", "flujos", "politicas", "config"].includes(vista)) refrescar(); }, 5000);   // estas pantallas se actualizan al abrirlas o al filtrar: no se pierde lo que se lee ni se lee a ONOS en bucle

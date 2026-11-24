@@ -26,6 +26,7 @@ AQUI = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, AQUI)
 import datos  # noqa: E402
 import flujos  # noqa: E402
+from configuracion import ConfigEstatica  # noqa: E402
 
 log = logging.getLogger("panel")
 ESTATICOS = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
@@ -180,7 +181,29 @@ def respuesta_flujos(q: Dict[str, str], est: dict, lector: "flujos.LectorFlujos"
                  "flujos": lista[pagina * limite:(pagina + 1) * limite], "cuentas": flujos.cuentas(todos), "comandos": flujos.comandos_ovs(filtros, cookie_app=cookie), "filtros": filtros}
 
 
-def hacer_manejador(rec: Recolector, historial: "datos.Historial", roles_admin, reloj=time.time, ip_de=None, lector=None, vm_switch=None, acceso_ssh="10.20.11.14"):
+def respuesta_comparar(q: Dict[str, str], est: dict, lector: "flujos.LectorFlujos", config, vm_switch: dict, acceso_ssh: str) -> Tuple[int, dict]:
+    """`/api/politica/comparar`: lo que R2 espera en un switch frente a lo que hay instalado bajo su appId."""
+    pol = config.politica(con_esperados=True) if config is not None else None
+    if not pol or "esperados" not in pol:
+        return 409, {"error": "no hay política interpretada: ejecute panel_config.yml para generarla" + (f" ({pol['error']})" if pol and pol.get("error") else "")}
+    switches = lista_de_switches(est, vm_switch, acceso_ssh)
+    pedido = (q.get("switch") or "").strip()
+    sw = next((s for s in switches if pedido in (s["id"], s["nombre"])), None)
+    if sw is None:
+        return 400, {"error": "switch desconocido", "switches": [s["nombre"] for s in switches]}
+    esperados = (pol["esperados"].get(sw["id"]) or {}).get("flujos")
+    if esperados is None:
+        return 404, {"error": f"la política no incluye al switch {sw['nombre']}"}
+    lec = lector.obtener(sw["id"], sw["maestro"], forzar=q.get("actualizar") == "1")
+    if lec["error"] and not lec["flujos"]:
+        return 200, {"switch": sw, "error": lec["error"], "comparacion": None, "origen": pol.get("origen")}
+    instalados = [flujos.normalizar(x) for x in lec["flujos"] if x.get("appId") == "org.campus.r2"]
+    c = flujos.comparar(esperados, instalados)
+    return 200, {"switch": sw, "nodo": lec["nodo"], "t": lec["t"], "antiguo": lec["antiguo"], "error": lec["error"], "origen": pol.get("origen"),
+                 "comparacion": dict(c, faltan=c["faltan"][:200], sobran=c["sobran"][:200], n_faltan=len(c["faltan"]), n_sobran=len(c["sobran"]))}
+
+
+def hacer_manejador(rec: Recolector, historial: "datos.Historial", roles_admin, reloj=time.time, ip_de=None, lector=None, vm_switch=None, acceso_ssh="10.20.11.14", config=None):
     """`ip_de(manejador) -> str` da la IP de origen (por defecto la de la conexión TCP; las cabeceras X-Forwarded-For se IGNORAN: nadie las pone en medio y cualquiera podría falsearlas).
     `lector` (flujos.LectorFlujos) activa las pantallas de flujos; sin él `/api/flujos` no existe."""
     vm_switch = vm_switch or {}
@@ -243,6 +266,16 @@ def hacer_manejador(rec: Recolector, historial: "datos.Historial", roles_admin, 
             if ruta == "/api/flujos" and lector is not None:
                 codigo, cuerpo = respuesta_flujos(q, est, lector, vm_switch, acceso_ssh)
                 return self._json(cuerpo, codigo)
+            if config is not None and ruta == "/api/config":
+                return self._json(dict(config.estado(), archivos=config.archivos()))
+            if config is not None and ruta == "/api/config/archivo":
+                a = config.archivo(q.get("id", ""))
+                return self._json({"archivo": a}) if a else self._json({"error": "archivo desconocido"}, 404)
+            if config is not None and ruta == "/api/politica":
+                return self._json(dict(config.estado(), politica=config.politica()))
+            if config is not None and lector is not None and ruta == "/api/politica/comparar":
+                codigo, cuerpo = respuesta_comparar(q, est, lector, config, vm_switch, acceso_ssh)
+                return self._json(cuerpo, codigo)
             if ruta == "/api/eventos":
                 evs = historial.listar(tipo=q.get("tipo") or None, usuario=q.get("usuario") or None, mac=q.get("mac") or None, texto=q.get("texto") or None,
                                        desde=_num(q.get("desde")), hasta=_num(q.get("hasta")), limite=int(_num(q.get("limite")) or 100))
@@ -284,6 +317,7 @@ def main(argv=None) -> int:
                    "si otro nodo manda en un switch el panel avisa. Vacío = no se comprueba")
     a.add_argument("--vm-switch", default="", metavar="core-1=sw-core-1:5813,borde=switch-borde:", help="nombre del switch = VM:puerto SSH del borde (sin puerto = el propio borde); sirve para decir dónde ejecutar los comandos")
     a.add_argument("--acceso-ssh", default="10.20.11.14", help="IP por la que se llega por SSH a las VM (la del borde)")
+    a.add_argument("--config-estatica", default="", metavar="/etc/panel-red/config.json", help="foto de la configuración estática (la deja panel_config.yml); se relee sola al cambiar")
     a.add_argument("--roles-admin", default="superadmin", help="rol o roles (separados por comas) que pueden entrar y editar")
     a.add_argument("--db", default="panel.sqlite")
     a.add_argument("--intervalo", type=float, default=10.0, help="segundos entre rondas del recolector")
@@ -301,7 +335,8 @@ def main(argv=None) -> int:
     parar = threading.Event()
     threading.Thread(target=rec.correr, args=(arg.intervalo, parar), daemon=True).start()
     lector = flujos.LectorFlujos(cfg["onos"], leer_json, usuario=cfg["onos_usuario"], clave=cfg["onos_clave"])
-    srv = ThreadingHTTPServer((arg.escuchar, arg.puerto), hacer_manejador(rec, historial, roles, lector=lector, vm_switch=_pares(arg.vm_switch), acceso_ssh=arg.acceso_ssh))
+    srv = ThreadingHTTPServer((arg.escuchar, arg.puerto), hacer_manejador(rec, historial, roles, lector=lector, vm_switch=_pares(arg.vm_switch), acceso_ssh=arg.acceso_ssh,
+                                                                                    config=ConfigEstatica(arg.config_estatica or None)))
     log.info("Panel (solo lectura) en http://%s:%d; entra el rol %s y, solo para leer, el túnel local; %d nodos de ONOS, cada %.0f s",
              arg.escuchar, arg.puerto, "/".join(roles), len(cfg["onos"]), arg.intervalo)
     try:

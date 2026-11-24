@@ -35,7 +35,7 @@ tr.desigual td:first-child { border-left: 4px solid var(--alto); }
 .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 11px; border: 1px solid var(--borde); }
 .tag.rechazado, .tag.conflicto, .tag.revocado { color: var(--alto); border-color: var(--alto); }
 .tag.admitido { color: var(--ok); border-color: var(--ok); }
-@media (max-width: 700px) { .estado { position: static; padding-bottom: 6px; } th:nth-child(n+5), td:nth-child(n+5) { display: none; } }
+@media (max-width: 700px) { .estado { position: static; padding-bottom: 6px; } table { display: block; overflow-x: auto; } }      /* en pantallas estrechas las tablas se desplazan en horizontal; nunca se ocultan columnas */
 .topologia { background: var(--card); border: 1px solid var(--borde); border-radius: 8px; padding: 8px; }
 .svg-topologia { width: 100%; max-width: 760px; height: auto; display: block; margin: 0 auto; }
 .svg-topologia .enlace { stroke-width: 3; fill: none; }

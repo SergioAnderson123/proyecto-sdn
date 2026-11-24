@@ -1,0 +1,143 @@
+# Foto de la CONFIGURACION ESTATICA para las pestañas "Politicas" y "Configuracion" del panel (docs/DISENO_PANEL_ADMIN.md, seccion 12). SOLO LEE: no cambia nada en la red ni en ningun servicio.
+#   PLAYBOOK=panel_config.yml ./lanzar.sh                 # recoge, interpreta y deja /etc/panel-red/config.json en el server (el panel la relee sola, sin reiniciar)
+# Que hace, en este orden:
+#   1. En el borde: copia del repositorio (git de este checkout) los archivos fijos: policy.yaml, plan de subredes, hosts estaticos y mapa de prioridades.
+#   2. En cada controlador: lee (si existen) lo DESPLEGADO: policy.yaml y policy.local.yaml donde corre el mapper, y en /etc/vigilante el plan, los hosts fijos y la unidad del vigilante.
+#   3. En el borde: ejecuta R2/panel/exportar_config.py, que compara las copias (iguales o divergentes, con su diff) e interpreta la politica con el MISMO codigo del mapper (policy_tables).
+#   4. En el server: deja el JSON en /etc/panel-red/config.json (0644: no lleva secretos; son politicas, planes y MAC/IP de laboratorio).
+# Hay que volver a correrlo cuando cambie algo (un policy.yaml nuevo, otro despliegue del vigilante): la foto NO se actualiza sola, y el panel dice de hace cuanto es.
+# Requisito: PyYAML en el borde (Ansible ya lo exige). Si policy.yaml esta en otra carpeta en los controladores:  -e carpeta_politica=/ruta/a/R2/policy
+- name: Preparar la carpeta de trabajo en el borde y copiar lo del repositorio
+  hosts: borde
+  gather_facts: false
+  vars:
+    trabajo: /tmp/panel-config
+    repo: "{{ playbook_dir }}/../../.."
+  tasks:
+    - name: PyYAML disponible (lo necesita el exportador para leer policy.yaml)
+      ansible.builtin.command: python3 -c "import yaml"
+      changed_when: false
+
+    - name: Carpeta de trabajo limpia
+      ansible.builtin.file:
+        path: "{{ trabajo }}"
+        state: absent
+
+    - name: Una subcarpeta por fuente
+      ansible.builtin.file:
+        path: "{{ trabajo }}/{{ item }}"
+        state: directory
+        mode: "0700"
+      loop: [repo, ctrl-1, ctrl-2, ctrl-3]
+
+    - name: Archivos fijos del repositorio (los que falten se omiten)
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ repo }}/{{ item.origen }}"
+        dest: "{{ trabajo }}/repo/{{ item.nombre }}"
+        mode: "0600"
+      failed_when: false
+      loop:
+        - {origen: R2/policy/policy.yaml, nombre: policy.yaml}
+        - {origen: R2/policy/planes/vnrt_topologia14.json, nombre: plan_capa3.json}
+        - {origen: R2/policy/planes/hosts_fijos_capa3.json, nombre: hosts_fijos_capa3.json}
+        - {origen: R5/deploy/prioridades.yaml, nombre: prioridades.yaml}
+
+- name: Recoger lo desplegado en cada controlador
+  hosts: ctrl
+  become: true
+  gather_facts: false
+  vars:
+    trabajo: /tmp/panel-config
+    carpeta_politica: "{{ repo_dir }}/R2/policy"
+    fuente: "{{ 'ctrl-' ~ (inventory_hostname | regex_replace('^node-ctrl-', '')) }}"
+    archivos:
+      - {origen: "{{ carpeta_politica }}/policy.yaml", nombre: policy.yaml}
+      - {origen: "{{ carpeta_politica }}/policy.local.yaml", nombre: policy.local.yaml}
+      - {origen: /etc/vigilante/plan_capa3.json, nombre: plan_capa3.json}
+      - {origen: /etc/vigilante/hosts_fijos_capa3.json, nombre: hosts_fijos_capa3.json}
+      - {origen: /etc/systemd/system/vigilante-capa3.service, nombre: vigilante-capa3.service}
+  tasks:
+    - name: Leer cada archivo (si no existe en este nodo, se omite)
+      ansible.builtin.slurp:
+        src: "{{ item.origen }}"
+      register: leidos
+      failed_when: false
+      loop: "{{ archivos }}"
+      loop_control:
+        label: "{{ item.nombre }}"
+
+    - name: Dejarlos en el borde, bajo la fuente de este nodo
+      ansible.builtin.copy:
+        content: "{{ item.content | b64decode }}"
+        dest: "{{ trabajo }}/{{ fuente }}/{{ item.item.nombre }}"
+        mode: "0600"
+      delegate_to: switch-borde
+      become: false
+      when: item.content is defined
+      loop: "{{ leidos.results }}"
+      loop_control:
+        label: "{{ fuente }}: {{ item.item.nombre }}{{ '' if item.content is defined else ' (no existe)' }}"
+
+- name: Interpretar y comparar (en el borde)
+  hosts: borde
+  gather_facts: false
+  vars:
+    trabajo: /tmp/panel-config
+    repo: "{{ playbook_dir }}/../../.."
+  tasks:
+    - name: Ejecutar el exportador
+      ansible.builtin.command: python3 {{ repo }}/R2/panel/exportar_config.py --carpeta {{ trabajo }} --salida {{ trabajo }}/config.json
+      register: exportado
+      changed_when: false
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ exportado.stdout_lines }}"
+
+    - name: Leer la foto para llevarla al panel
+      ansible.builtin.slurp:
+        src: "{{ trabajo }}/config.json"
+      register: foto
+
+- name: Dejar la foto en el panel (server)
+  hosts: server
+  become: true
+  gather_facts: false
+  vars:
+    destino: /etc/panel-red
+    puerto: 8480
+  tasks:
+    - name: Carpeta
+      ansible.builtin.file:
+        path: "{{ destino }}"
+        state: directory
+        mode: "0755"
+
+    - name: config.json (el panel lo relee solo al cambiar)
+      ansible.builtin.copy:
+        content: "{{ hostvars['switch-borde'].foto.content | b64decode }}"
+        dest: "{{ destino }}/config.json"
+        mode: "0644"
+
+    - name: El panel la ve (por su acceso local de lectura)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          sleep 1
+          curl -s -m 6 http://127.0.0.1:{{ puerto }}/api/config | python3 -c "import sys,json; d=json.load(sys.stdin); print('disponible:', d.get('disponible'), '| error:', d.get('error')); [print(' ', a['id'], '->', a['estado'], '| faltan:', a['faltan']) for a in d.get('archivos', [])]"
+      register: visto
+      changed_when: false
+      failed_when: false
+
+    - name: Lo que ve el panel
+      ansible.builtin.debug:
+        msg: "{{ visto.stdout_lines }}"
+
+- name: Limpiar la carpeta de trabajo del borde
+  hosts: borde
+  gather_facts: false
+  tasks:
+    - ansible.builtin.file:
+        path: /tmp/panel-config
+        state: absent

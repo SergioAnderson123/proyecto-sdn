@@ -15,6 +15,8 @@
     <button data-v="eventos">Eventos</button>
     <button data-v="vigilante">Vigilante</button>
     <button data-v="flujos">Flujos</button>
+    <button data-v="politicas">Políticas</button>
+    <button data-v="config">Configuración</button>
     <button data-v="vistas">Vistas de ONOS</button>
   </nav>
   <div id="estado" class="estado">cargando…</div>
@@ -97,6 +99,47 @@
     <div id="fl-comandos" class="comandos"></div>
     <table id="t-fl"><thead><tr><th>Tabla</th><th>Prio.</th><th>Instalada por</th><th>Coincide</th><th>Acciones</th><th>Paquetes</th><th>Estado</th><th>Qué es</th></tr></thead><tbody></tbody></table>
     <p class="paginas"><button type="button" id="fl-ant">« anterior</button> <span id="fl-pag"></span> <button type="button" id="fl-sig">siguiente »</button></p>
+  </section>
+
+  <section id="v-politicas" hidden>
+    <h2>Políticas de acceso (R2) <span id="pol-info" class="cuenta"></span></h2>
+    <p class="ayuda">Lo que dicen <span class="mono">policy.yaml</span> y <span class="mono">policy.local.yaml</span>, interpretado con el mismo código del Policy Mapper. Solo lectura: cambiar la política es un cambio del repositorio y un reinicio de cada réplica.</p>
+    <p id="pol-error" class="error"></p>
+    <h3>Roles</h3>
+    <table id="t-roles"><thead><tr><th>Rol (grupo LDAP)</th><th>Matriz</th><th>Tabla y VLAN</th><th>Puede alcanzar</th><th>No puede</th></tr></thead><tbody></tbody></table>
+    <h3>Matriz de permisos rol / servicio</h3>
+    <table id="t-matriz"><thead></thead><tbody></tbody></table>
+    <h3>Servicios</h3>
+    <table id="t-servicios"><thead><tr><th>Servicio</th><th>IP</th><th>Puerto TCP</th><th>Nota</th></tr></thead><tbody></tbody></table>
+    <h3>Portal, ascenso, cuarentena y confianza</h3>
+    <ul id="pol-otros" class="notas"></ul>
+    <h3>Reglas que R2 instala en la tabla de un rol</h3>
+    <form id="f-rol" class="filtros">
+      <label>Rol <select id="rol-sel"></select></label>
+      <button type="submit">Ver reglas</button>
+      <button type="button" id="rol-ver-switches">Ver las instaladas en un switch</button>
+    </form>
+    <table id="t-rol"><thead><tr><th>Tabla</th><th>Prio.</th><th>Coincide</th><th>Acciones</th><th>Qué es</th></tr></thead><tbody></tbody></table>
+    <h3>Comparar con un switch</h3>
+    <p class="ayuda">Los flujos que la política espera en un switch frente a los que ONOS tiene instalados bajo la app de R2. Lee los flujos del maestro (con la caché de la pestaña Flujos).</p>
+    <form id="f-cmp" class="filtros">
+      <label>Switch <select id="cmp-switch"></select></label>
+      <button type="submit">Comparar</button>
+    </form>
+    <div id="cmp-resultado"></div>
+  </section>
+
+  <section id="v-config" hidden>
+    <h2>Archivos de configuración fijos <span id="cfg-info" class="cuenta"></span></h2>
+    <p class="ayuda">Copias del repositorio y de lo desplegado en cada nodo. No se actualizan solas: las recoge <span class="mono">panel_config.yml</span>. «Diverge» quiere decir que hay dos o más versiones distintas.</p>
+    <p id="cfg-error" class="error"></p>
+    <table id="t-cfg"><thead><tr><th>Archivo</th><th>Estado</th><th>Copias</th><th>Qué es</th><th></th></tr></thead><tbody></tbody></table>
+    <div id="cfg-detalle" class="caja-cmd" hidden>
+      <h3 id="cfg-titulo"></h3>
+      <label class="ayuda">Copia <select id="cfg-copia"></select></label>
+      <pre id="cfg-contenido" class="cmd"></pre>
+      <div id="cfg-diffs"></div>
+    </div>
   </section>
 
   <section id="v-vistas" hidden>

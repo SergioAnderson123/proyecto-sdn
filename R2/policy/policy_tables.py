@@ -16,7 +16,10 @@ import os
 from collections import Counter
 from typing import Dict, List, Optional
 
-import httpx
+try:
+    import httpx
+except ImportError:      # las funciones puras (cargar_politica, flujos_*) no lo usan; solo sincronizar/purgar. Así la política se puede interpretar en una máquina sin httpx (p. ej. el panel)
+    httpx = None
 # R2 tools can run without R1 on their import path.
 HA_ENABLED = bool(os.getenv("SESSION_ETCD_ENDPOINTS"))
 if HA_ENABLED:
