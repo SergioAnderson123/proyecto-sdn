@@ -37,7 +37,7 @@ CATALOGO: List[Tuple[Optional[int], int, str]] = [
     (0, 40004, "ARP del puerto de usuario al controlador y a la tabla 60 (fallback MAB)"),
     (0, 40003, "ARP salta a la tabla 60: difusión por árbol (reenvío proactivo)"),
     (0, 40002, "Portal cautivo: ARP de quien no tiene sesión, o reescritura de la respuesta del portal"),
-    (0, 40001, "Sesión 802.1X (puerto + MAC de origen: pone la VLAN del rol y salta a su tabla) o puerto de confianza (servidor, troncal)"),
+    (0, 40001, "Sesión 802.1X (puerto + MAC de origen: pone la VLAN del rol y salta a su tabla) o puerto de confianza (servidor, troncal)"),  # sin los campos del flujo no se sabe cuál de las dos; ver explicar()
     (0, 40000, "Base de ONOS y R1: LLDP, BDDP, ARP y DHCP de ONOS al controlador"),
     (0, 5, "Núcleo de ONOS: ARP al controlador, regla por defecto de ONOS (org.onosproject.core)"),
     (0, 35000, "Portal cautivo: tráfico al portal y desvío del HTTP (bajo la sesión: con sesión nunca se desvía)"),
@@ -58,8 +58,15 @@ CATALOGO: List[Tuple[Optional[int], int, str]] = [
 _TABLAS_ROL = {10: "docente", 20: "alumno", 40: "soporte", 50: "invitado", 99: "cuarentena"}
 
 
-def explicar(tabla: int, prioridad: int, app: str = "") -> str:
-    """Qué significa un flujo según su tabla y su prioridad (el catálogo es de nuestras apps; si no está, lo dice)."""
+SESION_8021X = "Sesión 802.1X de un usuario (puerto + MAC de origen): pone la VLAN de su rol y salta a la tabla de ese rol"
+PUERTO_DE_CONFIANZA = "Puerto de confianza (troncal hacia el núcleo o servidor): el IPv4 que entra por aquí no es de un usuario sin sesión, salta a la tabla 60 sin pasar por las tablas de rol"
+
+
+def explicar(tabla: int, prioridad: int, app: str = "", coincide: Optional[dict] = None) -> str:
+    """Qué significa un flujo según su tabla y su prioridad (el catálogo es de nuestras apps; si no está, lo dice).
+    La prioridad 40001 de la tabla 0 la usan dos reglas distintas: con MAC de origen es una sesión 802.1X; solo con puerto y EtherType, un puerto de confianza."""
+    if tabla == 0 and prioridad == 40001 and coincide is not None:
+        return SESION_8021X if "eth_src" in coincide else PUERTO_DE_CONFIANZA
     for t, p, texto in CATALOGO:
         if p == prioridad and (t == tabla or (t is None and tabla != 0)):
             if t is None and tabla in _TABLAS_ROL and p in (30000, 0):
@@ -147,7 +154,7 @@ def normalizar(f: dict) -> dict:
     return {"id": str(f.get("id", "")), "tabla": tabla, "prioridad": prio, "app": app, "estado": str(f.get("state", "")), "paquetes": int(f.get("packets", 0) or 0),
             "bytes": int(f.get("bytes", 0) or 0), "vida_s": int(f.get("life", 0) or 0), "permanente": bool(f.get("isPermanent", False)), "coincide": coincide,
             "coincide_texto": ", ".join(f"{k}={v}" for k, v in coincide.items()) or "cualquiera", "acciones": [t for t, _ in acciones], "acciones_texto": "; ".join(x for _, x in acciones),
-            "explicacion": explicar(tabla, prio, app)}
+            "explicacion": explicar(tabla, prio, app, coincide)}
 
 
 # ---------- filtros ----------
@@ -391,6 +398,7 @@ EXPLICA_CAMPO = {
     "dl_type": "solo el tipo de Ethernet", "nw_proto": "solo el protocolo IP con ese número", "in_port": "que entraron por ese número de puerto de OpenFlow", "dl_src": "con esa MAC de origen",
     "dl_dst": "con esa MAC de destino", "nw_src": "con IP de origen igual o dentro de esa red", "nw_dst": "con IP de destino igual o dentro de esa red", "tcp_src": "con ese puerto TCP de origen",
     "tcp_dst": "con ese puerto TCP de destino", "udp_src": "con ese puerto UDP de origen", "udp_dst": "con ese puerto UDP de destino", "dl_vlan": "con esa VLAN", "arp_op": "con esa operación ARP (1 = petición, 2 = respuesta)",
+    "nw_ttl": "con ese TTL: sin él la traza simula TTL 0 y la regla «decrementar TTL» manda el paquete al controlador en vez de reenviarlo",
     "table": "solo la tabla de OpenFlow con ese número", "cookie": "solo los flujos de esa app: ONOS guarda en el cookie de cada flujo el número de la app que lo instaló (los 16 bits de arriba) y la máscara hace que solo se compare esa parte",
 }
 
@@ -497,7 +505,8 @@ def comandos_ovs(filtros: Dict[str, str], cookie_app: Optional[str] = None, puen
                 spec.append(f"{clave}={f[campo].split('/')[0]}")
         if "vlan" in f:
             spec.append(f"dl_vlan={f['vlan']}")
-        traza = f"sudo ovs-appctl ofproto/trace {puente} '{','.join(spec)}'"
+        spec.append("nw_ttl=64")      # sin TTL, ovs-appctl simula 0 y dec_ttl manda el paquete al controlador en vez de reenviarlo
+        traza =f"sudo ovs-appctl ofproto/trace {puente} '{','.join(spec)}'"
         traza_partes = [{"codigo": f"sudo ovs-appctl ofproto/trace {puente}", "explica": "Simula, dentro del switch, un paquete que entra y enseña tabla por tabla qué regla lo atrapa y qué acciones aplica. No envía nada a la red."},
                         {"codigo": f"'{','.join(spec)}'", "explica": "El paquete que se simula, descrito por sus campos:"}]
         for tk in spec:

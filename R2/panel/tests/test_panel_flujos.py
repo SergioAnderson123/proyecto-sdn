@@ -102,7 +102,7 @@ def test_los_filtros_se_aplican_en_el_servidor_y_arman_el_comando_para_el_switch
     c, j = pedir(base + "/api/flujos?switch=acc-1&ip_dst_cubre=10.0.2.77")
     assert j["total"] == 2 and j["comandos"]["traza"] is None                                            # la ruta 10.0.2.0/24 y el bloqueo 10/8 contienen esa IP; sin puerto de entrada no hay traza
     c, j = pedir(base + "/api/flujos?switch=acc-1&in_port=1&ip_dst_cubre=10.0.2.77")
-    assert j["comandos"]["traza"].endswith("nw_dst=10.0.2.77'") and j["total"] == 0                        # los dos filtros a la vez: ninguna regla tiene puerto de entrada y a la vez esa IP
+    assert j["comandos"]["traza"].endswith("nw_dst=10.0.2.77,nw_ttl=64'") and j["total"] == 0                        # los dos filtros a la vez: ninguna regla tiene puerto de entrada y a la vez esa IP
 
 
 def test_filtrar_por_app_deduce_el_cookie_de_ovs_de_los_flujos_de_esa_app(servidor):

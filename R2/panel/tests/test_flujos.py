@@ -89,6 +89,10 @@ def test_las_tablas_de_rol_dicen_de_que_rol_son():
 
 
 def test_lo_que_no_esta_en_el_catalogo_lo_dice_en_vez_de_inventar():
+    assert fl.explicar(0, 40001, "", {"in_port": "1", "eth_src": "fa:16:3e:b6:96:08"}) == fl.SESION_8021X
+    for p in ("2", "3"):                                                                                    # troncales de acc-1: puerto y EtherType, sin MAC
+        e = fl.explicar(0, 40001, "org.campus.r2", {"in_port": p, "eth_type": "0x0800"})
+        assert e == fl.PUERTO_DE_CONFIANZA and "802.1X" not in e
     assert fl.explicar(0, 12345).startswith("Sin descripción") and fl.explicar(0, 1).startswith("Sin descripción")        # el 1 de la tabla 0 no es el descarte de la 60
 
 
@@ -217,8 +221,8 @@ def test_varias_tablas_se_recorren_en_un_bucle_y_la_app_se_filtra_por_cookie_si_
 
 def test_el_comando_de_traza_aparece_con_un_puerto_de_entrada_y_un_destino():
     t = fl.comandos_ovs({"in_port": "1", "eth_src": "fa:16:3e:71:08:66", "eth_dst": GW, "ip_src": "10.0.2.100", "ip_dst": "10.0.0.10", "tcp_dst": "8001"})["traza"]
-    assert t == "sudo ovs-appctl ofproto/trace br0 'in_port=1,dl_src=fa:16:3e:71:08:66,dl_dst=02:00:5E:00:00:FE,tcp,nw_src=10.0.2.100,nw_dst=10.0.0.10,tcp_dst=8001'"
-    assert fl.comandos_ovs({"in_port": "1", "ip_dst_cubre": "10.0.2.77"})["traza"].endswith("nw_dst=10.0.2.77'")
+    assert t == "sudo ovs-appctl ofproto/trace br0 'in_port=1,dl_src=fa:16:3e:71:08:66,dl_dst=02:00:5E:00:00:FE,tcp,nw_src=10.0.2.100,nw_dst=10.0.0.10,tcp_dst=8001,nw_ttl=64'"
+    assert fl.comandos_ovs({"in_port": "1", "ip_dst_cubre": "10.0.2.77"})["traza"].endswith("nw_dst=10.0.2.77,nw_ttl=64'")
     assert fl.comandos_ovs({"ip_dst": "10.0.0.10"})["traza"] is None
     assert any("in_port" in n for n in fl.comandos_ovs({"ip_dst_cubre": "10.0.2.77"})["notas"])
 

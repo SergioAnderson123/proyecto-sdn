@@ -92,6 +92,7 @@ Registro del servicio: `journalctl -u panel-red` en el `server`.
 | 24-nov 03:50 | Comparación política contra instalado | **0 diferencias** en los 5 switches (39, 39, 40, 7 y 7 flujos) |
 | 24-nov 04:10 | Prueba A: comando generado frente al switch real | mismos 6 flujos y mismos contadores |
 | 24-nov 04:29 | Despliegue de los comandos con `grep` y su explicación | el panel real sirve el comando y 6 partes explicadas |
+| 24-nov | Prueba B: dos `ofproto/trace` en sw-acc-1 | **8101** → sesión → tabla 10 (30000) → tabla 60 (prio 120) → `output:2`, TTL 64→63; **8102** → tabla 10 prio 0 → `drop`. Coincide con lo predicho |
 
 ### Lo que enseñó la red real (y las pruebas con datos simulados no habían visto)
 
@@ -100,6 +101,9 @@ Registro del servicio: `journalctl -u panel-red` en el `server`.
 3. Lo desplegado por el `68` va **compacto** y el repo con sangría: los archivos se comparan por contenido.
 4. Los flujos del vigilante se instalan con la app **`r2.proactivo`**, y los **flujos de sesión** del mapper con `org.onosproject.rest` (REST sin app). Por eso filtrar por «campus.r2» no los muestra, y la comparación de la política los excluye a propósito.
 5. El mando de los switches estuvo en **ctrl-3**, que no sirve 802.1X: eso motivó el aviso `MAESTRO_INVALIDO`.
+6. La prioridad 40001 de la tabla 0 la comparten **dos reglas distintas**: la sesión 802.1X (puerto + MAC de origen, instalada por `onos.rest`) y el puerto de confianza de una troncal (puerto + EtherType, instalada por `campus.r2`). El panel las explica por separado según tengan o no `eth_src`.
+7. `ofproto/trace` simula un paquete con **TTL 0** si no se le da otro: la regla «decrementar TTL» lo manda al controlador y la traza no llega a `output`. El generador añade `nw_ttl=64`.
+8. `dump-flows` con un filtro **más específico** que la regla (por ejemplo MAC destino e IPs contra la sesión de la tabla 0) no la muestra; para saber qué regla atrapa un paquete se usa la traza.
 
 ## 8. Decisiones tomadas
 
@@ -114,7 +118,8 @@ Registro del servicio: `journalctl -u panel-red` en el `server`.
 | Pendiente | Nota |
 |---|---|
 | El rol **`superadmin`** en la red real (P11) | sin él, el panel solo se ve por el túnel |
-| **Pruebas en curso:** las trazas de `ofproto/trace` frente al switch (prueba B) y la **caída de un enlace** con el panel abierto (`80_caida_cable.yml`) | no se han hecho |
+| **Prueba C:** la **caída de un enlace** con el panel abierto (`80_caida_cable.yml`) | no se ha hecho (la prueba B ya está, ver la sección 7) |
+| Aviso en Flujos cuando un filtro mezcla campos de varias tablas y no da nada | propuesto |
 | `policy.local.yaml` solo existe en la carpeta de ctrl-1 | falta comprobar de dónde lee cada réplica del mapper (riesgo de políticas distintas) |
 | `/events` entre réplicas del mapper | falta comprobar que dos réplicas den lo mismo |
 | **Reparación manual** de una vista de ONOS desigual (fase 3) y la edición | solo diseño |
