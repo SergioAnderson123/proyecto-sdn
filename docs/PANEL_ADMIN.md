@@ -94,6 +94,24 @@ Registro del servicio: `journalctl -u panel-red` en el `server`.
 | 24-nov 04:29 | Despliegue de los comandos con `grep` y su explicación | el panel real sirve el comando y 6 partes explicadas |
 | 24-nov | Prueba B: dos `ofproto/trace` en sw-acc-1 | **8101** → sesión → tabla 10 (30000) → tabla 60 (prio 120) → `output:2`, TTL 64→63; **8102** → tabla 10 prio 0 → `drop`. Coincide con lo predicho |
 
+| 24-nov 05:21 | Prueba C: caída de `ens5` de acc-1 (puerto 2, cable a core-1) durante 60 s con `80_caida_cable.yml`, panel abierto y muestreado cada 6 s | Ver la tabla de abajo: 3 s sin servicio al caer, 1 s al volver, el panel lo vio todo |
+
+Línea de tiempo de la prueba C (hora UTC; bajada 05:21:50, subida 05:22:51):
+
+| Hora | Vigilante / red | Panel (muestreo de 6 s) | h1 (`nc` al 8101) |
+|---|---|---|---|
+| 05:21:50 | cae el cable | — | — |
+| 05:21:51 | `CAMBIO DETECTADO` (1 s después), espera corta de 2 s por ser una caída | — | `SIN_CAMINO` |
+| 05:21:54 | `APLICADO` | — | vuelve `OK` (≈ 3 s sin servicio) |
+| 05:21:59 | — | cable `caido`, aviso `CABLE_CAIDO`, regla 120 de acc-1 pasa de `salida 2` a **`salida 3`** (regla nueva: el contador empieza en 7) | `OK` |
+| 05:22:51 | sube el cable | — | — |
+| 05:22:52 | `CAMBIO DETECTADO`, espera normal de **15 s** (no es una caída) | — | `OK` |
+| 05:22:59 | — | cable `arbol`; aviso `VIGILANTE_ATENCION` mientras espera | `OK` |
+| 05:23:07 | `APLICADO` (vuelve a la ruta por el puerto 2) | — | 1 s `SIN_CAMINO` a las 05:23:08 |
+| 05:23:11 | — | regla 120 de nuevo `salida 2`; el aviso `VIGILANTE_ATENCION` se va | `OK` |
+
+Resultado: recuperación a la caída en ≈ 3 s, sin intervención; **al volver el cable se pierde ≈ 1 s más** al cambiar de ruta (el vigilante espera 15 s para no rebotar). 142 pruebas de h1: 139 `OK`, 3 `SIN_CAMINO`. La sesión 802.1X de h1 no se tocó. El panel mostró cable, aviso, regla y eventos coherentes con el registro del vigilante; vio la caída en ≤ 9 s (ronda de 10 s + caché de 10 s de los flujos). Durante la prueba apareció tres veces `FUENTE_CAIDA: mapper /sessions TimeoutError`, que se fue sola cada vez y ya salía antes de la caída: es un problema aparte (ver la sección 9).
+
 ### Lo que enseñó la red real (y las pruebas con datos simulados no habían visto)
 
 1. ONOS devuelve los criterios del selector **en otro orden** que el instalado: el panel los ordena siempre igual.
@@ -118,7 +136,7 @@ Registro del servicio: `journalctl -u panel-red` en el `server`.
 | Pendiente | Nota |
 |---|---|
 | El rol **`superadmin`** en la red real (P11) | sin él, el panel solo se ve por el túnel |
-| **Prueba C:** la **caída de un enlace** con el panel abierto (`80_caida_cable.yml`) | no se ha hecho (la prueba B ya está, ver la sección 7) |
+| `FUENTE_CAIDA: mapper /sessions TimeoutError` intermitente (varias veces por hora, se va sola) | sin causa conocida; sospecha: carga o disco lento de ctrl-1/ctrl-2 (ver `onos-atasco-y-replicas`). No afecta a las pruebas de red |
 | Aviso en Flujos cuando un filtro mezcla campos de varias tablas y no da nada | propuesto |
 | `policy.local.yaml` solo existe en la carpeta de ctrl-1 | falta comprobar de dónde lee cada réplica del mapper (riesgo de políticas distintas) |
 | `/events` entre réplicas del mapper | falta comprobar que dos réplicas den lo mismo |
