@@ -35,6 +35,23 @@ def test_parsear_bloqueos_vacio():
     assert server.parsear_bloqueos(None) == []
 
 
+def test_linea_bloqueo_log_reconoce_el_formato_del_integrador():
+    """Es la unica forma de saber que una alerta SI termino en bloqueo (classify_alert no deja rastro cuando
+    solo registra): el formato exacto lo escribe registrar_incidente en R5/codigo/integrador.py."""
+    linea = ("2026-11-26 21:57:07,123 INFO BLOQUEO 203.0.113.103 en switch-borde, sw-core-1, sw-core-2 "
+             "(LOCAL Port scan SYN) flow=51791395911384578 lectura->201=12.3 ms")
+    m = server.LINEA_BLOQUEO_LOG.search(linea)
+    assert m is not None
+    assert m["ip"] == "203.0.113.103"
+    assert m["switches"] == "switch-borde, sw-core-1, sw-core-2"
+    assert m["firma"] == "LOCAL Port scan SYN"
+    assert float(m["ms"]) == 12.3
+
+
+def test_linea_bloqueo_log_no_reconoce_una_alerta_cualquiera():
+    assert server.LINEA_BLOQUEO_LOG.search("2026-11-26 21:57:07,123 INFO Integrador arrancando") is None
+
+
 def test_ejecutar_desbloqueo_sin_ips_validas_no_intenta_ssh():
     """Si la lista viene vacia o con algo que no es una IP, no debe intentar conectarse a ningun sensor (rapido,
     sin red): es la defensa de que el tablero solo desbloquea IP que ya conoce, nunca texto libre."""

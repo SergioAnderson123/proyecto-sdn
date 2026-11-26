@@ -57,6 +57,11 @@ de `R5/deploy`).
 - Botón "Desbloquear todo" (y "Quitar" por fila) en la tabla de bloqueos: pide confirmación antes
   de ejecutar, y manda `r5ctl desbloquear <ip>` por SSH a un sensor. Solo actúa sobre IP que el
   tablero ya tiene en su tabla; una IP que no esté ahí se rechaza (HTTP 400) sin tocar nada.
+- **Distingue "bloquear" de "solo registrar".** El integrador solo deja un rastro en su log cuando
+  de verdad bloquea (no cuando una alerta queda por debajo del umbral, en la lista blanca o
+  suplantada): el tablero escucha ese log aparte y, cuando una alerta termina en bloqueo, le sigue
+  una línea verde `✓ BLOQUEADA <ip> en <switches> — <firma> (<ms> ms)` en la misma columna. Una
+  alerta sin esa línea después fue "solo registrada".
 
 ## Si el punto parpadea entre verde y rojo
 

@@ -178,6 +178,50 @@ def hilo_alertas(sensor, ip):
         time.sleep(espera)
 
 
+# -------------------------------------------------------------------------------------------------- bloquear vs solo registrar
+# El integrador SOLO deja un rastro en su log cuando de verdad bloquea (registrar_incidente); una alerta "solo
+# registrada" (severidad > MAX_SEVERITY) no aparece en ningun log. Por eso la unica forma fiel de distinguirlas no
+# es reimplementar el umbral de severidad del lado del tablero (podria desincronizarse de MAX_SEVERITY, la lista
+# blanca o origen_suplantado), sino escuchar tambien esta linea del log y marcarla en vivo junto a las alertas.
+LINEA_BLOQUEO_LOG = re.compile(r"BLOQUEO (?P<ip>\S+) en (?P<switches>.+?) \((?P<firma>[^)]*)\) flow=\S+ lectura->201=(?P<ms>[\d.]+) ms")
+
+
+def hilo_bloqueo_log(sensor, ip):
+    """Conexion SSH persistente al log del integrador: reenvia cada linea BLOQUEO (no toca el punto verde/rojo,
+    que refleja solo la conexion de alertas de hilo_alertas)."""
+    espera = 0.0
+    while True:
+        try:
+            chk = subprocess.run(comando_ssh(ip, "echo OK"), capture_output=True, text=True, timeout=8, env=_entorno())
+        except (OSError, subprocess.TimeoutExpired) as e:
+            chk = None
+            print(f"[{sensor}] log BLOQUEO: no se pudo verificar la conexion: {e}")
+        if not chk or chk.returncode != 0 or "OK" not in (chk.stdout or ""):
+            espera = siguiente_espera(espera)
+            time.sleep(espera)
+            continue
+        print(f"[{sensor}] conectado, escuchando el log de BLOQUEO")
+        espera = 0.0
+        try:
+            p = subprocess.Popen(comando_ssh(ip, comando_raiz("docker logs -f --since 0s r5-integrador 2>&1 | grep --line-buffered BLOQUEO")),
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                  bufsize=1, env=_entorno())
+            p.stdin.write(CLAVE + "\n")
+            p.stdin.flush()
+            p.stdin.close()
+            for linea in p.stdout:
+                m = LINEA_BLOQUEO_LOG.search(linea)
+                if m:
+                    difundir("bloqueo_log", {"sensor": sensor, "hora": time.strftime("%H:%M:%S"), "ip": m["ip"],
+                                              "switches": m["switches"], "firma": m["firma"], "ms": float(m["ms"])})
+            p.wait()
+        except OSError as e:
+            print(f"[{sensor}] log BLOQUEO: no se pudo lanzar ssh: {e}")
+        print(f"[{sensor}] log de BLOQUEO se cerro")
+        espera = siguiente_espera(espera)
+        time.sleep(espera)
+
+
 # -------------------------------------------------------------------------------------------------- bloqueos (DROP activos)
 LINEA_BLOQUEO = re.compile(r"^(?P<ip>\d{1,3}(?:\.\d{1,3}){3})\s+(?P<switch>\S+)\s+(?P<prioridad>\d+)\s+(?P<paquetes>\d+)\s+(?P<vida>\d+)\s*s\s+(?P<vence>.+)$")
 
@@ -261,6 +305,7 @@ INDEX_HTML = """<!doctype html>
   .columna{{height:60vh;overflow-y:auto;font-family:monospace;font-size:.82rem}}
   .columna div{{border-bottom:1px solid var(--tblr-border-color);padding:.15rem 0}}
   .sev1{{color:#d63939;font-weight:bold}} .sev2{{color:#f76707}}
+  .bloqueada{{color:#2fb344;background:#e9f7ec;padding:.1rem .3rem;border-radius:.25rem;display:inline-block}}
   .punto{{width:.6rem;height:.6rem;border-radius:50%;display:inline-block;margin-right:.35rem}}
   .arriba{{background:#2fb344}} .abajo{{background:#d63939}}
 </style>
@@ -313,6 +358,10 @@ es.addEventListener("alerta", e => {{
 es.addEventListener("estado", e => {{
   const s = JSON.parse(e.data);
   document.getElementById("p-" + s.sensor).className = "punto " + (s.conectado ? "arriba" : "abajo");
+}});
+es.addEventListener("bloqueo_log", e => {{
+  const b = JSON.parse(e.data);
+  agregar("a-" + b.sensor, `<strong class="bloqueada">&#10003; BLOQUEADA ${{b.ip}} en ${{b.switches}} &mdash; ${{b.firma}} (${{b.ms.toFixed(1)}} ms)</strong>`);
 }});
 let ultimasIPs = [];
 es.addEventListener("bloqueos", e => {{
@@ -438,6 +487,7 @@ def main():
         print("AVISO: falta sshpass (sudo apt-get install -y sshpass); se intentara con claves SSH.")
     for sensor, ip in SENSORES.items():
         threading.Thread(target=hilo_alertas, args=(sensor, ip), daemon=True).start()
+        threading.Thread(target=hilo_bloqueo_log, args=(sensor, ip), daemon=True).start()
     threading.Thread(target=hilo_bloqueos, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", PUERTO), Handler)
     print(f"Tablero R5 (solo lectura) en http://<IP de switch-borde>:{PUERTO}/   (Ctrl+C para apagarlo)")
