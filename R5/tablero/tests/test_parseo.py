@@ -35,6 +35,19 @@ def test_parsear_bloqueos_vacio():
     assert server.parsear_bloqueos(None) == []
 
 
+def test_ejecutar_desbloqueo_sin_ips_validas_no_intenta_ssh():
+    """Si la lista viene vacia o con algo que no es una IP, no debe intentar conectarse a ningun sensor (rapido,
+    sin red): es la defensa de que el tablero solo desbloquea IP que ya conoce, nunca texto libre."""
+    assert server.ejecutar_desbloqueo([]) == (True, "nada que desbloquear")
+    assert server.ejecutar_desbloqueo(["no es una ip", "; rm -rf /"]) == (True, "nada que desbloquear")
+
+
+def test_ip_valida_filtra_lo_que_no_es_una_ip():
+    assert server.IP_VALIDA.match("203.0.113.103")
+    assert not server.IP_VALIDA.match("203.0.113.103; echo hola")
+    assert not server.IP_VALIDA.match("no-es-ip")
+
+
 def test_siguiente_espera_crece_acotada():
     e = 0.0
     for _ in range(10):

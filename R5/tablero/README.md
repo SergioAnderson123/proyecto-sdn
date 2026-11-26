@@ -1,11 +1,13 @@
-# Tablero en vivo de R5 (solo lectura)
+# Tablero en vivo de R5
 
 Página única que reúne lo que hoy se mira en varias terminales SSH: las alertas de Suricata de
 `node-sec-1` y `node-sec-2` en dos columnas, y la tabla de `r5ctl bloqueos` (DROP activos en los
 tres switches, con sus paquetes descartados), todo en vivo por Server-Sent Events.
 
-**Solo lee.** No bloquea, no desbloquea ni instala ninguna regla. Igual filosofía que
-`R5/codigo/exporter.py`.
+**Solo lee, salvo una única acción de escritura: desbloquear.** No instala ninguna regla nunca. El
+botón "Desbloquear todo" (o "Quitar" por fila) retira bloqueos, y solo acepta IP que el propio
+tablero ya vio en la tabla: nunca una IP que escriba el navegador. Pensado para no tener que salir
+a una terminal SSH solo para limpiar entre pruebas durante la demo.
 
 ## Dónde corre y por qué
 
@@ -52,6 +54,9 @@ de `R5/deploy`).
 - **Tabla de bloqueos activos**: IP, switch, prioridad, paquetes descartados, vida y cuándo vence.
   Sale vacía cuando no hay ningún DROP de R5 (estado inicial).
 - Botón "Limpiar" por columna (solo limpia la pantalla, no toca nada en las VM).
+- Botón "Desbloquear todo" (y "Quitar" por fila) en la tabla de bloqueos: pide confirmación antes
+  de ejecutar, y manda `r5ctl desbloquear <ip>` por SSH a un sensor. Solo actúa sobre IP que el
+  tablero ya tiene en su tabla; una IP que no esté ahí se rechaza (HTTP 400) sin tocar nada.
 
 ## Si el punto parpadea entre verde y rojo
 

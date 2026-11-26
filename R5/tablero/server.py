@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Tablero en vivo de R5: una página que reúne, en un solo lugar, lo que hoy se mira en varias terminales SSH.
 
-Corre EN switch-borde (nunca en un nodo del clúster ONOS: ver docs/DISENO_TABLERO.md). Es de SOLO LECTURA, igual que
-R5/codigo/exporter.py: no bloquea, no desbloquea ni instala nada. Dos fuentes, ambas por SSH a los sensores (ninguna
-necesita acceso a OVS en switch-borde):
+Corre EN switch-borde (nunca en un nodo del clúster ONOS: ver docs/DISENO_TABLERO.md). Es de solo lectura salvo UNA
+acción explícita de escritura: el botón "Desbloquear todo" (o "Quitar" por fila), que solo retira bloqueos que el
+propio tablero ya vio en la tabla (nunca instala nada nuevo ni acepta una IP que no haya visto antes). Dos fuentes
+de lectura, ambas por SSH a los sensores (ninguna necesita acceso a OVS en switch-borde):
 
   * eve-alerts.json de Suricata en node-sec-1 y node-sec-2 (`docker exec r5-suricata tail -F ...`), en vivo, una
     conexión SSH persistente por sensor con reconexión automática.
@@ -35,6 +36,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
@@ -214,6 +216,39 @@ def hilo_bloqueos():
         time.sleep(INTERVALO_BLOQUEOS)
 
 
+# -------------------------------------------------------------------------------------------------- desbloquear (UNICA accion de escritura)
+IP_VALIDA = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
+
+def ejecutar_desbloqueo(ips):
+    """Desbloquea cada IP (una llamada a `r5ctl desbloquear` por IP, en una sola sesion SSH). `ips` debe salir
+    SIEMPRE de `_ultimo_bloqueos` (lo que el propio tablero ya vio bloqueado), nunca de texto libre del navegador:
+    es la unica accion de escritura del tablero, y solo retira bloqueos existentes, nunca instala nada nuevo.
+    Devuelve (ok, salida)."""
+    ips = [ip for ip in ips if IP_VALIDA.match(ip)]
+    if not ips:
+        return True, "nada que desbloquear"
+    cmd = "; ".join(f"docker exec r5-integrador r5ctl desbloquear {ip}" for ip in ips)
+    for ip_sensor in SENSORES.values():
+        try:
+            p = subprocess.run(comando_ssh(ip_sensor, comando_raiz(cmd)), input=CLAVE + "\n",
+                                capture_output=True, text=True, timeout=15, env=_entorno())
+        except (OSError, subprocess.TimeoutExpired) as e:
+            print(f"[desbloquear] {ip_sensor}: {e}")
+            continue
+        if p.returncode == 0:
+            return True, p.stdout
+        print(f"[desbloquear] {ip_sensor}: codigo {p.returncode}: {(p.stderr or '').strip()[-300:]}")
+    return False, "no se pudo conectar a ningun sensor"
+
+
+def refrescar_bloqueos():
+    """Pide el estado a ONOS de una vez (no esperar los hasta INTERVALO_BLOQUEOS s del sondeo periodico) y lo difunde."""
+    filas = consultar_bloqueos()
+    if filas is not None:
+        difundir("bloqueos", {"total": len(filas), "filas": filas})
+
+
 # -------------------------------------------------------------------------------------------------- pagina y servidor HTTP
 INDEX_HTML = """<!doctype html>
 <html lang="es" data-bs-theme="light">
@@ -250,10 +285,11 @@ INDEX_HTML = """<!doctype html>
   </div>
   <div class="card mt-3">
     <div class="card-header"><strong>Bloqueos activos (DROP en ONOS)</strong>
-      <span class="text-secondary" id="b-total"></span></div>
+      <span class="text-secondary" id="b-total"></span>
+      <button class="btn btn-sm btn-outline-danger float-end" onclick="desbloquearTodo()">Desbloquear todo</button></div>
     <div class="card-body">
       <table class="table table-sm table-vcenter">
-        <thead><tr><th>IP bloqueada</th><th>switch</th><th>prioridad</th><th>paquetes</th><th>vida</th><th>vence</th></tr></thead>
+        <thead><tr><th>IP bloqueada</th><th>switch</th><th>prioridad</th><th>paquetes</th><th>vida</th><th>vence</th><th></th></tr></thead>
         <tbody id="b-filas"></tbody>
       </table>
     </div>
@@ -278,13 +314,34 @@ es.addEventListener("estado", e => {{
   const s = JSON.parse(e.data);
   document.getElementById("p-" + s.sensor).className = "punto " + (s.conectado ? "arriba" : "abajo");
 }});
+let ultimasIPs = [];
 es.addEventListener("bloqueos", e => {{
   const b = JSON.parse(e.data);
   document.getElementById("b-total").textContent = b.total + " IP bloqueada(s)";
+  ultimasIPs = [...new Set(b.filas.map(f => f.ip))];
   document.getElementById("b-filas").innerHTML = b.filas.map(f =>
-    `<tr><td>${{f.ip}}</td><td>${{f.switch}}</td><td>${{f.prioridad}}</td><td>${{f.paquetes}}</td><td>${{f.vida_s}} s</td><td>${{f.vence}}</td></tr>`
+    `<tr><td>${{f.ip}}</td><td>${{f.switch}}</td><td>${{f.prioridad}}</td><td>${{f.paquetes}}</td><td>${{f.vida_s}} s</td><td>${{f.vence}}</td>` +
+    `<td><button class="btn btn-sm btn-outline-secondary" onclick="desbloquearIP('${{f.ip}}')">Quitar</button></td></tr>`
   ).join("");
 }});
+
+async function accionDesbloqueo(url, confirmar) {{
+  if (!confirm(confirmar)) return;
+  try {{
+    const r = await fetch(url, {{method: "POST"}});
+    const j = await r.json();
+    if (!j.ok) alert("No se pudo desbloquear: " + (j.error || j.salida || "sin detalle"));
+  }} catch (e) {{
+    alert("No se pudo contactar al tablero: " + e);
+  }}
+}}
+function desbloquearTodo() {{
+  if (ultimasIPs.length === 0) {{ alert("No hay ninguna IP bloqueada ahora mismo."); return; }}
+  accionDesbloqueo("/accion/desbloquear-todo", `Esto desbloquea las ${{ultimasIPs.length}} IP de la tabla ahora mismo. Continuar?`);
+}}
+function desbloquearIP(ip) {{
+  accionDesbloqueo("/accion/desbloquear/" + encodeURIComponent(ip), `Desbloquear ${{ip}} ahora mismo?`);
+}}
 </script>
 </body>
 </html>
@@ -311,6 +368,32 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("Content-Type", "text/plain"); self.end_headers(); self.wfile.write(b"ok")
         else:
             self.send_response(404); self.end_headers()
+
+    def do_POST(self):
+        """UNICA accion de escritura del tablero: desbloquear. Nunca instala nada nuevo; las IP salen SIEMPRE de
+        lo que el propio tablero ya vio bloqueado (_ultimo_bloqueos), nunca de lo que mande el navegador."""
+        conocidas = {f["ip"] for f in (_ultimo_bloqueos or {}).get("filas", [])}
+        if self.path == "/accion/desbloquear-todo":
+            ok, salida = ejecutar_desbloqueo(sorted(conocidas))
+        elif self.path.startswith("/accion/desbloquear/"):
+            ip = urllib.parse.unquote(self.path[len("/accion/desbloquear/"):])
+            if ip not in conocidas:
+                self._json(400, {"ok": False, "error": "esa IP no aparece en los bloqueos conocidos del tablero"})
+                return
+            ok, salida = ejecutar_desbloqueo([ip])
+        else:
+            self.send_response(404); self.end_headers()
+            return
+        refrescar_bloqueos()        # para que el navegador vea el resultado de inmediato, sin esperar el sondeo periodico
+        self._json(200 if ok else 502, {"ok": ok, "salida": salida[-2000:]})
+
+    def _json(self, codigo, datos):
+        cuerpo = json.dumps(datos, ensure_ascii=False).encode("utf-8")
+        self.send_response(codigo)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(cuerpo)))
+        self.end_headers()
+        self.wfile.write(cuerpo)
 
     def _estatico(self, nombre):
         ruta = os.path.normpath(os.path.join(STATIC_PORTAL, nombre))
