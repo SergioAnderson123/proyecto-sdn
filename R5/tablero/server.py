@@ -139,10 +139,9 @@ def hilo_alertas(sensor, ip):
                                          "src": a["src"], "dst": a["dst"], "sev": a["sev"], "firma": a["firma"]})
             p.wait()
             err = (p.stderr.read() or "").strip()
-            if err:
-                print(f"[{sensor}] ssh/docker (stderr): {err.splitlines()[-1]}")
-            if not err and p.returncode != 0:
-                print(f"[{sensor}] la conexion se cerro sola (codigo {p.returncode}), sin mensaje de error")
+            # SIEMPRE se avisa que la conexion de este sensor se cerro, pase lo que pase (antes solo se avisaba si
+            # habia un error; si el proceso remoto termina LIMPIO (codigo 0, sin nada en stderr) no se veia nada).
+            print(f"[{sensor}] el tail se cerro (codigo {p.returncode})" + (f": {err.splitlines()[-1]}" if err else " (sin stderr)"))
         except OSError as e:
             print(f"[{sensor}] no se pudo lanzar ssh: {e}")
         difundir("estado", {"sensor": sensor, "conectado": False})
