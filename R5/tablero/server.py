@@ -55,11 +55,37 @@ SSHPASS = shutil.which("sshpass")
 # -------------------------------------------------------------------------------------------------- difusion SSE
 _clientes = []
 _lock_clientes = threading.Lock()
+_ultimo_estado = {}        # sensor -> ultimo evento "estado" (para que un navegador que recien conecta sepa el punto verde/rojo YA mismo)
+_ultimo_bloqueos = None    # ultimo evento "bloqueos" (idem; si no se espera a la proxima vuelta del sondeo, hasta 3 s en blanco)
+
+
+def _formatear(tipo, datos):
+    return f"event: {tipo}\ndata: {json.dumps(datos, ensure_ascii=False)}\n\n"
+
+
+def conectar_cliente():
+    """Registra una cola nueva y le manda de entrada el ultimo estado/bloqueos conocido (ver `difundir`). Devuelve
+    la cola; quien la use debe sacarla de `_clientes` al desconectarse (ver `_sse`)."""
+    q = queue.Queue(maxsize=500)
+    with _lock_clientes:
+        _clientes.append(q)
+        for estado in _ultimo_estado.values():
+            q.put_nowait(_formatear("estado", estado))
+        if _ultimo_bloqueos is not None:
+            q.put_nowait(_formatear("bloqueos", _ultimo_bloqueos))
+    return q
 
 
 def difundir(tipo, datos):
-    """Manda un evento SSE a todos los navegadores conectados ahora mismo (a los que lleguen despues no, son solo en vivo)."""
-    msg = f"event: {tipo}\ndata: {json.dumps(datos, ensure_ascii=False)}\n\n"
+    """Manda un evento SSE a todos los navegadores conectados ahora mismo, y recuerda el ultimo "estado"/"bloqueos"
+    para dárselo de entrada a quien se conecte despues (si no, un cambio que ya paso nunca le llega: ve el punto
+    rojo para siempre aunque el sensor este bien, porque el aviso de "conectado" se manda una sola vez)."""
+    global _ultimo_bloqueos
+    if tipo == "estado":
+        _ultimo_estado[datos["sensor"]] = datos
+    elif tipo == "bloqueos":
+        _ultimo_bloqueos = datos
+    msg = _formatear(tipo, datos)
     with _lock_clientes:
         muertos = []
         for q in _clientes:
@@ -305,9 +331,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
-        q = queue.Queue(maxsize=500)
-        with _lock_clientes:
-            _clientes.append(q)
+        q = conectar_cliente()
         try:
             while True:
                 try:
