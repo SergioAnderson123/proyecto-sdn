@@ -120,6 +120,7 @@ def hilo_alertas(sensor, ip):
             time.sleep(espera)
             continue
         difundir("estado", {"sensor": sensor, "conectado": True})
+        print(f"[{sensor}] conectado, escuchando el eve-alerts.json")
         espera = 0.0
         try:
             p = subprocess.Popen(comando_ssh(ip, comando_raiz(f"docker exec r5-suricata tail -n 0 -F {EVE}")),
