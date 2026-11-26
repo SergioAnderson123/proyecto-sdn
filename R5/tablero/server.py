@@ -29,6 +29,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -78,6 +79,13 @@ def comando_ssh(ip, remoto):
     return (["sshpass", "-e"] + base) if SSHPASS else base
 
 
+def comando_raiz(remoto):
+    """`docker exec` falla para el usuario ubuntu sin sudo ("permission denied... docker.sock"): se envuelve el
+    comando remoto en sudo, igual que repeticiones.py (Remoto.correr). La contrasena se manda por stdin, nunca
+    como argumento (no queda en los logs de auditoria ni en `ps`)."""
+    return f"sudo -S -p '' bash -c {shlex.quote(remoto)}"
+
+
 def _entorno():
     env = dict(os.environ)
     if SSHPASS:
@@ -92,21 +100,44 @@ def siguiente_espera(espera):
 
 # -------------------------------------------------------------------------------------------------- alertas en vivo
 def hilo_alertas(sensor, ip):
-    """Conexion SSH persistente: reenvia cada alerta nueva del eve-alerts.json de `sensor`, en cuanto se escribe."""
+    """Conexion SSH persistente: reenvia cada alerta nueva del eve-alerts.json de `sensor`, en cuanto se escribe.
+
+    El punto verde/rojo NO depende de que llegue una alerta (si no hay ataque, `tail -F` no imprime nada): antes
+    de abrir el stream se hace una comprobacion rapida (`echo OK`) para saber si el SSH funciona. El error real
+    de ssh/docker (stderr) se imprime en la consola del tablero, para poder diagnosticar un parpadeo rojo/verde."""
     espera = 0.0
     while True:
         try:
-            p = subprocess.Popen(comando_ssh(ip, f"docker exec r5-suricata tail -n 0 -F {EVE}"),
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1, env=_entorno())
-            difundir("estado", {"sensor": sensor, "conectado": True})
-            espera = 0.0
+            chk = subprocess.run(comando_ssh(ip, "echo OK"), capture_output=True, text=True, timeout=8, env=_entorno())
+        except (OSError, subprocess.TimeoutExpired) as e:
+            chk = None
+            print(f"[{sensor}] no se pudo verificar la conexion: {e}")
+        if not chk or chk.returncode != 0 or "OK" not in (chk.stdout or ""):
+            if chk and (chk.stderr or "").strip():
+                print(f"[{sensor}] ssh: {chk.stderr.strip().splitlines()[-1]}")
+            difundir("estado", {"sensor": sensor, "conectado": False})
+            espera = siguiente_espera(espera)
+            time.sleep(espera)
+            continue
+        difundir("estado", {"sensor": sensor, "conectado": True})
+        espera = 0.0
+        try:
+            p = subprocess.Popen(comando_ssh(ip, comando_raiz(f"docker exec r5-suricata tail -n 0 -F {EVE}")),
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                  bufsize=1, env=_entorno())
+            p.stdin.write(CLAVE + "\n")
+            p.stdin.flush()
+            p.stdin.close()
             for linea in p.stdout:
                 for a in lib.leer_alertas(linea):
                     difundir("alerta", {"sensor": sensor, "hora": time.strftime("%H:%M:%S", time.localtime(a["epoch"])),
                                          "src": a["src"], "dst": a["dst"], "sev": a["sev"], "firma": a["firma"]})
             p.wait()
-        except OSError:
-            pass
+            err = (p.stderr.read() or "").strip()
+            if err:
+                print(f"[{sensor}] ssh/docker: {err.splitlines()[-1]}")
+        except OSError as e:
+            print(f"[{sensor}] no se pudo lanzar ssh: {e}")
         difundir("estado", {"sensor": sensor, "conectado": False})
         espera = siguiente_espera(espera)
         time.sleep(espera)
@@ -131,12 +162,14 @@ def parsear_bloqueos(texto):
 def consultar_bloqueos():
     for ip in SENSORES.values():            # cualquier sensor sirve: ambos leen el mismo estado en ONOS
         try:
-            p = subprocess.run(comando_ssh(ip, "docker exec r5-integrador r5ctl bloqueos"),
-                                capture_output=True, text=True, timeout=10, env=_entorno())
+            p = subprocess.run(comando_ssh(ip, comando_raiz("docker exec r5-integrador r5ctl bloqueos")),
+                                input=CLAVE + "\n", capture_output=True, text=True, timeout=10, env=_entorno())
         except (OSError, subprocess.TimeoutExpired):
             continue
         if p.returncode == 0:
             return parsear_bloqueos(p.stdout)
+        if (p.stderr or "").strip():
+            print(f"[bloqueos] {ip}: {p.stderr.strip().splitlines()[-1]}")
     return None     # los dos sensores fallaron: no se difunde nada (se conserva lo ultimo que vio el navegador)
 
 

@@ -53,6 +53,13 @@ de `R5/deploy`).
   Sale vacía cuando no hay ningún DROP de R5 (estado inicial).
 - Botón "Limpiar" por columna (solo limpia la pantalla, no toca nada en las VM).
 
+## Si el punto parpadea entre verde y rojo
+
+Es que el usuario `ubuntu` no está en el grupo `docker`, así que `docker exec` sin `sudo` falla con
+`permission denied while trying to connect to the docker API`. El tablero ya envuelve sus comandos
+remotos en `sudo` (la contraseña va por stdin, nunca como argumento), así que si vuelve a parpadear,
+el error real queda impreso en la consola donde corre `server.py`.
+
 ## Pruebas
 
 `R5/tablero/tests/test_parseo.py` prueba, sin red ni VM, el parseo de `r5ctl bloqueos`, el backoff
