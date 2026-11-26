@@ -129,13 +129,20 @@ def hilo_alertas(sensor, ip):
             p.stdin.flush()
             p.stdin.close()
             for linea in p.stdout:
-                for a in lib.leer_alertas(linea):
+                alertas = lib.leer_alertas(linea)
+                if not alertas and linea.strip():
+                    # no parece una alerta de Suricata: puede ser el error de sudo/docker saliendo por stdout en vez
+                    # de stderr (o texto suelto). Se imprime tal cual para no perder la pista de un fallo silencioso.
+                    print(f"[{sensor}] (stdout, no es alerta) {linea.rstrip()}")
+                for a in alertas:
                     difundir("alerta", {"sensor": sensor, "hora": time.strftime("%H:%M:%S", time.localtime(a["epoch"])),
                                          "src": a["src"], "dst": a["dst"], "sev": a["sev"], "firma": a["firma"]})
             p.wait()
             err = (p.stderr.read() or "").strip()
             if err:
-                print(f"[{sensor}] ssh/docker: {err.splitlines()[-1]}")
+                print(f"[{sensor}] ssh/docker (stderr): {err.splitlines()[-1]}")
+            if not err and p.returncode != 0:
+                print(f"[{sensor}] la conexion se cerro sola (codigo {p.returncode}), sin mensaje de error")
         except OSError as e:
             print(f"[{sensor}] no se pudo lanzar ssh: {e}")
         difundir("estado", {"sensor": sensor, "conectado": False})
