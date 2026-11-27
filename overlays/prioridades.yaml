@@ -1,4 +1,4 @@
-# Mapa único de prioridades OpenFlow de R1, R2 y R5 (la verifica R5/deploy/tests/test_prioridades.py contra el código).
+# Mapa único de prioridades OpenFlow de R1, R2 y R5 (la verifica tests/test_prioridades.py contra el código).
 # Mayor número = se evalúa antes. Cada requerimiento solo usa su banda.
 r1:
   eapol: 50000          # EAPOL de un puerto con sesión -> controlador (Policy Mapper); sin esto la sesión (40001) se traga el logoff. ONOS AAA instala su propia regla a 40000

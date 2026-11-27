@@ -6,15 +6,15 @@
 #   ./regenerar.sh [dias]        dias de validez de todo (por defecto 365)
 #
 # Despues: reconstruir la imagen de RADIUS (docker compose build radius && docker compose up -d radius) y repartir los
-# certificados a los hosts (ansible-playbook ... hosts.yml). Las claves privadas conservan sus contrasenas de laboratorio.
+# certificados a los hosts. Las claves privadas conservan sus contrasenas de laboratorio.
 set -e
 export LC_ALL=C
 cd "$(dirname "$0")"
 DIAS="${1:-365}"
 PW_CA=whatever
-SUPP=../../../shared/mininet/supplicants/certs
+SUPP=../../../../tests/playground/supplicants/certs
 USUARIOS="profesor01:professor_password profesor02:professor_password alumno01:student_password alumno02:student_password alumno03:student_password support01:support_password"
-[ -f ca.cnf ] && [ -f server.cnf ] && [ -f client.cnf ] || { echo "Ejecutar desde R1/radius/raddb/certs (faltan los .cnf)"; exit 1; }
+[ -f ca.cnf ] && [ -f server.cnf ] && [ -f client.cnf ] || { echo "Ejecutar desde apps/radius/raddb/certs (faltan los .cnf)"; exit 1; }
 
 echo "[*] Borrando los certificados anteriores (se conservan dh, los .cnf, xpextensions y los README)"
 rm -f ./*.csr ./*.crt ./*.p12 ./*.der ./*.key ./*.pem ./index.txt* ./serial* ./ca.crl ./*.old ./.cnf_tmp

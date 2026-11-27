@@ -18,7 +18,7 @@ ou: devices
 
 # --------------------------------- Usuarios --------------------------------- #
 # Profesores: cuentas PERSONALES. Entran por el portal cautivo y, con su propio usuario y contrasena, suben de Alumno a Docente un
-# equipo que ya esta autenticado por 802.1X como Alumno (tabla `ascenso` de R2/policy/policy.yaml). Por eso NO llevan MAC, switch ni
+# equipo que ya esta autenticado por 802.1X como Alumno (tabla `ascenso` de overlays/r2-policy/policy.yaml). Por eso NO llevan MAC, switch ni
 # puerto (description, physicalDeliveryOfficeName, roomNumber): se mueven entre equipos y el atado al equipo lo lleva el certificado
 # del equipo (rol Alumno). Si se prueba su certificado por 802.1X en un host, `ldap-ubicacion.sh fijar profesor01` le pone esos tres
 # datos desde lo que ve ONOS (y `liberar` los quita). El rol JP (hibrido) no se usa: quien ejerce de JP entra con una cuenta de profesor.

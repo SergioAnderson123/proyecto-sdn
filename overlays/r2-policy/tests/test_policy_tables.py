@@ -1,4 +1,4 @@
-"""Pruebas de policy_tables.py (sin red ni ONOS). Ejecutar desde R2/policy:  python -m pytest tests -q"""
+"""Pruebas de policy_tables.py (sin red ni ONOS). Ejecutar desde overlays/r2-policy:  python -m pytest tests -q"""
 import os
 import sys
 

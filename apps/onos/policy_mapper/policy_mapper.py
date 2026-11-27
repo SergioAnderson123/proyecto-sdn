@@ -508,7 +508,7 @@ P_EAPOL_PUERTO = 50000   # sobre la sesion (40001), la lista negra (45000) y la 
 
 
 async def inyectar_eapol_en_puerto(client, dpid: str, port: str) -> None:
-    """Todo el EAPOL de un puerto con sesion sube al controlador (Prio 50000, mapa de R5/deploy/prioridades.yaml).
+    """Todo el EAPOL de un puerto con sesion sube al controlador (Prio 50000, mapa de overlays/prioridades.yaml).
 
     Sin esta regla, el flujo de sesion (40001: in_port + eth_src) captura TAMBIEN las tramas EAPOL del host ya autenticado y
     las manda a la tabla de rol, que las descarta: el EAPOL-Logoff y el EAPOL-Start de una reautenticacion nunca llegan a ONOS

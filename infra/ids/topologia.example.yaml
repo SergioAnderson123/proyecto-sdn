@@ -1,15 +1,15 @@
 # Topología de R5 en el slice de 14 VM (v4: control in-band, accesos con un solo uplink y espejo solo en los cores).
-# Copiar a R5/deploy/topologia.yaml y completar con los datos reales. Diagrama: docs/topologia-v4-14vms.drawio
-# topologia.yaml no se versiona (los deviceId y las MAC cambian en cada slice). Se valida con:  python3 R5/codigo/topologia.py R5/deploy/topologia.yaml
+# Copiar a infra/ids/topologia.yaml y completar con los datos reales. Diagrama: docs/topologia-v4-14vms.drawio
+# topologia.yaml no se versiona (los deviceId y las MAC cambian en cada slice). Se valida con:  python3 apps/ids/integrador/topologia.py infra/ids/topologia.yaml
 #
 # Todos los valores de ESTE ejemplo son ilustrativos. Cómo obtener los reales, en orden:
 #   1. Nodos ONOS y Policy Mapper: IP de nodo-ctrl-1, 2 y 3 en el segmento de control in-band (192.168.100.0/24), el enlace multipunto
 #      que une a los tres controladores con sw-core-1 y sw-core-2. Los accesos llegan a ONOS por su uplink al core, no por otra red.
 #   2. deviceId y nombres de interfaz de cada core:
-#        ONOS_URL=http://<IP-ONOS>:8181/onos/v1 ONOS_PASS=rocks python3 R5/lab/espejo.py --descubrir
+#        ONOS_URL=http://<IP-ONOS>:8181/onos/v1 ONOS_PASS=rocks python3 apps/ids/integrador/espejo.py --descubrir
 #      Se escriben NOMBRES de interfaz (ens5...), no números: el número de puerto OpenFlow se resuelve contra ONOS al instalar el
 #      espejo (si ONOS no entrega nombres de puerto, se pueden escribir los números).
-#   3. MAC de las NIC de espejo de cada sensor:       bash R5/deploy/ids/macs.sh      (en nodo-sec-1 y en nodo-sec-2)
+#   3. MAC de las NIC de espejo de cada sensor:       bash infra/ids/macs.sh      (en nodo-sec-1 y en nodo-sec-2)
 
 onos:
   urls:                                   # clúster de 3 nodos: el integrador usa el primero que responda y pasa al siguiente si uno cae

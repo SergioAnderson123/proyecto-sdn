@@ -22,7 +22,7 @@ ascenso_exigir_ubicacion: true
 
 # Cuarentena: todo host SIN sesión (un invitado antes de iniciar sesión, un IoT antes del MAB, un equipo que aún no autentica) recibe la
 # VLAN 99 y su tabla solo deja pasar ARP y TCP al portal cautivo. El DHCP no pasa por la tabla: la regla de la tabla 0 (prioridad 40500)
-# lo manda al controlador, donde lo atiende la app DHCP de ONOS (rango y tiempos: R1/deploy/.env.example). Al iniciar sesión (802.1X, portal
+# lo manda al controlador, donde lo atiende la app DHCP de ONOS (rango y tiempos: infra/ctrl/.env.example). Al iniciar sesión (802.1X, portal
 # o MAB) el flujo de sesión saca al host de la cuarentena. Quitar esta sección desactiva la cuarentena.
 cuarentena:
   tabla: 99

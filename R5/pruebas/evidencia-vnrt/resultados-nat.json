@@ -1,9 +1,0 @@
-{
-  "conexiones_legitimas": 40,
-  "alertas": 2,
-  "firmas": [
-    "LOCAL Port scan SYN"
-  ],
-  "bloqueado": true,
-  "http_despues": "sin respuesta"
-}
