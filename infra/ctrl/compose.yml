@@ -1,0 +1,90 @@
+# VM de control (ctrl-1, ctrl-2, ctrl-3): ONOS + OpenLDAP + Policy Mapper + FreeRADIUS.
+# UN SOLO compose, identico en los tres nodos. No hay "primario" ni "replica" a nivel de archivo:
+# LDAP es multi-master (simetrico), el cluster ONOS lo coordina Atomix/Raft, y las sesiones del Policy
+# Mapper se comparten por fuera (etcd). Lo que distingue a un nodo de otro (su propia IP, a que pares
+# sincroniza) sale de .env en tiempo de despliegue, no de un compose distinto.
+# Codigo y Dockerfile de policy_mapper y radius viven en apps/; la politica de R2 en overlays/r2-policy/.
+services:
+  onos:
+    image: onosproject/onos:2.7-latest
+    container_name: onos
+    hostname: onos
+    volumes:
+      - ./onos-shared:/root/shared-host
+    ports:
+      - "6653:6653"
+      - "8181:8181"
+      - "8101:8101"
+    networks:
+      - sdn
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+  ldap:
+    image: osixia/openldap:1.5.0
+    container_name: ldap
+    hostname: ldap
+    command: ["--copy-service"]
+    environment:
+      - LDAP_ORGANISATION=RedSDN
+      - LDAP_DOMAIN=example.org
+      - LDAP_ADMIN_PASSWORD=admin
+    volumes:
+      - ../../overlays/r1-ldap/ldif/custom:/container/service/slapd/assets/config/bootstrap/ldif/custom:ro
+      - ./ldap-conf:/etc/openldap/slapd.d
+      - ./ldap-data:/var/lib/openldap/openldap-data
+      - ./ldap-backups:/var/lib/openldap/openldap-backups
+    ports:
+      - "1389:389"
+      # - "1636:636"   # para TLS
+    networks:
+      - sdn
+    restart: unless-stopped
+
+  policy_mapper:
+    build:
+      context: ../../apps/onos/policy_mapper
+    container_name: policy_mapper
+    depends_on:
+      - onos
+    hostname: policy_mapper
+    environment:
+      - ONOS_HOST=onos
+      - ONOS_PORT=8181
+      - AAA_CACHE_TTL_S=${AAA_CACHE_TTL_S:-0.05}
+      - AGENTE_TOKEN=${AGENTE_TOKEN:-}        # clave del agente 802.1X de los hosts
+      - PORTAL_TOKEN=${PORTAL_TOKEN:-}        # clave del servidor del portal cautivo
+      - PYTHONPATH=/app:/r2_policy            # policy_tables, portal_auth y policy.yaml viven en overlays/r2-policy
+    ports:
+      - "5000:5000"
+    volumes:
+      - ../../overlays/r2-policy:/r2_policy:ro
+    networks:
+      - sdn
+    restart: unless-stopped
+
+  radius:
+    build:
+      context: ../../apps/radius
+    container_name: radius
+    depends_on:
+      - ldap
+      - policy_mapper
+    hostname: radius
+    command: ["-X"]
+    ports:
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+    networks:
+      - sdn
+    restart: unless-stopped
+
+networks:
+  sdn:
+    name: sdn
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.50.0.0/24
+          gateway: 10.50.0.1
