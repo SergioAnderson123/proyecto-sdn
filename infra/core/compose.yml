@@ -1,0 +1,38 @@
+# Núcleo (Core) del campus SDN — sw-core-1 y sw-core-2 (OVS).
+# Dos switches Open vSwitch en LAG/LACP; el segmento de control in-band llega
+# por 192.168.100.0/24 y el espejo SPAN cruzado alimenta a los sensores IDS.
+# En despliegue real (VNRT) el core son las VM sw-core-*; este compose es el
+# equivalente en contenedor para el laboratorio local.
+services:
+  # ---------------------------------------------------------------- 1. CORE 1
+  sw-core-1:
+    image: openvswitchd:latest
+    container_name: sw-core-1
+    hostname: sw-core-1
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    privileged: true
+    networks:
+      control:
+        ipv4_address: 192.168.100.11
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- 2. CORE 2
+  sw-core-2:
+    image: openvswitchd:latest
+    container_name: sw-core-2
+    hostname: sw-core-2
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    privileged: true
+    networks:
+      control:
+        ipv4_address: 192.168.100.12
+    restart: unless-stopped
+
+networks:
+  control:
+    name: control
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24
+          gateway: 192.168.100.1
