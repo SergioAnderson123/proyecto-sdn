@@ -146,9 +146,27 @@ def test_el_env_de_ejemplo_es_coherente_con_la_topologia_de_ejemplo():
     assert env["P_ESPEJO"] == "41000" and env["P_R5"] == "42000"
 
 
-def test_topologia_yaml_real_no_se_versiona():
+def test_gitignore_ignora_el_env_activo_y_el_estado_pero_no_la_topologia_real():
     with open(os.path.join(IDS, ".gitignore"), encoding="utf-8") as f:
-        assert "topologia.yaml" in f.read().split()
+        ignorado = f.read().split()
+    assert ".env" in ignorado and "state.json" in ignorado
+    # topologia.yaml SI se versiona: es la topologia real y fija del grupo (docs/Table_IP_Ports_VNRT.pdf), no un slice
+    # que cambia de MAC/deviceId cada vez (a diferencia de topologia.example.yaml, un template generico).
+    assert "topologia.yaml" not in ignorado
+
+
+def test_la_topologia_real_usa_la_red_de_gestion_y_solo_le_falta_cores():
+    with open(os.path.join(IDS, "topologia.yaml"), encoding="utf-8") as f:
+        texto = f.read()
+    assert "192.168.201.1" in texto and "192.168.201.2" in texto and "192.168.201.3" in texto
+    with pytest.raises(topologia.TopologiaInvalida, match="cores"):
+        topologia.cargar(os.path.join(IDS, "topologia.yaml"))     # pendiente a proposito: ver el encabezado del archivo
+
+
+@pytest.mark.parametrize("sensor", ["nodo-sec-1", "nodo-sec-2"])
+def test_cada_sensor_tiene_su_env_real_y_coincide_con_su_hostname(sensor):
+    env = leer_env(os.path.join(IDS, f".env.{sensor}"))
+    assert env["SENSOR"] == sensor and env["IDS_IFACES"]
 
 
 # ---------- scripts de shell ----------

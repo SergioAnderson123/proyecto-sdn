@@ -1,0 +1,41 @@
+# Topologia real del slice VNRT del Grupo 4 (v4: control in-band, accesos con un solo uplink y espejo solo en los cores).
+# A diferencia de topologia.example.yaml, esta SI se versiona: es la topologia oficial del grupo (docs/Table_IP_Ports_VNRT.pdf,
+# docs/topology.jpeg, actualizado 14-nov-2026), no un slice que se recrea y cambia de MAC/deviceId cada vez.
+#
+# Lo unico que falta es `cores` (deviceId y puertos de espejo de sw-core-1/sw-core-2): la tabla dice explicitamente que esos
+# todavia no estan cruzados con la interfaz de VNRT (a diferencia de sw-acc-1/sw-acc-2, que si lo estan: ver `accesos` abajo).
+# Por eso `cores` queda vacio a proposito: topologia.py se niega a arrancar ("cores: define al menos un core") en vez de
+# arrancar con datos inventados. Para completarlo, con los 3 nodos ONOS arriba y los 5 switches ya conectados
+# (`ovs-vsctl set-controller <bridge> tcp:192.168.201.1:6653 tcp:192.168.201.2:6653 tcp:192.168.201.3:6653` en cada uno):
+#   ONOS_URL=http://192.168.201.1:8181/onos/v1 ONOS_PASS=rocks python3 apps/ids/integrador/espejo.py --descubrir
+# y la MAC de la NIC de espejo de cada sensor con:  bash infra/ids/macs.sh   (en nodo-sec-1 y en nodo-sec-2)
+
+onos:
+  urls:                                   # cluster de 3 nodos (red de gestion/roja); el integrador usa el primero que responda
+    - http://192.168.201.1:8181/onos/v1
+    - http://192.168.201.2:8181/onos/v1
+    - http://192.168.201.3:8181/onos/v1
+
+policy_mapper:
+  urls:                                   # mismo compose en los 3 ctrl (sin primario/replica): el integrador prueba cada uno
+    - http://192.168.201.1:5000
+    - http://192.168.201.2:5000
+    - http://192.168.201.3:5000
+
+redes:
+  home: [10.0.0.0/24]                     # campus: servidores .40 y .50, hosts por DHCP (HOME_NET de Suricata)
+  externa: [203.0.113.0/24]               # PROPUESTO: vm-atacante todavia no tiene IP real asignada (tabla: "pendiente de definir")
+  lista_blanca:                           # IP que R5 nunca bloquea
+    - 10.0.0.40/32                        # servidores de recursos (infra/server)
+    - 10.0.0.50/32
+    - 10.0.0.250/32                       # servidor DHCP de la app de ONOS
+
+sensores: [nodo-sec-1, nodo-sec-2]
+
+# PENDIENTE (ver encabezado): sw-core-1 y sw-core-2 aun no cruzados con la interfaz de VNRT.
+cores: []
+
+# sw-acc-1 y sw-acc-2 SI estan verificados por MAC (docs/Table_IP_Ports_VNRT.pdf, seccion 3)
+accesos:
+  - {nombre: sw-acc-1, device: "of:0000e6925d87354b"}
+  - {nombre: sw-acc-2, device: "of:0000766a0c84c741"}

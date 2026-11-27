@@ -3,7 +3,11 @@
 # Requisitos: los nodos ONOS arriba, los cuatro switches conectados, y infra/ids/.env e infra/ids/topologia.yaml completos.
 set -e
 cd "$(dirname "$0")"
-[ -f .env ] || { echo "Falta infra/ids/.env (copiar de .env.example)"; exit 1; }
+if [ ! -f .env ]; then
+  AUTO=".env.$(hostname)"                 # nodo-sec-1 y nodo-sec-2 ya tienen el suyo propio en el repo
+  [ -f "$AUTO" ] && { echo "[*] No hay .env: uso $AUTO (detectado por hostname)"; cp "$AUTO" .env; }
+fi
+[ -f .env ] || { echo "Falta infra/ids/.env (copiar de .env.example, o de .env.<hostname> si existe uno para este sensor)"; exit 1; }
 [ -f topologia.yaml ] || { echo "Falta infra/ids/topologia.yaml (copiar de topologia.example.yaml y completar; ver README)"; exit 1; }
 set -a; . ./.env; set +a
 export TOPOLOGIA_ARCHIVO="$(pwd)/topologia.yaml"

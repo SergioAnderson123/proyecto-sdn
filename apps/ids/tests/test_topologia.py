@@ -23,7 +23,7 @@ def test_el_ejemplo_del_repo_es_valido():
     t = topologia.cargar(EJEMPLO)
     assert [c["nombre"] for c in t["cores"]] == ["sw-core-1", "sw-core-2"]
     assert t["sensores"] == ["nodo-sec-1", "nodo-sec-2"]
-    assert len(t["onos_urls"]) == 3 and len(t["mapper_urls"]) == 2          # clúster ONOS de 3 nodos y 2 Policy Mapper
+    assert len(t["onos_urls"]) == 3 and len(t["mapper_urls"]) == 3          # clúster ONOS de 3 nodos; mismo compose en los 3 ctrl
     assert t["home"] == ["10.0.0.0/24"]
 
 
@@ -90,7 +90,7 @@ def test_aplicar_entorno_rellena_lo_que_falta_y_no_pisa_lo_definido(monkeypatch)
     assert t is not None
     assert os.environ["HOME_NET"] == "192.0.2.0/24"
     assert os.environ["CORE_DEVICES"] == "of:00000000000000a1,of:00000000000000a2"
-    assert os.environ["ONOS_URL"].count(",") == 2 and os.environ["MAPPER_URL"].count(",") == 1
+    assert os.environ["ONOS_URL"].count(",") == 2 and os.environ["MAPPER_URL"].count(",") == 2
     assert "10.0.0.40/32" in os.environ["LISTA_BLANCA"]
     for v in ("ONOS_URL", "MAPPER_URL", "LISTA_BLANCA", "CORE_DEVICES"):       # aplicar_entorno escribe en os.environ: se limpia
         monkeypatch.delenv(v, raising=False)
@@ -105,7 +105,6 @@ def test_el_segmento_de_control_entra_a_la_lista_blanca_y_no_se_solapa_con_el_ca
     topo = topologia.cargar(EJEMPLO)
     assert topo["control"] == ["192.168.100.0/24"]
     assert "192.168.100.0/24" in topo["lista_blanca"]              # un DROP de R5 nunca debe cortar el canal OpenFlow
-    assert all(u.split("//")[1].startswith("192.168.100.") for u in topo["onos_urls"] + topo["mapper_urls"])
 
 
 @pytest.mark.parametrize("red", ["10.0.0.0/16", "10.0.0.128/25", "203.0.113.0/24"])
