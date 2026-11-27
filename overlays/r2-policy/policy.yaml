@@ -1,0 +1,118 @@
+# ---------------------------------------------------------------------------
+# Implementación en hardware de la matriz (leída por policy_tables.py).
+# ---------------------------------------------------------------------------
+
+# Rol que llega de RADIUS/LDAP -> rol de la matriz de `rules` y tabla del pipeline OpenFlow (la misma que la VLAN).
+roles:
+  docente: {matriz: professor, tabla: 10}
+  alumno:  {matriz: student,   tabla: 20}
+  soporte: {matriz: administrator, tabla: 40}   # soporte TI (grupo LDAP soporteTI); la tabla 30 queda reservada a IoT/MAB
+  invitado: {matriz: guest, tabla: 50}          # invitados y equipos sin 802.1X: entran por el portal cautivo con usuario y contraseña
+
+# Ascenso por el portal cautivo: un equipo autenticado por 802.1X con el rol {base} puede subir al rol {destino} cuando una persona
+# entra en el portal con SU usuario y contraseña de LDAP (grupo con ese rol), desde el mismo equipo (misma MAC) y en la ubicación que
+# ONOS AAA tiene para esa MAC (switch y puerto de su sesión). Al cerrar sesión en el portal o vencer el plazo (portal.duracion_s) el
+# equipo vuelve al rol base; si el equipo vuelve a autenticar por 802.1X o se desconecta, el ascenso se anula. Sin esta tabla, una MAC
+# con sesión no puede usar el portal (409).
+ascenso:
+  alumno: [docente]
+# La ubicación se lee de la tabla AAA de ONOS (/onos/aaa/app/users, entradas AUTHORIZED): allí figura todo equipo con sesión 802.1X.
+# true: rechazar el ascenso si ONOS AAA no tiene a la MAC autorizada; false: comparar solo cuando la tiene.
+ascenso_exigir_ubicacion: true
+
+# Cuarentena: todo host SIN sesión (un invitado antes de iniciar sesión, un IoT antes del MAB, un equipo que aún no autentica) recibe la
+# VLAN 99 y su tabla solo deja pasar ARP y TCP al portal cautivo. El DHCP no pasa por la tabla: la regla de la tabla 0 (prioridad 40500)
+# lo manda al controlador, donde lo atiende la app DHCP de ONOS (rango y tiempos: R1/deploy/.env.example). Al iniciar sesión (802.1X, portal
+# o MAB) el flujo de sesión saca al host de la cuarentena. Quitar esta sección desactiva la cuarentena.
+cuarentena:
+  tabla: 99
+
+# Portal cautivo (usuario y contraseña validados contra LDAP): para invitados y dispositivos que no hablan 802.1X.
+# El portal es un servidor web con IP en el plano de datos. Un usuario SIN sesión solo puede alcanzar al portal; su tráfico HTTP hacia
+# los destinos de `desvios` se reescribe hacia el portal (que responde con una redirección al formulario) y la respuesta se reescribe
+# de vuelta para que el cliente crea que habló con el destino original. Con sesión, el flujo de sesión (40001) tiene prioridad.
+portal:
+  ip: 10.0.0.60
+  mac: "02:00:00:00:00:60"
+  puerto: 8080
+  switches: ["of:0000000000000001"]   # switches de acceso donde se instalan los flujos del portal
+  desvios:                            # destino original (ip, mac y puerto) -> puerto del portal que lo representa
+    - {ip: 10.0.0.40, mac: "00:00:00:00:00:44", tcp: 8003, puerto_portal: 8083}
+  # grupo LDAP -> rol. Red cableada: solo los INVITADOS entran al portal desde un equipo sin sesion. Alumnos y administradores entran por
+  # 802.1X con el certificado de un equipo registrado de la universidad (alumno y soporteTI NO estan aqui: una laptop personal usa la red
+  # inalambrica, no el cable). El profesor figura solo para el ascenso: sube un equipo registrado, nunca entra directo.
+  grupos: {profesor: docente, invitado: invitado}
+  # Roles que pueden iniciar sesion DIRECTAMENTE desde un equipo sin sesion. El resto (docente) solo entra subiendo un equipo que ya esta
+  # autenticado por 802.1X (seccion `ascenso`): asi un profesor siempre queda atado a un equipo con certificado. Sin esta clave, todos.
+  login_directo: [invitado]
+  # Duración máxima de una sesión del portal (s), por rol; al vencer se borra el flujo y hay que volver a entrar.
+  # Las de 802.1X no vencen: terminan cuando el agente del host avisa del cierre (POST /sessions/logout).
+  duracion_s: {invitado: 1800, default: 28800}
+
+# Catálogo de recursos: IP y puerto TCP de cada servicio (topología topo_baseR2.py: h4 = servicios de alumnos, h5 = de profesores).
+# Los servicios sin entrada aquí no se instalan (p. ej. `internet` todavía no tiene host).
+services:
+  virtual_library:    {ip: 10.0.0.40, tcp: 8001}
+  learning_platform:  {ip: 10.0.0.40, tcp: 8002}
+  university_portal:  {ip: 10.0.0.40, tcp: 8003}
+  grade_system:       {ip: 10.0.0.50, tcp: 8101}
+  student_records:    {ip: 10.0.0.50, tcp: 8102}
+  research_database:  {ip: 10.0.0.50, tcp: 8103}
+  print_server:       {ip: 10.0.0.50, tcp: 8104}
+  network_management: {ip: 10.0.0.50, tcp: 8105}
+
+# Switches/puertos de confianza (servidores y troncales): no pasan por las tablas de rol.
+# `all` = todos los puertos. En s1 el puerto 4 es el enlace hacia s2 (tráfico de regreso de los servidores).
+trusted:
+  "of:0000000000000001": [4]
+  "of:0000000000000002": all
+
+rules:
+  # Academic services
+  - {src: administrator, dst: grade_system, allow: true}
+  - {src: professor,    dst: grade_system, allow: true}
+  - {src: student,      dst: grade_system, allow: false}
+  - {src: guest,        dst: grade_system, allow: false}
+
+  - {src: administrator, dst: virtual_library, allow: true}
+  - {src: professor,     dst: virtual_library, allow: true}
+  - {src: student,       dst: virtual_library, allow: true}
+  - {src: guest,         dst: virtual_library, allow: false}
+
+  - {src: administrator, dst: learning_platform, allow: true}
+  - {src: professor,     dst: learning_platform, allow: true}
+  - {src: student,       dst: learning_platform, allow: true}
+  - {src: guest,         dst: learning_platform, allow: false}
+
+  # Administrative services
+  - {src: administrator, dst: student_records, allow: true}
+  - {src: professor,     dst: student_records, allow: false}
+  - {src: student,       dst: student_records, allow: false}
+  - {src: guest,         dst: student_records, allow: false}
+
+  - {src: administrator, dst: university_portal, allow: true}
+  - {src: professor,     dst: university_portal, allow: true}
+  - {src: student,       dst: university_portal, allow: true}
+  - {src: guest,          dst: university_portal, allow: true}
+
+  # Network services
+  - {src: administrator, dst: internet, allow: true}
+  - {src: professor,     dst: internet, allow: true}
+  - {src: student,       dst: internet, allow: true}
+  - {src: guest,         dst: internet, allow: false}
+
+  - {src: administrator, dst: print_server, allow: true}
+  - {src: professor,     dst: print_server, allow: true}
+  - {src: student,       dst: print_server, allow: false}
+  - {src: guest,         dst: print_server, allow: false}
+
+  - {src: administrator, dst: research_database, allow: true}
+  - {src: professor,     dst: research_database, allow: true}
+  - {src: student,       dst: research_database, allow: false}
+  - {src: guest,         dst: research_database, allow: false}
+
+  # Infrastructure management
+  - {src: administrator, dst: network_management, allow: true}
+  - {src: professor,     dst: network_management, allow: false}
+  - {src: student,       dst: network_management, allow: false}
+  - {src: guest,         dst: network_management, allow: false}
