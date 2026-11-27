@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 RAIZ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")
-IDS = os.path.join(RAIZ, "infra", "ids")                     # compose.yml, up.sh, macs.sh, .env.example, topologia.example.yaml
+IDS = os.path.join(RAIZ, "infra", "ids")                     # compose.yml, Dockerfile, up.sh, macs.sh, .env.example, topologia.example.yaml
 APPS_IDS = os.path.join(RAIZ, "apps", "ids")                 # integrador/, suricata/ (código)
 sys.path.insert(0, os.path.join(APPS_IDS, "suricata"))
 sys.path.insert(0, os.path.join(APPS_IDS, "integrador"))
@@ -117,10 +117,13 @@ def test_el_instalador_del_espejo_solo_se_corre_a_peticion(compose):
     assert compose["services"]["espejo"]["profiles"] == ["setup"]
 
 
-def test_la_imagen_incluye_topologia_py_y_pyyaml():
-    with open(os.path.join(APPS_IDS, "integrador", "Dockerfile"), encoding="utf-8") as f:
+def test_la_imagen_instala_pyyaml_y_no_copia_el_codigo(compose):
+    with open(os.path.join(IDS, "Dockerfile"), encoding="utf-8") as f:
         texto = f.read()
-    assert "pyyaml" in texto and "codigo/topologia.py" in texto and "lab/espejo.py" in texto
+    assert "pyyaml" in texto
+    assert "COPY" not in texto      # el codigo se monta como volumen, no se copia al construir la imagen
+    montajes = " ".join(compose["services"]["integrador"]["volumes"])
+    assert "apps/ids/integrador:/opt/r5/codigo" in montajes
 
 
 # ---------- coherencia con topologia.example.yaml y .env.example ----------

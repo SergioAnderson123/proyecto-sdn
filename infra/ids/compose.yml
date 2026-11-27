@@ -1,7 +1,8 @@
 # Sensor IDS (sec-1 o sec-2): Suricata en las NIC de espejo + integrador M09 (alertas -> ONOS REST).
 # Los dos sensores usan este mismo compose: reciben el mismo espejo y bloquean igual (si uno cae, el otro mantiene la cobertura).
 # La topologia (nodos ONOS, cores, redes, MAC de cada NIC) esta en infra/ids/topologia.yaml; aqui solo van los ajustes por sensor.
-# Codigo y Dockerfile viven en apps/ids/; las reglas de deteccion en overlays/r5-ids/.
+# El Dockerfile vive aqui, junto al compose; el codigo (integrador, topologia, r5ctl, espejo) vive en
+# apps/ids/ y se monta como volumen en /opt/r5/codigo. Las reglas de deteccion viven en overlays/r5-ids/.
 # Uso: ./up.sh   (lee ./.env y ./topologia.yaml, prepara las NIC, levanta todo e instala el espejo en los cores)
 x-r5-env: &r5-env
   ONOS_USER: ${ONOS_USER:-onos}
@@ -37,11 +38,12 @@ services:
 
   integrador:
     build:
-      context: ../../apps/ids/integrador
+      context: .                              # este mismo directorio: solo el Dockerfile y sus dependencias
     image: r5-integrador:local
     container_name: r5-integrador
     environment: *r5-env
     volumes:
+      - ../../apps/ids/integrador:/opt/r5/codigo:ro
       - suricata-log:/var/log/suricata:ro
       - integrador-state:/var/lib/integrador
       - ${TOPOLOGIA_ARCHIVO:?lo define up.sh}:/opt/r5/topologia.yaml:ro
@@ -50,15 +52,16 @@ services:
     restart: unless-stopped
 
   # Instalador del espejo selectivo en los cores (una vez; es permanente e idempotente: instalarlo desde los dos sensores es inocuo).
-  # Se ejecuta con: docker compose run --rm espejo     Ver switches y puertos de ONOS: docker compose run --rm espejo python3 /opt/r5/lab/espejo.py --descubrir
+  # Se ejecuta con: docker compose run --rm espejo     Ver switches y puertos de ONOS: docker compose run --rm espejo python3 /opt/r5/codigo/espejo.py --descubrir
   espejo:
     image: r5-integrador:local
     profiles: ["setup"]
-    command: ["python3", "/opt/r5/lab/espejo.py"]
+    command: ["python3", "/opt/r5/codigo/espejo.py"]
     environment:
       <<: *r5-env
       P_ESPEJO: ${P_ESPEJO:-41000}
     volumes:
+      - ../../apps/ids/integrador:/opt/r5/codigo:ro
       - ${TOPOLOGIA_ARCHIVO:?lo define up.sh}:/opt/r5/topologia.yaml:ro
     depends_on:
       - integrador

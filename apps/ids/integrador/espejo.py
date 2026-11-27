@@ -175,7 +175,7 @@ def main(argv):
         print(r.status_code, "reglas de espejo retiradas" if r.status_code in (200, 204) else r.text[:200])
         return
     if os.getenv("TOPOLOGIA"):
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "codigo"))
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import topologia
         try:
             topo = topologia.cargar(os.environ["TOPOLOGIA"])

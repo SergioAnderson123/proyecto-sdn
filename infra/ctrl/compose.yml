@@ -3,12 +3,19 @@
 # LDAP es multi-master (simetrico), el cluster ONOS lo coordina Atomix/Raft, y las sesiones del Policy
 # Mapper se comparten por fuera (etcd). Lo que distingue a un nodo de otro (su propia IP, a que pares
 # sincroniza) sale de .env en tiempo de despliegue, no de un compose distinto.
-# Codigo y Dockerfile de policy_mapper y radius viven en apps/; la politica de R2 en overlays/r2-policy/.
+# Los Dockerfile de policy_mapper y radius viven aqui, junto al compose (./policy_mapper, ./radius); el codigo
+# en apps/onos/policy_mapper y apps/radius (policy_mapper se monta como volumen, radius se copia al construir
+# la imagen porque necesita arreglar symlinks de raddb/ en el build). La politica de R2 vive en overlays/r2-policy/.
 services:
   onos:
     image: onosproject/onos:2.7-latest
     container_name: onos
     hostname: onos
+    environment:
+      # Apps que ya trae la imagen: la propia entrada de ONOS las instala y activa al arrancar, sin pasar por REST.
+      # SADIS y AAA (OpenCORD) no van aqui: no vienen con la imagen, hay que bajarlas de Maven e instalarlas por REST
+      # (eso lo hace up.sh tras levantar el contenedor).
+      - ONOS_APPS=drivers,openflow,flowanalyzer,dhcp,acl,vpls
     volumes:
       - ./onos-shared:/root/shared-host
     ports:
@@ -44,7 +51,7 @@ services:
 
   policy_mapper:
     build:
-      context: ../../apps/onos/policy_mapper
+      context: ./policy_mapper      # solo Dockerfile + requirements.txt; el codigo se monta abajo desde apps/
     container_name: policy_mapper
     depends_on:
       - onos
@@ -59,6 +66,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
+      - ../../apps/onos/policy_mapper:/app:ro
       - ../../overlays/r2-policy:/r2_policy:ro
     networks:
       - sdn
@@ -66,7 +74,8 @@ services:
 
   radius:
     build:
-      context: ../../apps/radius
+      context: ../../apps/radius               # raddb/ se copia a la imagen: el Dockerfile lo necesita en el build
+      dockerfile: ../../infra/ctrl/radius/Dockerfile
     container_name: radius
     depends_on:
       - ldap

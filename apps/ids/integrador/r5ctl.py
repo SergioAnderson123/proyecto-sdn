@@ -18,7 +18,7 @@ import sys
 
 import requests
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "codigo"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import topologia  # noqa: E402
 
 TOPO = topologia.aplicar_entorno()      # con TOPOLOGIA definida: nodos ONOS, cores y nombres de los switches salen de topologia.yaml
